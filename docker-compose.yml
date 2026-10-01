@@ -1,0 +1,29 @@
+services:
+  paperfrog:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    environment:
+      TZ: UTC
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    volumes:
+      - ./state:/app/state
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts:ro
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 128
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '5'

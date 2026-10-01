@@ -1,0 +1,6 @@
+trading_mode: paper
+binance_env: testnet
+state_dir: state/paper
+paper_equity: 10000
+symbols: [BTCUSDT, ETHUSDT, SOLUSDT]
+data_dir: data/paper

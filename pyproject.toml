@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling==1.29.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "paperfrog"
+version = "0.1.0"
+description = "Funding feedback breakdown research and guarded trading system"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
+  "httpx==0.28.1",
+  "websockets==17.1",
+  "pandas==3.0.6",
+  "numpy==2.5.3",
+  "pyarrow==25.0.1",
+  "duckdb==1.5.6",
+  "sqlalchemy==2.1.1",
+  "xgboost==3.4.1",
+  "scikit-learn==1.9.1",
+  "openai==3.22.1",
+  "structlog==26.1.0",
+  "fastapi==0.142.2",
+  "uvicorn==0.54.0",
+  "typer==0.27.2",
+  "pyyaml==6.0.3",
+  "pytest==9.1.1"
+]
+
+[dependency-groups]
+dev = [
+  "pytest-asyncio==1.4.0",
+  "hypothesis==6.168.3",
+  "ruff==0.16.9",
+  "mypy==2.3.1",
+  "pandas-stubs==3.0.5.260914",
+  "types-PyYAML==6.0.12.20260906",
+  "pip-audit==2.10.1"
+]
+
+[project.scripts]
+paperfrog = "paperfrog.cli:entrypoint"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["testnet: requires explicit testnet credentials"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/paperfrog/domain", "src/paperfrog/settings.py", "src/paperfrog/risk", "src/paperfrog/execution", "src/paperfrog/portfolio"]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+module = ["xgboost.*", "sklearn.*", "duckdb.*"]
+ignore_missing_imports = true

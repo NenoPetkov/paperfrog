@@ -1,0 +1,7 @@
+trading_mode: live
+binance_env: live
+live_trading_enabled: false
+i_understand_live_risk: ''
+state_dir: state/live
+symbols: [BTCUSDT, ETHUSDT, SOLUSDT]
+data_dir: data/live

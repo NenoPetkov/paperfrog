@@ -1,0 +1,5 @@
+trading_mode: testnet
+binance_env: testnet
+state_dir: state/testnet
+symbols: [BTCUSDT, ETHUSDT, SOLUSDT]
+data_dir: data/testnet

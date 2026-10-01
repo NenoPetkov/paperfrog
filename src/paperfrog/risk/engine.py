@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import text
+
+from paperfrog.domain.types import SafeError, State
+from paperfrog.settings import Settings
+from paperfrog.storage.database import Store
+
+
+@dataclass(frozen=True)
+class Proposal:
+    trade_id: str
+    symbol: str
+    equity: float
+    target: float
+    gross: float
+    risk: float
+    net_beta: float
+    stop_fraction: float
+    liquidation_distance: float
+    participation: float
+
+
+@dataclass(frozen=True)
+class Health:
+    reconciled: bool
+    model_valid: bool
+    filters_loaded: bool
+    market_age: float
+    account_age: float
+    crisis_score: int = 0
+    event_allowed: bool = True
+
+
+class RiskEngine:
+    def __init__(self, settings: Settings, store: Store):
+        self.s = settings
+        self.store = store
+
+    def anchors(self, equity: float, now: datetime) -> dict[str, object]:
+        if not math.isfinite(equity) or equity <= 0 or now.tzinfo is None:
+            raise SafeError("invalid equity or clock")
+        now = now.astimezone(UTC)
+        day, week = now.date().isoformat(), (now.date() - timedelta(days=now.weekday())).isoformat()
+        with self.store.transaction() as conn:
+            a = self.store.get("anchors", {}, conn)
+            if a.get("day") != day:
+                a.update(day=day, day_equity=equity, peak=equity)
+            if a.get("week") != week:
+                a.update(week=week, week_equity=equity)
+            a["peak"] = max(a["peak"], equity)
+            a["high_water"] = max(a.get("high_water", equity), equity)
+            a["equity"] = equity
+            self.store.put("anchors", a, conn)
+            lock: dict[str, Any] | None = None
+            if equity <= a["high_water"] * (1 - self.s.high_water_drawdown) + 1e-9:
+                lock = {"state": State.HARD_RISK_LOCK, "until": None, "reason": "high_water"}
+            elif equity <= a["week_equity"] * (1 - self.s.weekly_loss_limit) + 1e-9:
+                lock = {
+                    "state": State.WEEKLY_RISK_LOCK,
+                    "until": None,
+                    "reason": "weekly_local_review",
+                }
+            elif equity <= a["day_equity"] * (1 - self.s.daily_loss_limit) + 1e-9:
+                lock = {
+                    "state": State.DAILY_RISK_LOCK,
+                    "until": self._tomorrow(now),
+                    "reason": "daily_loss",
+                }
+            peak_profit = a["peak"] - a["day_equity"]
+            if lock is None and peak_profit >= a["day_equity"] * 0.0075 - 1e-9:
+                if a["peak"] - equity >= max(a["day_equity"] * 0.0035, 0.35 * peak_profit) - 1e-9:
+                    lock = {
+                        "state": State.DAILY_RISK_LOCK,
+                        "until": self._tomorrow(now),
+                        "reason": "profit_giveback",
+                    }
+            old = self.store.get("risk_lock", None, conn)
+            rank = {
+                State.SOFT_RISK_LOCK: 1,
+                State.DAILY_RISK_LOCK: 2,
+                State.WEEKLY_RISK_LOCK: 3,
+                State.HARD_RISK_LOCK: 4,
+            }
+            if lock and (not old or rank[State(lock["state"])] >= rank[State(old["state"])]):
+                self.store.put("risk_lock", lock, conn)
+                self.store.put("state", lock["state"], conn)
+                self.store.audit("risk_lock", lock, conn)
+            self.store.put(
+                "risk_multiplier",
+                0.5 if peak_profit >= a["day_equity"] * 0.0075 - 1e-9 else 1.0,
+                conn,
+            )
+            self.store.put(
+                "profit_entry_lock", peak_profit >= a["day_equity"] * 0.0125 - 1e-9, conn
+            )
+            return dict(a)
+
+    @staticmethod
+    def _tomorrow(now: datetime) -> float:
+        return (
+            now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        ).timestamp()
+
+    def require_health(self, h: Health) -> None:
+        if not all((h.reconciled, h.model_valid, h.filters_loaded, h.event_allowed)):
+            raise SafeError("entry health gates failed")
+        if (
+            not 0 <= h.market_age <= self.s.market_stale_seconds
+            or not 0 <= h.account_age <= self.s.account_stale_seconds
+        ):
+            raise SafeError("stale or invalid data")
+        if h.crisis_score:
+            raise SafeError("crisis entry veto")
+
+    def reserve(self, p: Proposal, h: Health, now: datetime) -> None:
+        self.require_health(h)
+        values = (
+            p.equity,
+            p.target,
+            p.gross,
+            p.risk,
+            p.net_beta,
+            p.stop_fraction,
+            p.liquidation_distance,
+            p.participation,
+        )
+        if (
+            not all(math.isfinite(v) for v in values)
+            or min(p.equity, p.target, p.gross, p.risk, p.stop_fraction) <= 0
+        ):
+            raise SafeError("invalid proposal")
+        if now.tzinfo is None:
+            raise SafeError("UTC clock required")
+        now = now.astimezone(UTC)
+        day = now.date().isoformat()
+        if p.target > p.equity * self.s.max_target_notional + 1e-9 or p.gross < p.target:
+            raise SafeError("target cap exceeded")
+        if (
+            abs(p.net_beta) > self.s.max_net_beta
+            or not 0 <= p.participation <= self.s.max_participation
+        ):
+            raise SafeError("beta or liquidity cap exceeded")
+        if p.liquidation_distance < max(0.25, 5 * p.stop_fraction):
+            raise SafeError("liquidation buffer insufficient")
+        with self.store.transaction() as conn:
+            if self.store.get("state", State.PAUSED, conn) != State.RUNNING:
+                raise SafeError("new entries require RUNNING")
+            if self.store.get("risk_lock", None, conn) or self.store.get(
+                "manual_lock", False, conn
+            ):
+                raise SafeError("risk lock active")
+            if self.store.get("profit_entry_lock", False, conn):
+                raise SafeError("daily profit entry lock")
+            if (
+                p.risk
+                > p.equity * self.s.risk_per_trade * self.store.get("risk_multiplier", 1.0, conn)
+                + 1e-9
+            ):
+                raise SafeError("per trade risk exceeded")
+            count: int = conn.execute(
+                text("SELECT count(*) FROM entries WHERE day=:d"), {"d": day}
+            ).scalar_one()
+            scount: int = conn.execute(
+                text("SELECT count(*) FROM entries WHERE day=:d AND symbol=:s"),
+                {"d": day, "s": p.symbol},
+            ).scalar_one()
+            if (
+                count >= self.s.max_strategy_entries_per_day
+                or scount >= self.s.max_entries_per_symbol_per_day
+            ):
+                raise SafeError("entry frequency cap")
+            active = conn.execute(
+                text(
+                    "SELECT count(*),coalesce(sum(risk),0),coalesce(sum(gross),0) FROM entries WHERE closed=0"
+                )
+            ).one()
+            if active[0] >= self.s.max_concurrent_strategy_trades:
+                raise SafeError("concurrent trade cap")
+            if active[1] + p.risk > p.equity * self.s.max_open_risk + 1e-9:
+                raise SafeError("open risk cap")
+            if active[2] + p.gross > p.equity * self.s.max_gross_notional + 1e-9:
+                raise SafeError("gross exposure cap")
+            if self.store.get("cooldown:" + p.symbol, 0, conn) > now.timestamp():
+                raise SafeError("symbol cooldown")
+            conn.execute(
+                text("INSERT INTO entries(id,day,symbol,ts,risk,gross) VALUES (:i,:d,:s,:t,:r,:g)"),
+                {
+                    "i": p.trade_id,
+                    "d": day,
+                    "s": p.symbol,
+                    "t": int(now.timestamp() * 1000),
+                    "r": p.risk,
+                    "g": p.gross,
+                },
+            )
+            self.store.audit("entry_reserved", {"id": p.trade_id, "symbol": p.symbol}, conn)
+
+    def closed(self, trade_id: str, pnl: float, now: datetime) -> None:
+        with self.store.transaction() as conn:
+            row = conn.execute(
+                text("SELECT symbol,closed FROM entries WHERE id=:i"), {"i": trade_id}
+            ).one()
+            if row.closed:
+                return
+            conn.execute(text("UPDATE entries SET closed=1 WHERE id=:i"), {"i": trade_id})
+            self.store.put(
+                "cooldown:" + row.symbol, now.timestamp() + (45 if pnl > 0 else 180) * 60, conn
+            )
+            losses = (
+                0
+                if pnl > 0
+                else self.store.get("consecutive_losses", 0, conn) + (1 if pnl < 0 else 0)
+            )
+            self.store.put("consecutive_losses", losses, conn)
+            if losses >= 3 and not self.store.get("risk_lock", None, conn):
+                self.store.put(
+                    "risk_lock",
+                    {
+                        "state": State.SOFT_RISK_LOCK,
+                        "until": now.timestamp() + 43200,
+                        "reason": "three_losses",
+                    },
+                    conn,
+                )
+                self.store.put("state", State.SOFT_RISK_LOCK, conn)
+            self.store.audit("trade_closed", {"id": trade_id, "pnl": pnl}, conn)
+
+    def resume(self, h: Health, now: datetime, live_armed: bool = False) -> None:
+        self.require_health(h)
+        if self.s.trading_mode == "live" and not live_armed:
+            raise SafeError("local live arm missing")
+        with self.store.transaction() as conn:
+            lock = self.store.get("risk_lock", None, conn)
+            if lock and (lock["until"] is None or now.timestamp() < lock["until"]):
+                raise SafeError("risk lock cannot be overridden")
+            if self.store.get("profit_entry_lock", False, conn):
+                raise SafeError("profit lock active")
+            self.store.put("risk_lock", None, conn)
+            self.store.put("manual_lock", False, conn)
+            self.store.put("state", State.RUNNING, conn)
+            self.store.audit("state_transition", {"to": State.RUNNING}, conn)
+
+
+def crisis_score(
+    *,
+    btc_5m: float,
+    sigma_5m: float,
+    btc_15m: float,
+    sigma_15m: float,
+    btc_1h: float,
+    spread_ratio: float,
+    dispersion_z: float,
+    mark_deviation: float,
+    liquidation_z: float = 0,
+    stale_held: bool = False,
+    mismatch: bool = False,
+    collateral_abnormal: bool = False,
+) -> int:
+    return sum(
+        (
+            abs(btc_5m) >= max(0.025, 5 * sigma_5m),
+            abs(btc_15m) >= max(0.04, 6 * sigma_15m),
+            abs(btc_1h) >= 0.07,
+            spread_ratio >= 4,
+            dispersion_z >= 5,
+            abs(mark_deviation) >= 0.03,
+            liquidation_z >= 6,
+            stale_held,
+            mismatch,
+            collateral_abnormal,
+        )
+    )

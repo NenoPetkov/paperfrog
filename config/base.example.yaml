@@ -1,0 +1,10 @@
+max_strategy_entries_per_day: 12
+risk_per_trade: 0.002
+max_open_risk: 0.005
+max_target_notional: 0.08
+max_gross_notional: 0.50
+max_net_beta: 0.10
+exchange_leverage: 2
+margin_type: ISOLATED
+position_mode: ONE_WAY
+display_timezone: Europe/Sofia
