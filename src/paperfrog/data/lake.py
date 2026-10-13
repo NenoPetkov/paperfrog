@@ -255,4 +255,13 @@ async def collect_snapshot(adapter: BinanceAdapter, lake: Lake, symbol: str) -> 
         ]
     )
     lake.append("snapshots", symbol, frame, "binance_rest_snapshot")
+    # Retain the independently timestamped current OI observation for forward features.
+    lake.append(
+        "open_interest",
+        symbol,
+        pd.DataFrame(
+            [{"timestamp_ms": int(oi.get("time", now)), "open_interest": float(oi["openInterest"])}]
+        ),
+        "binance_rest_open_interest",
+    )
     return dict(frame.iloc[0])

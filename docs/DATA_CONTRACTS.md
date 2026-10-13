@@ -4,6 +4,13 @@ All timestamps are UTC milliseconds. Closed kline timestamps are exchange close 
 
 Kinds collected: `spot_1m`, `spot_15m`, `perp_1m`, `perp_15m`, `funding`, `open_interest`, `snapshots`; optional stream recorder captures aggregate trades, mark updates, liquidation snapshots and partial depth events. Event hashes preserve multiple events within a millisecond. Stream sequence breaks are recorded. Partial depth snapshots are diagnostics, not a reconstructed full depth book.
 
+`data backfill-oi` imports free daily Binance USD-M metrics ZIPs after checking the
+published SHA-256 checksum, expected filename, symbol, chronology and UTC day. Zero,
+negative or nonfinite OI/notional observations are excluded and counted, without
+imputation. Entire rejected/missing days remain gaps. Source is
+`binance_verified_metrics_archive`; this importer binds to the production futures lake.
+Forward REST OI observations retain their own exchange timestamp separately from books.
+
 Core feature inputs require `timestamp_ms`, actual `perp_mid`/`spot_mid`, last observed `funding_rate`, `open_interest`, each market's quote volume and taker-buy quote volume, `bid`/`ask`. Backward joins bound OI age to 15 minutes, funding to 12 hours and quotes to 60 seconds. No long-gap forward fill occurs. Missing inputs remain NaN and block models. Funding persistence requires complete minute windows.
 
 ## Universe input JSON

@@ -182,6 +182,21 @@ def data_collect(once: bool = False, streams: bool = False) -> None:
     execute(work())
 
 
+@data_app.command("backfill-oi")
+def data_backfill_oi(symbol: str, start: str, end: str) -> None:
+    """Import checksum-verified production Binance daily open-interest archives."""
+    from paperfrog.data.archive import backfill_open_interest
+
+    s = settings()
+    if s.trading_mode != "paper":
+        raise typer.BadParameter("production archive import requires PAPER mode")
+    emit(
+        execute(
+            backfill_open_interest(Lake(s.data_dir), symbol, milliseconds(start), milliseconds(end))
+        )
+    )
+
+
 @data_app.command("validate")
 def data_validate(path: Path, interval_ms: int = 900000) -> None:
     report = validate(pd.read_parquet(path), interval_ms)
@@ -207,6 +222,25 @@ def data_coverage(symbol: str) -> None:
             )
         }
     )
+
+
+@data_app.command("assess")
+def data_assess(start: str, end: str, output: Path = Path("reports/data-readiness.json")) -> None:
+    """Write measured candle/OI/quote coverage and remaining research blockers."""
+    from paperfrog.data.preparation import assess_history
+
+    report = assess_history(settings(), milliseconds(start), milliseconds(end))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2) + "\n")
+    emit(
+        {
+            "raw_coverage_complete": report["raw_coverage_complete"],
+            "blocked_reasons": report["blocked_reasons"],
+            "report": str(output),
+        }
+    )
+    if not report["raw_coverage_complete"]:
+        raise typer.Exit(2)
 
 
 @universe_app.command("build")
@@ -245,6 +279,18 @@ def model_train(input: Path, test_start: str, name: str) -> None:
         pd.read_parquet(input), pd.to_datetime(test_start, utc=True), s.artifacts_dir / name
     )
     emit({"model_hash": m.hash, "promoted": False})
+
+
+@model_app.command("panel")
+def model_panel(universe_history: Path, output: Path) -> None:
+    """Join prepared features with operator-provided dated universe evidence."""
+    from paperfrog.data.preparation import assemble_panel
+
+    history = json.loads(universe_history.read_text())
+    if not isinstance(history, list):
+        raise typer.BadParameter("universe history must be an array of dated snapshots")
+    panel = assemble_panel(settings(), history, output)
+    emit({"rows": len(panel), "path": str(output)})
 
 
 @model_app.command("evaluate")
