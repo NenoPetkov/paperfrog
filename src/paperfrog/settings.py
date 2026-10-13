@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     account_stale_seconds: int = Field(60, ge=1, le=120)
     max_model_age_days: int = Field(30, ge=1, le=90)
     live_arm_hours: int = Field(4, ge=1, le=24)
-    min_history_days: int = Field(180, ge=180)
+    min_history_days: int = Field(180, ge=90)
     max_universe: int = Field(25, ge=1, le=25)
     max_spread: float = Field(0.002, gt=0, le=0.005)
     min_daily_quote_volume: float = Field(10_000_000, gt=0)
@@ -67,6 +67,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.trading_mode != "paper" and self.min_history_days < 180:
+            raise ValueError("testnet and live require at least 180 history days")
         if self.trading_mode == "testnet" and self.binance_env != "testnet":
             raise ValueError("testnet requires BINANCE_ENV=testnet")
         if self.trading_mode == "live" and not (

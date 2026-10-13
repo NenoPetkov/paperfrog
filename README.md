@@ -31,6 +31,12 @@ uv run paperfrog run paper
 
 Paper uses production **public** futures and spot data, and never sends exchange orders. An empty installation collects observations and remains paused without a promoted model and point-in-time universe. It does not fabricate signals to fill a quota. Use `/resume` after all prerequisites are met. Existing exits and monitoring continue during `/stop` and risk locks. Startup with positions always reconciles and remains paused.
 
+For shorter PAPER research, set `MIN_HISTORY_DAYS=90` in `.env` and restart the service.
+The default remains 180 days; testnet and live reject values below 180. A universe
+created using a shorter requirement cannot satisfy a later higher requirement through
+the seven-day cache. This setting only changes universe eligibility: complete quote/OI
+coverage, feature windows, model training history, promotion and entry gates still apply.
+
 To inspect startup once rather than launch the service:
 
 ```bash

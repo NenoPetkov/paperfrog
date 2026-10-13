@@ -27,7 +27,11 @@ def build_universe(
     rows: list[dict[str, Any]], asof_ms: int, s: Settings, store: Store
 ) -> dict[str, Any]:
     previous = store.get("active_universe")
-    if previous and previous["asof_ms"] <= asof_ms < previous["expires_ms"]:
+    if (
+        previous
+        and previous["asof_ms"] <= asof_ms < previous["expires_ms"]
+        and previous.get("min_history_days", 180) >= s.min_history_days
+    ):
         return dict(previous)
     eligible, reasons = [], {}
     for r in rows:
@@ -62,6 +66,7 @@ def build_universe(
     result = {
         "asof_ms": asof_ms,
         "expires_ms": asof_ms + 7 * 86400000,
+        "min_history_days": s.min_history_days,
         "symbols": selected,
         "reasons": reasons,
         "inputs": rows,

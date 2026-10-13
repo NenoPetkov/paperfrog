@@ -20,6 +20,24 @@ def test_live_requires_every_environment_condition():
             Settings(_env_file=None, trading_mode="live", **changes)
 
 
+def test_short_history_is_explicit_and_paper_only():
+    assert Settings(_env_file=None).min_history_days == 180
+    assert Settings(_env_file=None, min_history_days=90).min_history_days == 90
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, min_history_days=89)
+    with pytest.raises(ValidationError, match="180 history days"):
+        Settings(_env_file=None, trading_mode="testnet", min_history_days=90)
+    with pytest.raises(ValidationError, match="180 history days"):
+        Settings(
+            _env_file=None,
+            trading_mode="live",
+            binance_env="live",
+            live_trading_enabled=True,
+            i_understand_live_risk="YES",
+            min_history_days=90,
+        )
+
+
 def test_empty_readiness_blocks(settings):
     r = readiness({}, settings.config_hash, "")
     assert not r["permitted"] and all(not c["passed"] for c in r["checks"].values())

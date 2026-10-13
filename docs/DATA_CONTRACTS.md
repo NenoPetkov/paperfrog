@@ -22,6 +22,12 @@ An array of point-in-time records, for example this **schema illustration**, not
 
 The manifest preparer must derive these measurements solely from records available at `observed_ms`. Selection rejects future observations and saves the entire evidence/reason set. Unknown delisting/status history must not be retrospectively marked healthy. This release does not recover a historical exchange listing/status archive automatically.
 
+Universe history defaults to 180 days. PAPER research may configure `MIN_HISTORY_DAYS=90`;
+testnet/live retain a minimum of 180. Universe snapshots record the configured minimum,
+and a cached shorter-history snapshot is not reused when the required history increases.
+`valid_history_days` must reflect measured valid coverage, including required quote/OI
+inputs; candle history alone does not prove complete strategy history.
+
 ## Training/replay panel
 
 One row per `(timestamp_ms,symbol)`, including BTC/ETH hedge observations. Include computed feature columns, actual quote/depth sizes, mark, `in_universe`, `universe_asof_ms`, `universe_expires_ms`, and `funding_settlement` booleans at actual settlement timestamps. There must be sufficient trailing history for Ridge and core features. Model dataset construction takes one confirmed episode and its complete future four-hour path. Funding for all three legs uses actual settlement rows.

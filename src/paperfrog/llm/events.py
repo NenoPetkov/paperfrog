@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from openai import APIError, AsyncOpenAI
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, HttpUrl, WithJsonSchema
 
 from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings
@@ -55,7 +55,10 @@ class Source(BaseModel):
     title: str
     publisher: str
     published_at: AwareDatetime
-    url: HttpUrl
+    # Structured Outputs does not support format="uri"; HttpUrl still validates locally.
+    url: Annotated[
+        HttpUrl, WithJsonSchema({"type": "string", "description": "An absolute HTTP or HTTPS URL."})
+    ]
 
 
 class EventRiskAssessment(BaseModel):

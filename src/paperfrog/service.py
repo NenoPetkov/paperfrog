@@ -297,7 +297,10 @@ class Service:
             return
         self.last_signal_boundary = boundary
         universe = self.store.get("active_universe", {})
-        if not universe.get("asof_ms", boundary + 1) <= boundary < universe.get("expires_ms", 0):
+        if (
+            not universe.get("asof_ms", boundary + 1) <= boundary < universe.get("expires_ms", 0)
+            or universe.get("min_history_days", 180) < self.s.min_history_days
+        ):
             return
         active = [r for r in self.store.rows("entries", 10000) if not r["closed"]]
         if active:  # Conservative v1 avoids shared hedge attribution between simultaneous pairs.

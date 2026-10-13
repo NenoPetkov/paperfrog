@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
-from paperfrog.llm.events import EventFilter, EventRiskAssessment, policy
+from paperfrog.llm.events import EventFilter, EventRiskAssessment, Source, policy
 from paperfrog.monitoring.logging import Redactor
 from paperfrog.settings import Settings
 from paperfrog.telegram.control import Controls
@@ -110,6 +111,43 @@ def test_severe_events_veto(kind):
 def test_llm_unavailable_extreme_fails_closed():
     assert not policy(None, 4.01, datetime.now(UTC), True).allowed
     assert policy(None, 1, datetime.now(UTC), True).risk_multiplier == 0.5
+
+
+def test_event_schema_uses_supported_string_formats():
+    supported = {
+        "date-time",
+        "time",
+        "date",
+        "duration",
+        "email",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "uuid",
+    }
+
+    def check(node):
+        if isinstance(node, dict):
+            if "format" in node:
+                assert node["format"] in supported
+            for value in node.values():
+                check(value)
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+
+    check(EventRiskAssessment.model_json_schema())
+
+
+@pytest.mark.parametrize("url", ["not-a-url", "file:///tmp/event", "javascript:alert(1)"])
+def test_event_source_still_rejects_invalid_http_urls(url):
+    with pytest.raises(ValidationError):
+        Source(
+            title="Public event",
+            publisher="Example",
+            published_at=datetime.now(UTC),
+            url=url,
+        )
 
 
 async def test_openai_refusal_fails_closed(settings, store):
