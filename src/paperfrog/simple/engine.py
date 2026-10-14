@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import Connection
+
 from paperfrog.domain.types import Fill, Filters, Order, Quote, SafeError, State
 from paperfrog.execution.coordinator import Coordinator, client_id
 from paperfrog.paper.broker import PaperBroker
@@ -13,12 +15,16 @@ from paperfrog.risk.engine import Health, Proposal, RiskEngine
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .authorization import verify_simple_arm
+from .live_broker import LiveBroker
 from .strategy import (
     BAR_MS,
     RULES,
     Rules,
     entry,
+    execution_rules,
     exit_reason,
+    require_execution,
     require_paper,
     strategy_name,
     tighten_stop,
@@ -26,12 +32,25 @@ from .strategy import (
 
 
 class Engine:
-    """Same directional decision/position logic for historical replay and forward PAPER."""
+    """Shared directional logic for replay, PAPER and authorized exchange execution."""
 
     def __init__(
-        self, s: Settings, store: Store, filters: dict[str, Filters], rules: Rules = RULES
+        self,
+        s: Settings,
+        store: Store,
+        filters: dict[str, Filters],
+        rules: Rules | None = None,
+        broker: LiveBroker | None = None,
     ):
-        require_paper(s)
+        rules = execution_rules(s) if rules is None else rules
+        if broker is None:
+            require_paper(s)
+        else:
+            require_execution(s)
+            if broker.s != s or rules != execution_rules(s):
+                raise SafeError(
+                    "live execution requires current default rules and matching account"
+                )
         self.rules = rules
         self.strategy = strategy_name(s.simple_entry_mode, rules)
         if (
@@ -61,27 +80,32 @@ class Engine:
             raise SafeError("close existing PAPER positions before changing strategy rules")
         self.s, self.store, self.filters = s, store, filters
         self.risk = RiskEngine(s, store, profit_guard_scale=max(1.0, s.risk_per_trade / 0.002))
-        self.broker = PaperBroker(
-            store,
-            filters,
-            Decimal(str(s.paper_equity)),
-            s.paper_seed,
-            Decimal(str(s.fee_rate)),
-            s.slippage_bps,
-            0,
+        self.broker: PaperBroker | LiveBroker = (
+            broker
+            if broker is not None
+            else PaperBroker(
+                store,
+                filters,
+                Decimal(str(s.paper_equity)),
+                s.paper_seed,
+                Decimal(str(s.fee_rate)),
+                s.slippage_bps,
+                0,
+            )
         )
         self.coordinator = Coordinator(self.broker, store, self.risk, filters)
         self.store.put("simple_rules", public_rules)
         self.store.put("simple_entry_mode", s.simple_entry_mode)
+        self.store.put("simple_entry_profile", s.simple_entry_profile)
 
     def positions(self) -> dict[str, dict[str, Any]]:
         return dict(self.store.get("simple_positions", {}))
 
-    def notice(self, key: str, message: str) -> None:
-        notices = self.store.get("simple_notices", {})
+    def notice(self, key: str, message: str, conn: Connection | None = None) -> None:
+        notices = self.store.get("simple_notices", {}, conn)
         notices[key] = message
-        self.store.put("simple_notices", notices)
-        self.store.audit("simple_explanation", {"message": message})
+        self.store.put("simple_notices", notices, conn)
+        self.store.audit("simple_explanation", {"message": message}, conn)
 
     def health(self, now_ms: int) -> Health:
         ages = [
@@ -89,16 +113,50 @@ class Engine:
             for q in self.broker.quotes.values()
             if q.symbol in self.positions() or q.symbol in self.store.get("simple_selected", [])
         ]
-        # model_valid means frozen research rules here; this engine is structurally PAPER-only.
+        # model_valid means frozen strategy rules; exchange authorization is checked separately.
         return Health(
             bool(self.store.get("reconciled")),
             True,
             bool(self.filters),
             max(ages, default=float("inf")),
-            0,
+            (now_ms - self.broker.account_at_ms) / 1000
+            if isinstance(self.broker, LiveBroker)
+            else 0,
         )
 
     async def restore(self) -> None:
+        if isinstance(self.broker, LiveBroker):
+            # Reconcile uncertain IOC submissions without ever submitting them again.
+            if self.store.unresolved_orders() and not await self.coordinator.reconcile():
+                raise SafeError("unresolved startup execution; account remains paused")
+            for symbol, intent in self.store.get("simple_pending", {}).items():
+                if symbol in self.positions():
+                    continue
+                journal = self.store.get("trade:" + intent["id"], {})
+                if (
+                    journal.get("execution_complete") is not True
+                    or len(journal.get("fills", [])) != 1
+                ):
+                    raise SafeError("incomplete execution journal; account remains paused")
+                fill = Fill.model_validate(journal["fills"][0])
+                self.record_entry(symbol, fill, intent)
+            for symbol, closing in self.store.get("simple_closing", {}).items():
+                if symbol not in self.positions():
+                    continue
+                fill = await self.coordinator.submit_once(Order.model_validate(closing["order"]))
+                if fill.quantity != Decimal(self.positions()[symbol]["quantity"]):
+                    raise SafeError("incomplete reduction after restart; account remains paused")
+                with self.store.transaction() as conn:
+                    self.finish(symbol, fill, closing["timestamp_ms"], closing["reason"], conn)
+                    records = self.store.get("simple_closing", {}, conn)
+                    records.pop(symbol, None)
+                    self.store.put("simple_closing", records, conn)
+                await self.broker.cancel_protection(symbol)
+            for symbol in list(self.positions()):
+                stop_fill = await self.broker.stop_fill(symbol)
+                if stop_fill is not None:
+                    self.record_stop(stop_fill, self.broker.now_ms())
+                    await self.broker.cancel_protection(symbol)
         positions = await self.broker.positions()
         journals = self.positions()
         if set(positions) != set(journals):
@@ -119,10 +177,28 @@ class Engine:
     async def resume(self, now_ms: int) -> None:
         if not await self.coordinator.reconcile():
             raise SafeError("simple reconciliation failed")
-        self.risk.resume(self.health(now_ms), datetime.fromtimestamp(now_ms / 1000, UTC))
+        await self.require_journal()
+        armed = verify_simple_arm(self.s) if self.s.trading_mode == "live" else False
+        self.risk.resume(self.health(now_ms), datetime.fromtimestamp(now_ms / 1000, UTC), armed)
 
-    def finish(self, symbol: str, fill: Fill, now_ms: int, reason: str) -> None:
-        positions = self.positions()
+    async def require_journal(self) -> None:
+        if isinstance(self.broker, LiveBroker):
+            actual = await self.broker.positions()
+            journaled = {
+                symbol: Decimal(trade["quantity"]) * trade["side"]
+                for symbol, trade in self.positions().items()
+            }
+            if (
+                actual != journaled
+                or self.store.get("simple_pending")
+                or self.store.get("simple_closing")
+            ):
+                raise SafeError("simple execution journal incomplete; entries remain blocked")
+
+    def finish(
+        self, symbol: str, fill: Fill, now_ms: int, reason: str, conn: Connection | None = None
+    ) -> None:
+        positions = dict(self.store.get("simple_positions", {}, conn))
         trade = positions[symbol]
         pnl = (
             (float(fill.price) - trade["entry_price"]) * float(fill.quantity) * trade["side"]
@@ -130,7 +206,7 @@ class Engine:
             - trade["entry_fee"]
             + trade["funding"]
         )
-        self.risk.closed(trade["id"], pnl, datetime.fromtimestamp(now_ms / 1000, UTC))
+        self.risk.closed(trade["id"], pnl, datetime.fromtimestamp(now_ms / 1000, UTC), conn)
         record = {
             "timestamp_ms": now_ms,
             "entry_ms": trade["opened_ms"],
@@ -143,35 +219,44 @@ class Engine:
             "turnover": float(fill.quantity * fill.price)
             + float(trade["quantity"]) * trade["entry_price"],
         }
-        records = self.store.get("simple_closed", [])
+        records = self.store.get("simple_closed", [], conn)
         records.append(record)
-        self.store.put("simple_closed", records)
+        self.store.put("simple_closed", records, conn)
         del positions[symbol]
-        self.store.put("simple_positions", positions)
+        self.store.put("simple_positions", positions, conn)
         self.notice(
             trade["id"] + "-close",
-            f"CLOSE {symbol} {'LONG' if trade['side'] > 0 else 'SHORT'} at {fill.price}. PnL after fees/funding: {pnl:.2f} USDT. Why: {reason}.",
+            f"CLOSE {symbol} {'LONG' if trade['side'] > 0 else 'SHORT'} at {fill.price}. PnL with estimated fees and recorded funding: {pnl:.2f} {'BNFCR' if self.s.futures_account_mode == 'credits' else 'USDT'}. Why: {reason}.",
+            conn,
         )
+
+    def record_stop(self, fill: Fill, now_ms: int) -> None:
+        if (
+            fill.symbol not in self.positions()
+            or Decimal(self.positions()[fill.symbol]["quantity"]) != fill.quantity
+            or fill.side != -self.positions()[fill.symbol]["side"]
+        ):
+            raise SafeError("unexpected or partial protective stop fill")
+        with self.store.transaction() as conn:
+            expected = self.store.get("expected_positions", {}, conn)
+            expected[fill.symbol] = str(
+                Decimal(expected.get(fill.symbol, "0")) + fill.quantity * fill.side
+            )
+            self.store.put("expected_positions", expected, conn)
+            self.store.audit("simple_hosted_stop", fill.model_dump(mode="json"), conn)
+            self.finish(
+                fill.symbol,
+                fill,
+                now_ms,
+                "protective stop or volatility trailing stop reached",
+                conn,
+            )
 
     async def quote(self, quote: Quote, now_ms: int) -> None:
         if not 0 <= now_ms - quote.timestamp_ms <= self.s.market_stale_seconds * 1000:
             raise SafeError("simple quote stale or future dated")
         for fill in await self.broker.quote(quote):
-            # These are confirmed hosted PAPER fills, not an exchange position assumption.
-            expected = self.store.get("expected_positions", {})
-            expected[fill.symbol] = str(
-                Decimal(expected.get(fill.symbol, "0")) + fill.quantity * fill.side
-            )
-            self.store.put("expected_positions", expected)
-            self.store.audit("simple_hosted_stop", fill.model_dump(mode="json"))
-            if (
-                fill.symbol not in self.positions()
-                or Decimal(self.positions()[fill.symbol]["quantity"]) != fill.quantity
-            ):
-                raise SafeError("unexpected or partial protective stop fill")
-            self.finish(
-                fill.symbol, fill, now_ms, "protective stop or volatility trailing stop reached"
-            )
+            self.record_stop(fill, now_ms)
             await self.broker.cancel_protection(fill.symbol)
 
     def funding(self, symbol: str, timestamp_ms: int, rate: Decimal, mark: Decimal) -> None:
@@ -201,11 +286,22 @@ class Engine:
             ),
             reduce_only=True,
         )
+        closing = self.store.get("simple_closing", {})
+        closing[symbol] = {
+            "order": order.model_dump(mode="json"),
+            "timestamp_ms": now_ms,
+            "reason": reason,
+        }
+        self.store.put("simple_closing", closing)
         fill = await self.coordinator.submit_once(order)
         if fill.quantity != abs(quantity):
             self.store.put("state", State.ERROR_SAFE)
             raise SafeError("partial reduction; reconciliation required")
-        self.finish(symbol, fill, now_ms, reason)
+        with self.store.transaction() as conn:
+            self.finish(symbol, fill, now_ms, reason, conn)
+            closing = self.store.get("simple_closing", {}, conn)
+            closing.pop(symbol, None)
+            self.store.put("simple_closing", closing, conn)
         await self.broker.cancel_protection(symbol)
 
     async def monitor(
@@ -214,6 +310,7 @@ class Engine:
         now = datetime.fromtimestamp(now_ms / 1000, UTC)
         if not await self.coordinator.reconcile():
             raise SafeError("simple reconciliation mismatch")
+        await self.require_journal()
         self.risk.anchors(float(self.broker.equity()), now)
         for symbol, trade in self.positions().items():
             q = self.broker.quotes.get(symbol)
@@ -247,6 +344,7 @@ class Engine:
     ) -> None:
         if symbol in self.positions() or symbol not in self.store.get("simple_selected", []):
             return
+        await self.require_journal()
         q = self.broker.quotes.get(symbol)
         if not BAR_MS <= maximum_signal_age_ms <= 2 * BAR_MS:
             raise SafeError("invalid experimental signal delay")
@@ -311,6 +409,12 @@ class Engine:
             limit_price=price,
         )
         actual = float(quantity * price)
+        liquidation_distance = 1.0
+        if isinstance(self.broker, LiveBroker):
+            self.broker.require_authorization()
+            f.validate(order)
+            await self.broker.exchange.prepare_simple_symbol(symbol)
+            liquidation_distance = await self.broker.exchange.liquidation_buffer([order])
         proposal = Proposal(
             trade_id,
             symbol,
@@ -320,13 +424,59 @@ class Engine:
             actual * costs,
             direction * actual / equity,
             stop,
-            1,
+            liquidation_distance,
             float(quantity / visible),
         )
-        fills = await self.coordinator.enter_single_paper(
-            proposal, order, self.health(now_ms), datetime.fromtimestamp(now_ms / 1000, UTC), stop
-        )
+        intent: dict[str, Any] = {
+            "id": trade_id,
+            "side": direction,
+            "entry_mode": self.s.simple_entry_mode,
+            "opened_ms": now_ms,
+            "stop_fraction": stop,
+        }
+        if self.s.simple_entry_mode == "failed_breakout":
+            intent["rejection_level"] = float(row["rejection_level"])
+        if isinstance(self.broker, LiveBroker):
+            pending = self.store.get("simple_pending", {})
+            pending[symbol] = intent
+            self.store.put("simple_pending", pending)
+            try:
+                fills = await self.coordinator.enter_single_exchange(
+                    proposal,
+                    order,
+                    self.health(now_ms),
+                    datetime.fromtimestamp(now_ms / 1000, UTC),
+                    stop,
+                )
+            except (SafeError, TimeoutError):
+                active = [
+                    r
+                    for r in self.store.rows("entries", 100000)
+                    if r["id"] == trade_id and not r["closed"]
+                ]
+                if not active:
+                    pending.pop(symbol, None)
+                    self.store.put("simple_pending", pending)
+                raise
+        else:
+            fills = await self.coordinator.enter_single_paper(
+                proposal,
+                order,
+                self.health(now_ms),
+                datetime.fromtimestamp(now_ms / 1000, UTC),
+                stop,
+            )
         fill = fills[0]
+        self.record_entry(symbol, fill, intent)
+        self.notice(
+            trade_id + "-open",
+            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Why: {reason}. Ranked by recent liquidity and trend; volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
+        )
+
+    def record_entry(self, symbol: str, fill: Fill, intent: dict[str, Any]) -> None:
+        stop = float(intent["stop_fraction"])
+        direction = int(intent["side"])
+        trade_id = intent["id"]
         positions = self.positions()
         positions[symbol] = {
             "id": trade_id,
@@ -336,14 +486,14 @@ class Engine:
             "entry_price": float(fill.price),
             "entry_fee": float(fill.fee),
             "funding": 0.0,
-            "opened_ms": now_ms,
+            "opened_ms": intent["opened_ms"],
             "stop_price": float(fill.price) * (1 - direction * stop),
             "initial_stop_distance": float(fill.price) * stop,
         }
         if self.s.simple_entry_mode == "failed_breakout":
-            positions[symbol]["rejection_level"] = float(row["rejection_level"])
-        self.store.put("simple_positions", positions)
-        self.notice(
-            trade_id + "-open",
-            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {positions[symbol]['stop_price']:.6g}. Why: {reason}. Ranked by recent liquidity and trend; volatility {row['atr_fraction']:.2%} per 15-minute bar. PAPER simulation.",
-        )
+            positions[symbol]["rejection_level"] = intent["rejection_level"]
+        with self.store.transaction() as conn:
+            self.store.put("simple_positions", positions, conn)
+            pending = self.store.get("simple_pending", {}, conn)
+            pending.pop(symbol, None)
+            self.store.put("simple_pending", pending, conn)

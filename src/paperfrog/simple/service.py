@@ -14,23 +14,29 @@ from paperfrog.data.lake import Lake
 from paperfrog.domain.types import Quote, SafeError, State
 from paperfrog.exchange.binance import BinanceAdapter
 from paperfrog.monitoring.health import health_app
+from paperfrog.paper.broker import PaperBroker
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 from paperfrog.storage.lock import InstanceLock
 from paperfrog.telegram.control import Controls, Telegram
 
+from .authorization import directory, verify_simple_arm
 from .data import candles, funding, scan
 from .engine import Engine
-from .strategy import BAR_MS, WARMUP, choose, indicators, require_paper, strategy_name
+from .live_broker import LiveBroker
+from .strategy import BAR_MS, choose, execution_rules, indicators, require_execution, strategy_name
 
 
 class SimpleService:
     def __init__(self, s: Settings):
-        require_paper(s)
+        require_execution(s)
         self.s = s
-        self.directory = s.state_dir / "simple"
+        self.rules = execution_rules(s)
+        self.directory = directory(s)
         self.store = Store(self.directory / "paperfrog.sqlite")
-        self.lake = Lake(s.data_dir / "simple")
+        self.lake = Lake(
+            s.data_dir / ("simple-testnet" if s.trading_mode == "testnet" else "simple")
+        )
         self.exchange = BinanceAdapter(s)
         self.engine: Engine | None = None
         self.rows: dict[str, dict[str, Any]] = {}
@@ -77,6 +83,10 @@ class SimpleService:
             return not await self.engine.broker.positions()
 
     async def status(self, command: str) -> str:
+        armed = False
+        if self.s.trading_mode == "live":
+            with contextlib.suppress(SafeError):
+                armed = verify_simple_arm(self.s)
         if command == "/positions":
             return json.dumps(self.engine.positions() if self.engine else {})
         if command == "/last_signal":
@@ -90,9 +100,12 @@ class SimpleService:
             )
         return json.dumps(
             {
-                "mode": "paper",
-                "strategy": strategy_name(self.s.simple_entry_mode),
+                "mode": self.s.trading_mode,
+                "account_mode": self.s.futures_account_mode,
+                "strategy": strategy_name(self.s.simple_entry_mode, self.rules),
                 "entry_mode": self.s.simple_entry_mode,
+                "entry_profile": self.s.simple_entry_profile,
+                "breakout_minutes": self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
                 "selected": self.selected,
@@ -101,7 +114,12 @@ class SimpleService:
                 "loss_lock": self.store.get("risk_lock"),
                 "daily_entry_cap": self.s.max_strategy_entries_per_day,
                 "per_coin_daily_cap": self.s.max_entries_per_symbol_per_day,
-                "live_permitted": False,
+                "live_permitted": armed,
+                "live_armed": armed,
+                "research_requirements": "waived_by_operator"
+                if self.s.simple_live_research_waiver
+                else "required",
+                "profitability": "unproven",
             }
         )
 
@@ -129,9 +147,10 @@ class SimpleService:
                                     self.exchange,
                                     self.lake,
                                     symbol,
-                                    boundary - (WARMUP + 96) * BAR_MS,
+                                    boundary - (self.rules.warmup_bars + 96) * BAR_MS,
                                     boundary,
-                                )
+                                ),
+                                self.rules,
                             )
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
                             blocked = False
@@ -154,6 +173,7 @@ class SimpleService:
                     self.selected = choose(
                         {symbol: rows[symbol] for symbol in snapshot["symbols"] if symbol in rows},
                         self.s,
+                        self.rules,
                     )
                     self.store.put("simple_selected", self.selected)
                     self.store.put("simple_pool", snapshot["symbols"])
@@ -166,7 +186,7 @@ class SimpleService:
                             "usable_size": len(rows),
                             "selected": self.selected,
                             "selection": "recent trailing liquidity, stable volatility and trend strength",
-                            "live_permitted": False,
+                            "execution_mode": self.s.trading_mode,
                         },
                     )
                 last_boundary = boundary
@@ -180,6 +200,9 @@ class SimpleService:
                 engine = self.engine
                 if engine is None:
                     raise SafeError("simple engine unavailable")
+                if isinstance(engine.broker, LiveBroker):
+                    await engine.broker.refresh()
+                    await engine.broker.refresh_funding(self.now_ms())
                 symbols = list(dict.fromkeys([*engine.positions(), *self.selected]))
                 fetched = []
                 for symbol in symbols:
@@ -206,6 +229,8 @@ class SimpleService:
                 # Funding after downtime is resolved from actual settlements before fresh trading.
                 pending_funding = []
                 for symbol, trade in engine.positions().items():
+                    if not isinstance(engine.broker, PaperBroker):
+                        continue
                     now = self.now_ms()
                     last = int(
                         self.store.get("simple_funding_checked:" + symbol, trade["opened_ms"])
@@ -269,7 +294,7 @@ class SimpleService:
                         self.auto_start = False
                         engine.notice(
                             "started",
-                            f"Simple futures PAPER started: scanning up to {self.s.simple_scan_limit} coins and selecting up to {self.s.simple_selected_count}. No real-money orders. Entries and closes include reasons.",
+                            f"Simple futures {self.s.trading_mode.upper()} started: scanning up to {self.s.simple_scan_limit} coins and selecting up to {self.s.simple_selected_count}. Entries and closes include reasons. Profitability is unproven.",
                         )
                     lock = self.store.get("risk_lock")
                     if (
@@ -301,6 +326,7 @@ class SimpleService:
                                 )
                     self.store.put("heartbeat", time.time())
             except (SafeError, ValueError, KeyError, OSError) as exc:
+                self.exchange.entry_authorized = False
                 self.store.put("state", State.DEGRADED)
                 self.store.put("market_healthy_at", 0)
                 self.store.audit(
@@ -335,11 +361,28 @@ class SimpleService:
             try:
                 await self.exchange.sync_time()
                 await self.exchange.exchange_info()
-                self.engine = Engine(self.s, self.store, self.exchange.filters)
+                live_broker = None
+                if self.s.trading_mode != "paper":
+                    if self.s.trading_mode == "live":
+                        verify_simple_arm(self.s)
+                    live_broker = LiveBroker(self.s, self.store, self.exchange)
+                    await live_broker.preflight()
+                self.engine = Engine(
+                    self.s, self.store, self.exchange.filters, self.rules, broker=live_broker
+                )
                 await self.engine.restore()
+                self.store.put("operating_mode", self.s.trading_mode)
+                if live_broker is not None:
+                    from datetime import UTC, datetime
+
+                    self.engine.risk.anchors(float(live_broker.equity()), datetime.now(UTC))
+                    self.store.audit(
+                        "research_waiver", {"operator_waived": True, "profitability": "unproven"}
+                    )
                 if self.engine.positions():
-                    self.auto_start = False
-                    self.store.put("manual_lock", True)
+                    self.auto_start = self.s.trading_mode != "paper"
+                    if self.s.trading_mode == "paper":
+                        self.store.put("manual_lock", True)
                 if once:
                     print(await self.status("/status"))
                     return
@@ -392,7 +435,7 @@ class SimpleService:
                 self.store.put("state", State.PAUSED)
                 self.store.audit(
                     "simple_shutdown",
-                    {"action": "entries paused; PAPER positions/protection journal retained"},
+                    {"action": "entries paused; positions and hosted protection retained"},
                 )
                 if server:
                     server.should_exit = True

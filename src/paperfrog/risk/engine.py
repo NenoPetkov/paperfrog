@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import Connection, text
 
 from paperfrog.domain.types import SafeError, State
 from paperfrog.settings import Settings
@@ -215,35 +215,41 @@ class RiskEngine:
             )
             self.store.audit("entry_reserved", {"id": p.trade_id, "symbol": p.symbol}, conn)
 
-    def closed(self, trade_id: str, pnl: float, now: datetime) -> None:
-        with self.store.transaction() as conn:
-            row = conn.execute(
-                text("SELECT symbol,closed FROM entries WHERE id=:i"), {"i": trade_id}
-            ).one()
-            if row.closed:
-                return
-            conn.execute(text("UPDATE entries SET closed=1 WHERE id=:i"), {"i": trade_id})
+    def closed(
+        self, trade_id: str, pnl: float, now: datetime, conn: Connection | None = None
+    ) -> None:
+        if conn is None:
+            with self.store.transaction() as connection:
+                self.closed(trade_id, pnl, now, connection)
+            return
+        self._closed(trade_id, pnl, now, conn)
+
+    def _closed(self, trade_id: str, pnl: float, now: datetime, conn: Connection) -> None:
+        row = conn.execute(
+            text("SELECT symbol,closed FROM entries WHERE id=:i"), {"i": trade_id}
+        ).one()
+        if row.closed:
+            return
+        conn.execute(text("UPDATE entries SET closed=1 WHERE id=:i"), {"i": trade_id})
+        self.store.put(
+            "cooldown:" + row.symbol, now.timestamp() + (45 if pnl > 0 else 180) * 60, conn
+        )
+        losses = (
+            0 if pnl > 0 else self.store.get("consecutive_losses", 0, conn) + (1 if pnl < 0 else 0)
+        )
+        self.store.put("consecutive_losses", losses, conn)
+        if losses >= 3 and not self.store.get("risk_lock", None, conn):
             self.store.put(
-                "cooldown:" + row.symbol, now.timestamp() + (45 if pnl > 0 else 180) * 60, conn
+                "risk_lock",
+                {
+                    "state": State.SOFT_RISK_LOCK,
+                    "until": now.timestamp() + 43200,
+                    "reason": "three_losses",
+                },
+                conn,
             )
-            losses = (
-                0
-                if pnl > 0
-                else self.store.get("consecutive_losses", 0, conn) + (1 if pnl < 0 else 0)
-            )
-            self.store.put("consecutive_losses", losses, conn)
-            if losses >= 3 and not self.store.get("risk_lock", None, conn):
-                self.store.put(
-                    "risk_lock",
-                    {
-                        "state": State.SOFT_RISK_LOCK,
-                        "until": now.timestamp() + 43200,
-                        "reason": "three_losses",
-                    },
-                    conn,
-                )
-                self.store.put("state", State.SOFT_RISK_LOCK, conn)
-            self.store.audit("trade_closed", {"id": trade_id, "pnl": pnl}, conn)
+            self.store.put("state", State.SOFT_RISK_LOCK, conn)
+        self.store.audit("trade_closed", {"id": trade_id, "pnl": pnl}, conn)
 
     def resume(self, h: Health, now: datetime, live_armed: bool = False) -> None:
         self.require_health(h)

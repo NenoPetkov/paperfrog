@@ -25,6 +25,7 @@ from .strategy import (
     Rules,
     choose,
     entry,
+    execution_rules,
     indicators,
     require_paper,
     strategy_name,
@@ -83,10 +84,11 @@ async def replay(
     cost_multiplier: float = 1,
     delay_bars: int = 1,
     cash_only: bool = False,
-    rules: Rules = RULES,
+    rules: Rules | None = None,
     memory_ledger: bool = False,
 ) -> dict[str, Any]:
     require_paper(s)
+    rules = execution_rules(s) if rules is None else rules
     if output.exists() or cost_multiplier < 1 or delay_bars < 1:
         raise SafeError("use a new immutable replay directory and conservative stresses")
     if not frames or "BTCUSDT" not in frames or set(frames) != set(funding):
@@ -308,6 +310,7 @@ async def replay(
             {
                 "strategy": strategy_name(s.simple_entry_mode, rules),
                 "entry_mode": s.simple_entry_mode,
+                "entry_profile": s.simple_entry_profile,
                 "ending_equity": float(engine.broker.equity()),
                 "skipped_entries": dict(skipped),
                 "risk_lock_at_end": store.get("risk_lock"),
@@ -344,10 +347,11 @@ async def evaluate(
     start_ms: int,
     end_ms: int,
     output: Path,
-    rules: Rules = RULES,
+    rules: Rules | None = None,
     memory_ledger: bool = False,
 ) -> dict[str, Any]:
     require_paper(s)
+    rules = execution_rules(s) if rules is None else rules
     if output.exists():
         raise SafeError("use a new immutable simple research directory")
     output.mkdir(parents=True)
@@ -364,6 +368,7 @@ async def evaluate(
         "rules": rules.public(),
         "strategy": strategy_name(s.simple_entry_mode, rules),
         "entry_mode": s.simple_entry_mode,
+        "entry_profile": s.simple_entry_profile,
         "configuration": s.public(),
         "created_at": datetime.now(UTC).isoformat(),
         "start_ms": start_ms,
@@ -380,7 +385,7 @@ async def evaluate(
             ).hexdigest()
             for symbol, frame in funding.items()
         },
-        "parameter_search": rules != RULES,
+        "parameter_search": rules != execution_rules(s),
         "live_permitted": False,
         "limitations": [
             "Exploratory retrospective evaluation, not an untouched holdout or live-readiness approval.",

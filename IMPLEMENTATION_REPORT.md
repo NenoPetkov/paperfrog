@@ -1,5 +1,54 @@
 # paperfrog implementation report
 
+## Active entry profile — 2026-10-14
+
+At the operator's explicit request, `SIMPLE_ENTRY_PROFILE=active` adds a fixed,
+moderately more permissive trend entry profile: eight completed 15-minute candles
+for the breakout range instead of twelve, minimum EMA separation 0.4 ATR instead
+of 0.5, and directional flow 0.03 instead of 0.05. Standard remains the default.
+Position sizes, two-position maximum, leverage, protection, exposure budgets,
+entry caps and daily/weekly/high-water loss locks are unchanged. Matching rules
+are used by scanning, execution, PAPER replay, status and local authorization.
+Changing a live profile requires fresh local authorization; Telegram cannot do it.
+Profiles cannot be switched with open positions, and risk history is retained.
+
+On the same already-viewed 30-day, 97-symbol pool, standard/active respectively
+opened 85/96 baseline trades, 59/67 with doubled costs, and 75/82 with an extra
+entry-candle delay. Net returns were -2.41%/-2.01%, -3.25%/-3.17% and
+-2.73%/-2.73%. All six simulations lost money. No parameters were retuned after
+the comparison. This measures retrospective frequency under idealized execution;
+it is not an independent holdout, profitability evidence, or a trading quota.
+The protocol and ledgers are retained in `reports/active-entry-comparison-v1`.
+
+Verification: 215 tests passed, one credentialed testnet test skipped; Ruff lint
+and format checks passed; strict mypy passed over 24 source files, including
+risk, execution, simple strategy, exchange adapter and CLI. These are software
+checks only. The operator requested live activation with the existing local
+research waiver; the negative research results do not authorize deployment.
+
+## Simple exchange execution update — 2026-10-14
+
+At the operator's explicit request, the simple strategy now has an exchange execution
+path and a locally recorded waiver of research approval, historical-performance gates,
+paper/testnet waiting periods and legacy model promotion. PAPER remains the default.
+The waiver states profitability is unproven; no passing research evidence is invented.
+Legacy readiness gates and legacy arming remain unchanged.
+
+BNFCR support uses the exchange's aggregate USD/credits margin balance without counting
+underlying collateral twice. Cross Margin, Multi-Assets Mode, one-way positions and 2x
+symbol leverage are verified. Credentials, configuration and strategy/execution source
+bind the simple local arm. Simple PAPER, testnet and live ledgers are separate.
+IOC entry, hosted initial stops, authoritative funding income, idempotent order queries,
+partial-entry unwind and confirmed-fill restart recovery are implemented. ATR trailing
+exits run in the process while the initial Binance stop remains hosted during outages.
+Per-trade fee summaries remain estimates; account equity is read from Binance.
+
+Verification: 207 tests passed, one credentialed testnet test skipped; Ruff lint/format
+passed; strict mypy passed for the 10-file core and the 13-file simple/exchange/CLI scope.
+Software checks establish mechanics only. Prolonged exchange-operation evidence and
+positive strategy performance remain unproven. The original legacy verification and
+limitations recorded below describe the earlier implementation, not this operator waiver.
+
 Project, Python package, CLI, service, Telegram display text, and Docker service are named **paperfrog**. The repository contains an implemented research/paper system and guarded exchange integration. It is **not yet a validated production trading system**, and this report does not claim every research/operational requirement in the original brief is fully satisfied.
 
 ## Delivered

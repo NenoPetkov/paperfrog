@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     weekly_loss_limit: float = Field(0.035, gt=0, le=0.035)
     high_water_drawdown: float = Field(0.06, gt=0, le=0.06)
     exchange_leverage: Literal[2] = 2
-    margin_type: Literal["ISOLATED"] = "ISOLATED"
+    margin_type: Literal["ISOLATED", "CROSSED"] = "ISOLATED"
     position_mode: Literal["ONE_WAY"] = "ONE_WAY"
     market_stale_seconds: int = Field(60, ge=1, le=120)
     account_stale_seconds: int = Field(60, ge=1, le=120)
@@ -71,9 +71,20 @@ class Settings(BaseSettings):
     simple_selected_count: int = Field(2, ge=1, le=2)
     simple_poll_seconds: int = Field(5, ge=2, le=30)
     simple_entry_mode: SimpleEntryMode = "trend"
+    simple_entry_profile: Literal["standard", "active"] = "standard"
+    futures_account_mode: Literal["isolated", "credits"] = "isolated"
+    simple_live_research_waiver: bool = False
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.simple_entry_profile == "active" and self.simple_entry_mode != "trend":
+            raise ValueError("active entry profile requires trend mode")
+        if self.futures_account_mode == "credits" and self.strategy_profile != "simple":
+            raise ValueError("credits accounts require the simple execution profile")
+        if (self.futures_account_mode == "credits") != (self.margin_type == "CROSSED"):
+            raise ValueError(
+                "credits accounts require CROSSED margin; isolated accounts require ISOLATED"
+            )
         if self.trading_mode != "paper" and self.min_history_days < 180:
             raise ValueError("testnet and live require at least 180 history days")
         if self.trading_mode == "testnet" and self.binance_env != "testnet":

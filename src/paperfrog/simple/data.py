@@ -15,7 +15,7 @@ from paperfrog.domain.types import SafeError
 from paperfrog.exchange.binance import BinanceAdapter
 from paperfrog.settings import Settings
 
-from .strategy import BAR_MS, indicators, require_paper
+from .strategy import BAR_MS, indicators, require_execution
 
 
 def normalize(rows: list[list[Any]], end_ms: int) -> pd.DataFrame:
@@ -42,7 +42,7 @@ def normalize(rows: list[list[Any]], end_ms: int) -> pd.DataFrame:
 
 
 async def scan(adapter: BinanceAdapter, s: Settings) -> dict[str, Any]:
-    require_paper(s)
+    require_execution(s)
     info = await adapter.exchange_info()
     tickers = await adapter.request("GET", "/fapi/v1/ticker/24hr")
     now_ms = int(time.time() * 1000) + adapter.offset_ms

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
 import numpy as np
@@ -20,6 +20,24 @@ VERSION = "simple-trend-v1"
 def require_paper(s: Settings) -> None:
     if s.trading_mode != "paper" or s.live_trading_enabled:
         raise SafeError("simple strategy has no live approval; use PAPER mode")
+
+
+def require_execution(s: Settings) -> None:
+    if s.trading_mode == "paper":
+        require_paper(s)
+        return
+    if s.strategy_profile != "simple" or not s.simple_live_research_waiver:
+        raise SafeError(
+            "simple strategy has no live approval; explicit local research waiver missing"
+        )
+    if s.trading_mode == "live" and not (
+        s.binance_env == "live" and s.live_trading_enabled and s.i_understand_live_risk == "YES"
+    ):
+        raise SafeError("local live environment authorization missing")
+    if s.trading_mode == "testnet" and (s.binance_env != "testnet" or s.live_trading_enabled):
+        raise SafeError("testnet environment mismatch")
+    if not s.binance_api_key.get_secret_value() or not s.binance_api_secret.get_secret_value():
+        raise SafeError("exchange credentials missing")
 
 
 @dataclass(frozen=True)
@@ -87,6 +105,21 @@ class Rules:
 
 
 RULES = Rules()
+ACTIVE_RULES = replace(
+    RULES,
+    version="simple-trend-active-v1",
+    breakout_bars=8,
+    minimum_trend_atr=0.4,
+    minimum_flow=0.03,
+)
+
+
+def execution_rules(s: Settings) -> Rules:
+    if s.simple_entry_profile == "active":
+        if s.simple_entry_mode != "trend":
+            raise SafeError("active entry profile requires trend mode")
+        return ACTIVE_RULES
+    return RULES
 
 
 def strategy_name(mode: SimpleEntryMode, rules: Rules = RULES) -> str:

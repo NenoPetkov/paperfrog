@@ -5,13 +5,24 @@ import numpy as np
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pydantic import ValidationError
 
 from paperfrog.domain.types import Quote, SafeError, State
 from paperfrog.simple.backtest import replay
 from paperfrog.simple.data import funding, normalize
 from paperfrog.simple.engine import Engine
 from paperfrog.simple.service import SimpleService
-from paperfrog.simple.strategy import BAR_MS, choose, entry, exit_reason, indicators, tighten_stop
+from paperfrog.simple.strategy import (
+    ACTIVE_RULES,
+    BAR_MS,
+    RULES,
+    choose,
+    entry,
+    execution_rules,
+    exit_reason,
+    indicators,
+    tighten_stop,
+)
 from paperfrog.storage.database import Store
 from paperfrog.telegram.control import Controls, Telegram
 
@@ -86,6 +97,55 @@ def test_entry_requires_direction_and_confirming_flow(direction):
     assert entry(x, 0.001)[0] == direction
     x["flow"] *= -1
     assert entry(x, 0.001)[0] == 0
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_active_entries_accept_weaker_alignment_but_require_confirming_flow(direction):
+    x = row(direction=direction)
+    x.update(trend_atr=direction * 0.45, flow=direction * 0.04)
+    assert entry(x, 0.001, rules=RULES)[0] == 0
+    assert entry(x, 0.001, rules=ACTIVE_RULES)[0] == direction
+    x["flow"] *= -1
+    assert entry(x, 0.001, rules=ACTIVE_RULES)[0] == 0
+    x["flow"] = direction * 0.02
+    assert entry(x, 0.001, rules=ACTIVE_RULES)[0] == 0
+
+
+def test_active_profile_preserves_defaults_and_protective_rules(settings):
+    assert settings.trading_mode == "paper"
+    assert settings.simple_entry_profile == "standard"
+    assert execution_rules(settings) == RULES
+    active = settings.model_copy(update={"simple_entry_profile": "active"})
+    assert execution_rules(active) == ACTIVE_RULES
+    changed = {key for key, value in RULES.public().items() if ACTIVE_RULES.public()[key] != value}
+    assert changed == {"version", "breakout_bars", "minimum_trend_atr", "minimum_flow"}
+    for mode in ("reverse", "failed_breakout"):
+        from paperfrog.settings import Settings
+
+        with pytest.raises(ValidationError, match="requires trend mode"):
+            Settings(_env_file=None, simple_entry_profile="active", simple_entry_mode=mode)
+        with pytest.raises(SafeError, match="requires trend mode"):
+            execution_rules(active.model_copy(update={"simple_entry_mode": mode}))
+
+
+def test_active_breakout_uses_only_completed_two_hour_history():
+    raw = source()
+    raw.loc[239, "high"] = raw.high.max() * 2
+    standard = indicators(raw.iloc[:250], RULES)
+    active = indicators(raw.iloc[:250], ACTIVE_RULES)
+    assert standard.iloc[-1].close < standard.iloc[-1].prior_high
+    assert active.iloc[-1].close > active.iloc[-1].prior_high
+    raw.loc[250:, ["open", "high", "low", "close"]] *= 100
+    assert_frame_equal(active, indicators(raw, ACTIVE_RULES).iloc[:250])
+
+
+async def test_switching_entry_profile_with_open_positions_is_refused(settings, store, filters):
+    engine = await engine_fixture(settings, store, filters)
+    await engine.enter("SOLUSDT", row(), 200 * BAR_MS)
+    active = settings.model_copy(update={"simple_entry_profile": "active"})
+    with pytest.raises(SafeError, match="changing strategy rules"):
+        Engine(active, store, filters)
+    assert store.get("simple_entry_profile") == "standard"
 
 
 def test_missing_and_extreme_data_block_selection(settings):
@@ -210,14 +270,22 @@ async def test_single_entry_point_rejects_nonpaper_broker_or_mode(
         await coordinator.enter(p, [order], health, now, 0.01)
 
 
-async def test_backtest_is_chronological_and_uses_same_engine(settings, tmp_path):
-    frames = {"BTCUSDT": indicators(source()), "SOLUSDT": indicators(source(side=-1))}
+@pytest.mark.parametrize("profile", ["standard", "active"])
+async def test_backtest_is_chronological_and_uses_same_engine(settings, tmp_path, profile):
+    settings = settings.model_copy(update={"simple_entry_profile": profile})
+    rules = execution_rules(settings)
+    frames = {
+        "BTCUSDT": indicators(source(), rules),
+        "SOLUSDT": indicators(source(side=-1), rules),
+    }
     fund = {
         symbol: pd.DataFrame({"timestamp_ms": [0], "funding_rate": [0.0], "mark": [100]})
         for symbol in frames
     }
     path = tmp_path / "replay"
     result = await replay(frames, fund, settings, 192 * BAR_MS, 360 * BAR_MS, path)
+    assert result["strategy"] == rules.version
+    assert result["entry_profile"] == profile
     trades = pd.read_parquet(path / "trades.parquet")
     assert result["trades"] > 0 and not result["live_permitted"]
     assert (trades.entry_ms >= 193 * BAR_MS).all()

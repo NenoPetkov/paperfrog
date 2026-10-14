@@ -125,6 +125,25 @@ class Coordinator:
             raise SafeError("single-leg experiment is PAPER-only")
         return await self._enter(proposal, [order], health, now, stop_fraction, single_paper=True)
 
+    async def enter_single_exchange(
+        self,
+        proposal: Proposal,
+        order: Order,
+        health: Health,
+        now: datetime,
+        stop_fraction: float,
+    ) -> list[Fill]:
+        from paperfrog.simple.live_broker import LiveBroker
+        from paperfrog.simple.strategy import require_execution
+
+        require_execution(self.risk.s)
+        if self.risk.s.trading_mode == "paper" or not isinstance(self.broker, LiveBroker):
+            raise SafeError("single exchange execution requires the authorized live broker")
+        self.broker.require_authorization()
+        return await self._enter(
+            proposal, [order], health, now, stop_fraction, single_exchange=True
+        )
+
     async def _enter(
         self,
         proposal: Proposal,
@@ -133,6 +152,7 @@ class Coordinator:
         now: datetime,
         stop_fraction: float,
         single_paper: bool = False,
+        single_exchange: bool = False,
     ) -> list[Fill]:
         async with self._mutex:
             if single_paper:
@@ -140,7 +160,13 @@ class Coordinator:
 
                 if self.risk.s.trading_mode != "paper" or not isinstance(self.broker, PaperBroker):
                     raise SafeError("single-leg experiment is PAPER-only")
-            if (len(orders) != 1 if single_paper else len(orders) < 2) or any(
+            if single_exchange:
+                from paperfrog.simple.live_broker import LiveBroker
+
+                if not isinstance(self.broker, LiveBroker):
+                    raise SafeError("exchange broker mismatch")
+                self.broker.require_authorization()
+            if (len(orders) != 1 if single_paper or single_exchange else len(orders) < 2) or any(
                 o.reduce_only for o in orders
             ):
                 raise SafeError("paired entry requires target and hedge")
@@ -194,6 +220,11 @@ class Coordinator:
                             )
                         if f.quantity != order.quantity:
                             raise SafeError("partial pair; unwind confirmed fills")
+                    if single_exchange:
+                        from paperfrog.simple.live_broker import LiveBroker
+
+                        if isinstance(self.broker, LiveBroker):
+                            await self.broker.verify_liquidation(stop_fraction)
                 self.store.put(
                     "trade:" + proposal.trade_id,
                     {
@@ -203,6 +234,7 @@ class Coordinator:
                         "stop_fraction": stop_fraction,
                         "risk": proposal.risk,
                         "partial_taken": False,
+                        "execution_complete": True,
                     },
                 )
                 return filled
@@ -248,6 +280,9 @@ class Coordinator:
                                 - close_fill.fee
                             )
                         self.risk.closed(proposal.trade_id, pnl, now)
+                        if single_exchange:
+                            for f in filled:
+                                await self.broker.cancel_protection(f.symbol)
                 raise
 
     async def reconcile(self) -> bool:

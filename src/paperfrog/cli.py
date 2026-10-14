@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Coroutine
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import pandas as pd
 import typer
@@ -110,11 +111,13 @@ def emit(value: object) -> None:
 
 
 def operating_store(s: Settings) -> Store:
-    directory = s.state_dir / "simple" if s.strategy_profile == "simple" else s.state_dir
-    return Store(directory / "paperfrog.sqlite")
+    from paperfrog.simple.authorization import directory
+
+    folder = directory(s) if s.strategy_profile == "simple" else s.state_dir
+    return Store(folder / "paperfrog.sqlite")
 
 
-def execute(awaitable: object) -> object:
+def execute[T](awaitable: Coroutine[Any, Any, T]) -> T:
     try:
         return asyncio.run(awaitable)
     except SafeError as exc:
@@ -457,7 +460,7 @@ def simple_backtest(
 ) -> None:
     """Replay the same directional PAPER strategy with cash, doubled costs and delay."""
     from paperfrog.simple.backtest import evaluate, load_history
-    from paperfrog.simple.strategy import require_paper
+    from paperfrog.simple.strategy import execution_rules, require_paper
 
     s = settings()
     require_paper(s)
@@ -469,26 +472,40 @@ def simple_backtest(
     if begin >= finish or begin % 900000 or finish % 900000:
         raise typer.BadParameter("use aligned UTC 15-minute boundaries")
     chosen = list(dict.fromkeys(symbols.split(",")))
-    frames, funding = load_history(Lake(lake), chosen, begin, finish)
-    result = execute(evaluate(frames, funding, s, begin, finish, output))
+    rules = execution_rules(s)
+    frames, funding = load_history(Lake(lake), chosen, begin, finish, rules)
+    result = execute(evaluate(frames, funding, s, begin, finish, output, rules))
     emit({"report": str(output / "evaluation.json"), **result})
 
 
 @simple_app.command("status")
 def simple_status() -> None:
     s = settings()
-    store = Store(s.state_dir / "simple" / "paperfrog.sqlite")
+    store = operating_store(s)
+    from paperfrog.simple.authorization import verify_simple_arm
+
+    armed = False
+    if s.trading_mode == "live":
+        try:
+            armed = verify_simple_arm(s)
+        except SafeError:
+            pass
     emit(
         {
-            "mode": "paper",
+            "mode": store.get("operating_mode", s.trading_mode),
             "entry_mode": store.get("simple_entry_mode", "trend"),
+            "entry_profile": store.get("simple_entry_profile", "standard"),
             "state": store.get("state"),
             "pool_count": len(store.get("simple_pool", [])),
             "selected": store.get("simple_selected", []),
             "positions": store.get("simple_positions", {}),
             "anchors": store.get("anchors"),
             "risk_lock": store.get("risk_lock"),
-            "live_permitted": False,
+            "live_permitted": armed,
+            "live_armed": armed,
+            "research_requirements": "waived_by_operator"
+            if s.simple_live_research_waiver
+            else "required",
         }
     )
 
@@ -499,9 +516,9 @@ def run_mode(mode: str, once: bool) -> None:
         raise typer.BadParameter("command mode must match TRADING_MODE/YAML")
     if s.strategy_profile == "simple":
         from paperfrog.simple.service import SimpleService
-        from paperfrog.simple.strategy import require_paper
+        from paperfrog.simple.strategy import require_execution
 
-        require_paper(s)
+        require_execution(s)
         execute(SimpleService(s).run(once))
     else:
         execute(Service(s).run(once))
@@ -526,11 +543,40 @@ def run_live(once: bool = False) -> None:
 def live_arm(confirm: Annotated[str, typer.Option()]) -> None:
     s = settings()
     if s.strategy_profile != "legacy":
-        raise typer.BadParameter(
-            "simple strategy is PAPER-only pending separate research and execution approval"
+        from paperfrog.simple.authorization import arm_simple, directory
+        from paperfrog.simple.live_broker import LiveBroker
+
+        async def arm_directional() -> None:
+            exchange = BinanceAdapter(s)
+            store = Store(directory(s) / "paperfrog.sqlite")
+            try:
+                await exchange.sync_time()
+                await exchange.exchange_info()
+                await LiveBroker(s, store, exchange).preflight()
+                arm_simple(s, confirm)
+                store.audit(
+                    "live_armed",
+                    {"research_requirements": "waived_by_operator", "profitability": "unproven"},
+                )
+            finally:
+                await exchange.close()
+                store.engine.dispose()
+
+        execute(arm_directional())
+        emit(
+            {
+                "armed": True,
+                "profile": "simple",
+                "research_requirements": "waived_by_operator",
+                "profitability": "unproven",
+            }
         )
+        return
     service = Service(s)
     service.load_model()
+    if service.model is None:
+        raise SafeError("live model missing")
+    model_hash = service.model.hash
 
     async def work() -> None:
         # Authenticated reconciliation must succeed before the local record is created.
@@ -539,7 +585,7 @@ def live_arm(confirm: Annotated[str, typer.Option()]) -> None:
         await service.exchange.verify_risk_settings(s.symbols)
         if not await service.coordinator.reconcile():
             raise SafeError("cannot arm with account mismatch")
-        arm(s, service.model.hash, confirm)
+        arm(s, model_hash, confirm)
         await service.exchange.close()
 
     execute(work())
@@ -549,8 +595,13 @@ def live_arm(confirm: Annotated[str, typer.Option()]) -> None:
 @live_app.command("disarm")
 def live_disarm() -> None:
     s = settings()
-    (s.state_dir / "live-arm.json").unlink(missing_ok=True)
-    Store(s.state_dir / "paperfrog.sqlite").put("manual_lock", True)
+    from paperfrog.simple.authorization import directory
+
+    folder = directory(s) if s.strategy_profile == "simple" else s.state_dir
+    (folder / "live-arm.json").unlink(missing_ok=True)
+    store = operating_store(s)
+    store.put("manual_lock", True)
+    store.put("state", "PAUSED")
     emit({"armed": False})
 
 

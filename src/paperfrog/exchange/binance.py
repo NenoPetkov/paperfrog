@@ -234,19 +234,47 @@ class BinanceAdapter:
     async def verify_risk_settings(self, symbols: tuple[str, ...]) -> None:
         mode = await self.request("GET", "/fapi/v1/positionSide/dual", signed=True)
         multi = await self.request("GET", "/fapi/v1/multiAssetsMargin", signed=True)
-        if mode["dualSidePosition"] or multi["multiAssetsMargin"]:
-            raise SafeError("one-way single-asset account required; configure locally")
+        credits = self.s.futures_account_mode == "credits"
+        if (
+            mode.get("dualSidePosition") is not False
+            or multi.get("multiAssetsMargin") is not credits
+        ):
+            raise SafeError("one-way position mode and configured asset mode required")
         details = {
             r["symbol"]: r for r in await self.request("GET", "/fapi/v1/symbolConfig", signed=True)
         }
         for symbol in symbols:
             r = details.get(symbol)
-            if r is None or r["marginType"].lower() != "isolated" or int(r["leverage"]) != 2:
+            if (
+                r is None
+                or r["marginType"].lower() != ("crossed" if credits else "isolated")
+                or int(r["leverage"]) != 2
+            ):
                 raise SafeError(
-                    "isolated margin and 2x leverage must be confirmed for every symbol"
+                    "configured margin mode and 2x leverage must be confirmed for every symbol"
                 )
 
+    async def prepare_simple_symbol(self, symbol: str) -> None:
+        if self.s.trading_mode == "paper" or self.s.strategy_profile != "simple":
+            raise SafeError("exchange symbol preparation requires simple exchange mode")
+        rows = await self.request("GET", "/fapi/v1/symbolConfig", {"symbol": symbol}, signed=True)
+        matches = [r for r in rows if r.get("symbol") == symbol]
+        wanted = "crossed" if self.s.futures_account_mode == "credits" else "isolated"
+        if len(matches) != 1 or str(matches[0].get("marginType", "")).lower() != wanted:
+            raise SafeError("symbol margin mode does not match configured account")
+        if int(matches[0]["leverage"]) != 2:
+            if (await self.positions()).get(symbol):
+                raise SafeError("cannot prepare leverage for an existing position")
+            await self.request(
+                "POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": 2}, signed=True
+            )
+        await self.verify_risk_settings((symbol,))
+
     async def configure_flat_account(self, symbols: tuple[str, ...]) -> None:
+        if self.s.futures_account_mode == "credits":
+            raise SafeError(
+                "credits account modes are managed by Binance; isolated configuration unavailable"
+            )
         if self.s.trading_mode == "paper":
             raise SafeError("paper mode cannot configure an exchange account")
         if await self.positions() or await self.open_orders() or await self.open_stops():

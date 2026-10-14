@@ -2,7 +2,7 @@
 
 paperfrog is a Python 3.12 futures research bot. Its default simple profile scans recent Binance USDT perpetual data, ranks up to 100 liquid crypto coins, selects up to two, chooses long/short from trend breakouts and trading flow, and monitors exits. Cash and zero trades are valid outcomes.
 
-**Default: PAPER. Live readiness: BLOCKED. Trading edge: unproven.** There is no trained production model or historical out-of-sample performance claim in this repository. Tests verify software mechanics, not profitability. Read [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for delivered scope and material limitations before operating it.
+**Default: PAPER. Trading edge: unproven.** The simple profile supports locally authorized exchange execution with an explicit operator waiver of research approval and waiting periods. Legacy model readiness remains separate. Tests verify software mechanics, not profitability. Read [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for delivered scope and material limitations before operating it.
 
 ## Install and verify
 
@@ -33,7 +33,7 @@ curl http://127.0.0.1:8081/simple
 
 Set `STRATEGY_PROFILE=simple`, `SIMPLE_SCAN_LIMIT=100`,
 `SIMPLE_SELECTED_COUNT=2` and `SIMPLE_POLL_SECONDS=5` in `.env`.
-The new profile uses `state/simple` and `data/simple`; its health server uses the
+The PAPER profile uses `state/simple` and `data/simple`; its health server uses the
 configured `HEALTH_PORT` (8081 in this installation). Stop the old service before
 starting it: only one process may poll the same Telegram bot.
 
@@ -58,6 +58,63 @@ Current limits are 12 entries total and two per coin per UTC day, with at most t
 positions. Selection may change during the day. The bot does not force a 5–20-trade
 quota. These are frozen deterministic rules: no automatic ML retraining, no changes
 triggered by individual losses, and no promised profitability.
+
+`SIMPLE_ENTRY_PROFILE=standard` preserves the original three-hour breakout rules.
+The optional `active` profile uses a two-hour closed-candle breakout, minimum EMA
+separation of 0.4 ATR (standard: 0.5), and minimum directional flow of 0.03
+(standard: 0.05). It requires `SIMPLE_ENTRY_MODE=trend`. Both profiles use the same
+15-minute signals, five-second monitoring, two selected coins, two-position ceiling,
+position sizing, 2x leverage, stops, exposure caps, entry caps and loss locks.
+Active can produce more eligible setups; additional trades and profitability are
+not guaranteed. Higher turnover can increase fees and losses.
+
+The profile is shown by `/status`, `/simple` and `simple status`, and PAPER backtests
+use its matching indicator and execution rules. Switch only while flat: changing
+profiles with open positions is refused. A live profile/configuration or source change
+invalidates the existing local arm; stop the service and complete local authorization
+before restarting. Telegram cannot switch profiles or create that authorization.
+
+### Simple exchange execution and BNFCR
+
+The simple profile can run the same current rules on Binance production or testnet.
+For a Futures Credits account, set `FUTURES_ACCOUNT_MODE=credits` and
+`MARGIN_TYPE=CROSSED`. Binance requires Cross Margin and Multi-Assets Mode for credits.
+The adapter uses `totalMarginBalance` as USD/BNFCR equity once; it does not add BNFCR
+and the underlying collateral balances together. Contracts remain USDT perpetuals.
+Selected symbols are checked for the expected margin mode and prepared at 2x leverage
+while flat. Existing risk sizing and entry-count limits remain in force.
+
+Production execution also requires `TRADING_MODE=live`, `BINANCE_ENV=live`,
+`LIVE_TRADING_ENABLED=true`, `I_UNDERSTAND_LIVE_RISK=YES`, and
+`SIMPLE_LIVE_RESEARCH_WAIVER=true`, with private local API credentials.
+The waiver records unproven profitability; it does not fabricate a passing readiness report.
+The simple workflow does not require historical performance approval, paper/testnet waiting
+periods, a promoted legacy model, or a news/LLM decision. PAPER remains the default.
+
+```bash
+uv run paperfrog live arm --confirm "ARM LIVE TRADING"
+uv run paperfrog run live
+uv run paperfrog simple status
+# Pause entries, retaining hosted protection and exit monitoring:
+uv run paperfrog live disarm
+# Request the running process to close its positions:
+uv run paperfrog emergency flatten --confirm "FLATTEN ALL POSITIONS"
+```
+
+The local arm binds the account, configuration and strategy code; changing them or
+deleting the record disables entries. It does not expire automatically in the waived simple
+workflow. Telegram cannot create an arm record or raise risk. Exchange and PAPER ledgers
+are separate (`state/simple-live`, `state/simple-testnet`, `state/simple`). Unknown
+positions/orders, stale data, uncertain submissions and incomplete journals block entries.
+
+After each confirmed IOC entry, install and verify a Binance-hosted MARK_PRICE
+STOP_MARKET close-all order. Partial entries and rejected protection unwind confirmed fills.
+Ambiguous orders are queried rather than submitted again. The hosted initial stop stays
+active throughout the trade; tighter ATR trailing exits run in the monitoring process.
+If the process is offline, the initial stop remains available, while software trailing exits
+wait for recovery. Confirmed hosted stop executions are reconciled after restart.
+Account equity includes actual exchange costs and funding; per-trade PnL notifications
+currently use configured fee estimates and authoritative funding income.
 
 ### Historical tests
 
@@ -173,10 +230,10 @@ failures and two negative validation comparisons, with that protocol deviation r
 The sustained candidate returned +0.09% over two years, -2.02% with doubled costs and
 -1.11% over the recent 97-coin pool. It did not qualify for activation.
 
-The simple strategy is PAPER-only: it cannot submit exchange orders, arm live, promote
-itself or satisfy legacy model readiness. Real-money deployment needs separate execution
-review and genuine research/PAPER/testnet evidence. Changing environment flags cannot
-remove this restriction. No old research/model/news/hedge pipeline runs in this profile.
+Simple historical experiments remain isolated PAPER simulations. Explicit local research
+waiver and arming enable the current default rules through the separate exchange execution
+path; experimental rule sets cannot use that path. The simple strategy cannot promote
+itself or satisfy legacy model readiness. No old research/model/news/hedge pipeline runs in this profile.
 The old losing candle experiment was removed; its immutable reports remain available.
 Legacy code below is retained for existing safety/operations and reproducible research.
 
