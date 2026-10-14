@@ -393,6 +393,33 @@ def report_readiness(evidence: Path | None = None) -> None:
         raise typer.Exit(2)
 
 
+@backtest_app.command("candle")
+def backtest_candle(start: str, end: str, output: Path, symbol: str = "SOLUSDT") -> None:
+    """Evaluate separate PAPER-only fixed candle/OI rules versus cash and cost stresses."""
+    from paperfrog.backtest.candle import evaluate_candles
+    from paperfrog.strategy.candle import load_candles
+
+    s = settings()
+    frame = load_candles(s, symbol, milliseconds(start), milliseconds(end))
+    result = evaluate_candles(frame, s, symbol, output)
+    emit(
+        {
+            "report": str(output / "evaluation.json"),
+            "live_permitted": False,
+            "evaluations": {
+                period: {
+                    case: {
+                        k: value.get(k)
+                        for k in ("net_return", "trades", "max_drawdown", "profit_factor")
+                    }
+                    for case, value in cases.items()
+                }
+                for period, cases in result["evaluations"].items()
+            },
+        }
+    )
+
+
 def run_mode(mode: str, once: bool) -> None:
     s = settings()
     if s.trading_mode != mode:

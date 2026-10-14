@@ -114,6 +114,36 @@ uv run paperfrog report readiness --evidence reports/evidence.json
 
 Readiness exits **2** when evidence is missing or fails. An operator-authored review/evidence file is a trusted local attestation, not an automatically proven fact. See [LIVE_READINESS.md](LIVE_READINESS.md). Never copy synthetic fixture metrics into it.
 
+## Separate candle PAPER experiment
+
+The `candle-unwind-v1` experiment uses futures candle closes, target spot volume and
+actual open-interest observations. It is separate from the trained funding-feedback
+strategy and is rejected outside PAPER mode. It cannot promote a model, arm live
+trading or send exchange orders.
+
+```bash
+uv run paperfrog backtest candle 2024-10-13 2026-10-13 reports/candle-study-002 --symbol SOLUSDT
+```
+
+The fixed rules measure SOL's log-price relative to an equal-weight BTC/ETH basket
+over 20 days. A 2.5-standard-deviation extreme must begin contracting, with prior
+4-hour OI expansion of at least 2%, subsequent 30-minute OI contraction and two bars
+of opposing taker flow. Entry uses a later candle open and a bounded trailing Ridge
+hedge. Exit follows convergence, four-hour expiry, a 2% leg stop or a risk/crisis veto.
+The existing entry, exposure, loss and cooldown caps apply in an isolated research ledger.
+
+The report compares cash, baseline costs, doubled fees/spread/slippage and an extra
+bar of execution delay. It reports the full period and the later half separately,
+with past-only indicator warm-up. Parameters are frozen rather than selected by
+backtest returns. Each new run requires a new output directory.
+
+Historical fills are explicitly idealized: fractional positions, assumed 5bp
+half-spread plus configured slippage, actual funding settlements, and adverse candle
+extremes when a stop is touched. Candle volume is a liquidity proxy; order-book depth,
+historical lot filters and intrabar event ordering are unknown. The fixed symbol was
+selected today, not by a reconstructed historical universe. These research reports
+remain `live_permitted=false` and cannot substitute for original live-readiness evidence.
+
 ## Binance testnet
 
 Create demo/testnet credentials in the official [Binance Demo Trading environment](https://demo.binance.com/). Use a dedicated account and separate keys from live. The adapter uses the documented `https://demo-fapi.binance.com` endpoint. Configure one-way mode, single-asset USDT, isolated margin, and 2x leverage on the exact symbols. The explicit configuration command refuses an account with positions or orders:
