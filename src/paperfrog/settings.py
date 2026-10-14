@@ -9,12 +9,15 @@ import yaml
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+SimpleEntryMode = Literal["trend", "reverse", "failed_breakout"]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", extra="forbid", frozen=True, hide_input_in_errors=True
     )
     trading_mode: Literal["paper", "testnet", "live"] = "paper"
+    strategy_profile: Literal["simple", "legacy"] = "simple"
     binance_env: Literal["testnet", "live"] = "testnet"
     live_trading_enabled: bool = False
     i_understand_live_risk: str = ""
@@ -64,6 +67,10 @@ class Settings(BaseSettings):
     latency_ms: int = Field(100, ge=0, le=5000)
     health_port: int = Field(8080, ge=1024, le=65535)
     symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
+    simple_scan_limit: int = Field(100, ge=2, le=100)
+    simple_selected_count: int = Field(2, ge=1, le=2)
+    simple_poll_seconds: int = Field(5, ge=2, le=30)
+    simple_entry_mode: SimpleEntryMode = "trend"
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:

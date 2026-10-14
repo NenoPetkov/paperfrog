@@ -38,9 +38,16 @@ class Health:
 
 
 class RiskEngine:
-    def __init__(self, settings: Settings, store: Store):
+    def __init__(self, settings: Settings, store: Store, profit_guard_scale: float = 1.0):
+        if not math.isfinite(profit_guard_scale) or not 1 <= profit_guard_scale <= 10:
+            raise SafeError("invalid profit protection scale")
+        if profit_guard_scale != 1 and (
+            settings.trading_mode != "paper" or settings.live_trading_enabled
+        ):
+            raise SafeError("scaled profit protection is offline PAPER-only")
         self.s = settings
         self.store = store
+        self.profit_guard_scale = profit_guard_scale
 
     def anchors(self, equity: float, now: datetime) -> dict[str, object]:
         if not math.isfinite(equity) or equity <= 0 or now.tzinfo is None:
@@ -73,8 +80,13 @@ class RiskEngine:
                     "reason": "daily_loss",
                 }
             peak_profit = a["peak"] - a["day_equity"]
-            if lock is None and peak_profit >= a["day_equity"] * 0.0075 - 1e-9:
-                if a["peak"] - equity >= max(a["day_equity"] * 0.0035, 0.35 * peak_profit) - 1e-9:
+            protected_profit = a["day_equity"] * 0.0075 * self.profit_guard_scale
+            if lock is None and peak_profit >= protected_profit - 1e-9:
+                if (
+                    a["peak"] - equity
+                    >= max(a["day_equity"] * 0.0035 * self.profit_guard_scale, 0.35 * peak_profit)
+                    - 1e-9
+                ):
                     lock = {
                         "state": State.DAILY_RISK_LOCK,
                         "until": self._tomorrow(now),
@@ -93,11 +105,13 @@ class RiskEngine:
                 self.store.audit("risk_lock", lock, conn)
             self.store.put(
                 "risk_multiplier",
-                0.5 if peak_profit >= a["day_equity"] * 0.0075 - 1e-9 else 1.0,
+                0.5 if peak_profit >= protected_profit - 1e-9 else 1.0,
                 conn,
             )
             self.store.put(
-                "profit_entry_lock", peak_profit >= a["day_equity"] * 0.0125 - 1e-9, conn
+                "profit_entry_lock",
+                peak_profit >= a["day_equity"] * 0.0125 * self.profit_guard_scale - 1e-9,
+                conn,
             )
             return dict(a)
 

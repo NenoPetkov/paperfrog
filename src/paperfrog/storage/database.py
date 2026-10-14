@@ -59,6 +59,34 @@ class Store:
         value = conn.execute(text("SELECT value FROM kv WHERE key=:k"), {"k": key}).scalar()
         return json.loads(value) if value is not None else default
 
+    def paper_summary(self) -> dict[str, Any]:
+        """Read current account/protection without decoding terminal order/funding history."""
+        with self.engine.connect() as conn:
+            value = conn.execute(
+                text(
+                    "SELECT json_extract(value,'$.cash','$.positions','$.average','$.stops') "
+                    "FROM kv WHERE key='paper_account'"
+                )
+            ).scalar()
+        if value is None:
+            raise SafeError("paper account unavailable")
+        fields = json.loads(value)
+        if not isinstance(fields, list) or len(fields) != 4 or any(v is None for v in fields):
+            raise SafeError("paper account summary incomplete")
+        return dict(zip(("cash", "positions", "average", "stops"), fields, strict=True))
+
+    def unresolved_orders(self) -> list[dict[str, Any]]:
+        """Never let a large terminal history hide an older unresolved order."""
+        with self.engine.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    text(
+                        "SELECT * FROM orders WHERE state IN ('INTENDED','UNKNOWN') ORDER BY rowid DESC"
+                    )
+                ).mappings()
+            ]
+
     def put(self, key: str, value: Any, conn: Connection | None = None) -> None:
         if conn is None:
             with self.engine.begin() as connection:

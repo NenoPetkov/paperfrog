@@ -43,13 +43,11 @@ class PaperBroker:
 
     async def positions(self) -> dict[str, Decimal]:
         return {
-            k: Decimal(v)
-            for k, v in self.store.get("paper_account")["positions"].items()
-            if Decimal(v)
+            k: Decimal(v) for k, v in self.store.paper_summary()["positions"].items() if Decimal(v)
         }
 
     def equity(self) -> Decimal:
-        a = self.store.get("paper_account")
+        a = self.store.paper_summary()
         value = Decimal(a["cash"])
         for symbol, quantity in a["positions"].items():
             if Decimal(quantity):
@@ -66,7 +64,7 @@ class PaperBroker:
         self.clock_ms = max(self.clock_ms, q.timestamp_ms)
         self.quotes[q.symbol] = q
         triggered = []
-        a = self.store.get("paper_account")
+        a = self.store.paper_summary()
         for key, stop in list(a["stops"].items()):
             if stop["symbol"] != q.symbol:
                 continue

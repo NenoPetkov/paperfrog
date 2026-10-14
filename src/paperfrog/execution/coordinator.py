@@ -108,8 +108,41 @@ class Coordinator:
         now: datetime,
         stop_fraction: float,
     ) -> list[Fill]:
+        return await self._enter(proposal, orders, health, now, stop_fraction)
+
+    async def enter_single_paper(
+        self,
+        proposal: Proposal,
+        order: Order,
+        health: Health,
+        now: datetime,
+        stop_fraction: float,
+    ) -> list[Fill]:
+        """Isolated directional research. Exchange brokers cannot use this entry point."""
+        from paperfrog.paper.broker import PaperBroker
+
+        if self.risk.s.trading_mode != "paper" or not isinstance(self.broker, PaperBroker):
+            raise SafeError("single-leg experiment is PAPER-only")
+        return await self._enter(proposal, [order], health, now, stop_fraction, single_paper=True)
+
+    async def _enter(
+        self,
+        proposal: Proposal,
+        orders: list[Order],
+        health: Health,
+        now: datetime,
+        stop_fraction: float,
+        single_paper: bool = False,
+    ) -> list[Fill]:
         async with self._mutex:
-            if len(orders) < 2 or any(o.reduce_only for o in orders):
+            if single_paper:
+                from paperfrog.paper.broker import PaperBroker
+
+                if self.risk.s.trading_mode != "paper" or not isinstance(self.broker, PaperBroker):
+                    raise SafeError("single-leg experiment is PAPER-only")
+            if (len(orders) != 1 if single_paper else len(orders) < 2) or any(
+                o.reduce_only for o in orders
+            ):
                 raise SafeError("paired entry requires target and hedge")
             if (
                 len({o.symbol for o in orders}) != len(orders)
@@ -223,9 +256,7 @@ class Coordinator:
             k: Decimal(v) for k, v in self.store.get("expected_positions", {}).items() if Decimal(v)
         }
         consistent = True
-        unresolved = [
-            o for o in self.store.rows("orders", 100000) if o["state"] in {"INTENDED", "UNKNOWN"}
-        ]
+        unresolved = self.store.unresolved_orders()
         for row in unresolved:
             try:
                 await self.submit_once(Order.model_validate_json(row["intent"]))
@@ -255,11 +286,7 @@ class Coordinator:
             await self.broker.cancel_entries()
             # Resolve all ambiguous submissions first. Unknown external positions may be reduced
             # after an authoritative position snapshot, but never adopted for new entries.
-            unresolved = [
-                o
-                for o in self.store.rows("orders", 100000)
-                if o["state"] in {"INTENDED", "UNKNOWN"}
-            ]
+            unresolved = self.store.unresolved_orders()
             for row in unresolved:
                 await self.submit_once(Order.model_validate_json(row["intent"]))
             positions = await self.broker.positions()

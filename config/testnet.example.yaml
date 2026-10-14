@@ -1,3 +1,4 @@
+strategy_profile: legacy
 trading_mode: testnet
 binance_env: testnet
 state_dir: state/testnet

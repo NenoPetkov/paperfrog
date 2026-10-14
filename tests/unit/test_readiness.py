@@ -47,6 +47,7 @@ def test_arming_is_bound_and_expires(tmp_path):
     s = Settings(
         _env_file=None,
         trading_mode="live",
+        strategy_profile="legacy",
         binance_env="live",
         live_trading_enabled=True,
         i_understand_live_risk="YES",

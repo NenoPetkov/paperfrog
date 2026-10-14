@@ -185,7 +185,6 @@ class Telegram:
         now = time.monotonic()
         if now - self.last_alert.get(key, -1000) < 60:
             return
-        self.last_alert[key] = now
         for chat in self.s.telegram_allowed_chat_ids:
             await self.call(
                 "sendMessage",
@@ -194,3 +193,4 @@ class Telegram:
                     "text": f"[{severity}] paperfrog {self.s.trading_mode}\n{text}"[:4000],
                 },
             )
+        self.last_alert[key] = now

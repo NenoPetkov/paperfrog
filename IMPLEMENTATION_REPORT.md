@@ -64,3 +64,190 @@ Tests: `uv run pytest`; lint: `uv run ruff check .`; formatting: `uv run ruff fo
 Telegram: create a bot with official BotFather, set its token locally, discover numeric private-chat IDs with `scripts/telegram_ids.py`, then configure both JSON allowlists. OpenAI uses `gpt-6-luna` for candidate-specific factual checks and `gpt-6.1-sol` for specified escalations. Neither can trade.
 
 See [README.md](README.md) for complete research, promotion, readiness, testnet, local arming and Docker commands. [docs/API_VERIFICATION.md](docs/API_VERIFICATION.md) links the official references and documents the Algo-stop and routed-WebSocket adaptations.
+
+## Simple profile added on 2026-10-14
+
+The default flow is now a separate directional PAPER scanner and shared historical/forward engine. It scans up to 100 current liquid crypto futures, selects up to two from past candle liquidity/volatility/trend, trades confirmed breakouts long or short, monitors volatility stops/trailing/reversal/time/risk exits, and queues Telegram entry/close reasons. It has its own state and data directories. The losing standalone candle experiment was removed; its old research reports remain.
+
+The new strategy is frozen deterministic research, not a trained or self-modifying AI. Its single-leg coordinator path accepts only the PAPER broker. Neither changing environment flags nor a legacy model/arm can enable its exchange execution. Profitability, genuine point-in-time universe reconstruction and real-money execution approval remain absent. It has not completed the required PAPER/testnet operating history. Historical simulations use explicitly assumed spreads/depth and fractional filters.
+
+## Retained legacy operator reference
+
+Set `STRATEGY_PROFILE=legacy` explicitly when using the following earlier strategy commands. The reference describes the old hedged model pipeline, not the current simple strategy.
+
+## Legacy paper mode
+
+```bash
+uv run paperfrog run paper
+```
+
+The legacy profile (`STRATEGY_PROFILE=legacy`) uses production **public** futures and spot data, and never sends exchange orders. An empty installation collects observations and remains paused without a promoted model and point-in-time universe. It does not fabricate signals to fill a quota. Use `/resume` after all prerequisites are met. Existing exits and monitoring continue during `/stop` and risk locks. Startup with positions always reconciles and remains paused.
+
+For shorter PAPER research, set `MIN_HISTORY_DAYS=90` in `.env` and restart the service.
+The default remains 180 days; testnet and live reject values below 180. A universe
+created using a shorter requirement cannot satisfy a later higher requirement through
+the seven-day cache. This setting only changes universe eligibility: complete quote/OI
+coverage, feature windows, model training history, promotion and entry gates still apply.
+
+To inspect startup once rather than launch the service:
+
+```bash
+uv run paperfrog run paper --once
+```
+
+A self-contained synthetic execution demonstration:
+
+```bash
+uv run python scripts/demo_replay.py
+```
+
+This fixture deliberately constructs an episode to exercise execution, costs, exits, and reports. **Its PnL is not research evidence.**
+
+## Legacy collection and research
+
+Examples below use real UTC ranges; adjust them to your required window. These are public API requests, not orders.
+
+```bash
+uv run paperfrog data backfill SOLUSDT 2026-08-01 2026-09-01 --interval 15m
+uv run paperfrog data backfill SOLUSDT 2026-08-01 2026-09-01 --interval 1m
+uv run paperfrog data collect
+# Optional independent raw market stream recorder:
+uv run paperfrog data collect --streams
+uv run paperfrog data coverage SOLUSDT
+uv run paperfrog data backfill-oi SOLUSDT 2026-08-01 2026-09-01
+uv run paperfrog data assess 2026-08-01 2026-09-01 --output reports/data-readiness.json
+uv run paperfrog data validate data/input-bars.parquet --interval-ms 900000
+uv run paperfrog universe build data/universe-inputs.json 2026-09-01T00:00:00Z
+uv run paperfrog features build SOLUSDT
+```
+
+Repeat backfills for BTCUSDT, ETHUSDT, and approved targets. Raw immutable batches are partitioned by kind/symbol/UTC date and queried through DuckDB. Spot and futures book observations are required for actual midpoint basis. Candle closes do not silently substitute for bid/ask midpoint history. Binance REST OI history is limited; it cannot supply an arbitrary 18-month OI archive. Existing valid archives or sustained forward collection are necessary. Missing core coverage blocks feature/model use. See [docs/DATA_CONTRACTS.md](docs/DATA_CONTRACTS.md).
+
+`data backfill-oi` uses Binance's free daily USD-M metrics archives in PAPER mode,
+verifies each ZIP against its published SHA-256 checksum, and retains positive finite
+OI observations. Missing archives, rejected days and invalid observation counts are
+reported; gaps are never filled with invented values. These production archives cannot
+be imported into a demo data lake. Forward snapshot collection also retains separately
+timestamped OI observations. The REST history limit does not apply to these archives.
+`data assess` measures actual timestamps against the requested 15-minute grid and
+checks backward OI/funding/quote availability. Exit 2 means incomplete coverage. A complete
+raw coverage report does not replace feature, universe, model or live-readiness review.
+
+The service refreshes recent closed bars/features in a separate research task. Risk monitoring runs independently of that task and LLM requests. Universe construction consumes a dated input manifest containing historical metadata and trailing liquidity measurements; selection is frozen for seven days. Rebuild using contemporaneous evidence, never current rankings applied retrospectively.
+
+```bash
+# A validated panel joins features, actual funding settlements, and PIT universe membership.
+uv run paperfrog model panel data/universe-history.json data/panel.parquet
+uv run paperfrog model dataset data/panel.parquet artifacts/dataset-001
+uv run paperfrog model train artifacts/dataset-001/episodes.parquet 2026-09-01 candidate-001
+uv run paperfrog model walk-forward artifacts/dataset-001/episodes.parquet artifacts/walkforward-001
+uv run paperfrog model evaluate artifacts/walkforward-001/out_of_sample.parquet
+# Join OOS predictions back to the panel by timestamp and symbol before ML replay.
+uv run paperfrog backtest run data/oos-panel.parquet data/filters.json reports/replay-001 --stresses
+uv run paperfrog backtest run data/panel.parquet data/filters.json reports/rules-001 --strategy rules
+uv run paperfrog backtest run data/panel.parquet data/filters.json reports/cash-001 --strategy cash
+```
+
+Models use up to 6/12/18-month training windows where enough history exists, two validation months, one test month, four-hour purging, and embargoes. Validation is split again for early stopping and Platt calibration. JSON XGBoost models and numeric preprocessing avoid loading pickle code. Promotion requires a local review record, and invalidates a prior live arm:
+
+`model panel` consumes an array of retained dated universe snapshots (the complete
+`universe build` outputs, including input evidence). It refuses missing/future membership
+evidence, overlapping snapshots and unusable target features. Current membership is
+never applied to older rows. The feature files for all configured symbols, including
+BTC/ETH hedges, must already be prepared. Universe history and promotion review cannot
+be generated by marking incomplete historical coverage healthy.
+
+```bash
+uv run paperfrog model promote candidate-001 reports/shadow-review.json --confirm "PROMOTE MODEL"
+uv run paperfrog report readiness
+# Once genuine, reviewed research/operational evidence exists:
+uv run paperfrog report readiness --evidence reports/evidence.json
+```
+
+Readiness exits **2** when evidence is missing or fails. An operator-authored review/evidence file is a trusted local attestation, not an automatically proven fact. See [LIVE_READINESS.md](LIVE_READINESS.md). Never copy synthetic fixture metrics into it.
+
+## Binance testnet
+
+Create demo/testnet credentials in the official [Binance Demo Trading environment](https://demo.binance.com/). Use a dedicated account and separate keys from live. The adapter uses the documented `https://demo-fapi.binance.com` endpoint. Configure one-way mode, single-asset USDT, isolated margin, and 2x leverage on the exact symbols. The explicit configuration command refuses an account with positions or orders:
+
+```bash
+# Put testnet credentials in the local .env, never in command arguments.
+TRADING_MODE=testnet BINANCE_ENV=testnet uv run paperfrog --config config/testnet.example.yaml account configure --confirm "CONFIGURE FLAT ACCOUNT"
+TRADING_MODE=testnet BINANCE_ENV=testnet uv run paperfrog --config config/testnet.example.yaml run testnet
+# Explicit read-only credentialed smoke test:
+PAPERFROG_TESTNET_SMOKE=1 TRADING_MODE=testnet BINANCE_ENV=testnet uv run pytest -m testnet
+```
+
+Paper, testnet and live example configurations use separate state/data paths. A data lake is bound to its originating futures API environment. Testnet prices are not evidence of a real-market edge. Testnet operation remains paused until model, data, universe, reconciliation, and risk conditions permit resumption.
+
+## Telegram
+
+1. Open the official verified `@BotFather`, send `/newbot`, and choose a display name such as **paperfrog** and an available bot username.
+2. Put the resulting token in `TELEGRAM_BOT_TOKEN` in `.env`.
+3. Stop other pollers. Send a private message to your bot, then obtain **only your numeric IDs** locally:
+
+```bash
+# Export the token securely into your shell environment first.
+uv run python scripts/telegram_ids.py
+```
+
+4. Set `TELEGRAM_ALLOWED_USER_IDS=[your_user_id]` and `TELEGRAM_ALLOWED_CHAT_IDS=[your_chat_id]`. Both must match. Restart paperfrog.
+
+Use `/help`, `/status`, `/positions`, `/orders`, `/risk`, `/last_signal`, `/daily`, `/health`, `/version`. `/stop` and `/pause` stop new entries. `/resume` and `/start_trading` can resume only the already configured mode with all gates satisfied. `/lock` creates a manual pause. `/flatten` returns a random code; submit `/confirm_flatten CODE` within 60 seconds in the same allowed chat as the same user. Codes are single-use and are not audited in plaintext.
+
+Telegram cannot arm live mode, change leverage, raise risk, promote a model, override a hard lock, or terminate the process. Edited, forwarded, old and unapproved group commands are rejected. Poll offsets and deduplication survive restart.
+
+## OpenAI event risk
+
+`OPENAI_PRIMARY_MODEL=gpt-6-luna` and `OPENAI_ESCALATION_MODEL=gpt-6.1-sol` are configurable. The Responses API uses `web_search` and a strict Pydantic Structured Output schema. Escalation is limited to low confidence, conflicting/unknown reports, severe/security events, or an extreme move. Results are cached approximately 25 minutes; material vetoes persist six hours. No model substitution occurs when a configured model is unavailable.
+
+Only public asset identifiers and an observation time leave the application. No balances, credentials, order IDs, private positions, or trading functions are sent to OpenAI. Deterministic Python applies a veto or size reduction; an LLM cannot improve a failed quantitative signal. The default unavailable policy blocks entries. Optional non-extreme fallback is capped at half size. Historical news is never invented.
+
+## Live arming
+
+Live is disabled by default and must remain blocked until research, operational, and implementation review gates are genuinely satisfied. The live example intentionally does not start without explicit local environment settings:
+
+```bash
+export BINANCE_ENV=live TRADING_MODE=live LIVE_TRADING_ENABLED=true I_UNDERSTAND_LIVE_RISK=YES
+uv run paperfrog --config config/live.example.yaml live arm --confirm "ARM LIVE TRADING"
+uv run paperfrog --config config/live.example.yaml run live
+uv run paperfrog --config config/live.example.yaml live disarm
+```
+
+Arming checks a matching recent readiness report, approved model, risk settings, reconciliation, configuration/model hashes and account-key identity binding. It expires after four hours by default. No arm was created during repository implementation. A dedicated account/subaccount, futures permission only, disabled withdrawals, IP allowlisting and very small initial capital are required operator practices. The USD-M account API does not itself prove API-key withdrawal permission; verify it in Binance API management.
+
+## Docker and operations
+
+Docker/Compose configuration is supplied; Docker is not available in the implementation environment, so the image has not been built here.
+
+```bash
+mkdir -p state data artifacts reports logs
+sudo chown -R 10001:10001 state data reports logs
+# Ensure artifacts are readable by UID 10001; never place secrets there.
+docker compose up -d --build
+docker compose logs --tail=100 -f
+# Health binds to loopback INSIDE the container; there is no published port.
+docker compose exec paperfrog python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())"
+```
+
+For a local process, visit `http://127.0.0.1:8080/health` or `/ready` (503 unless entry-ready). SIGTERM pauses entries and retains hosted protection. Docker restarts the service; an OS advisory lock prevents two execution processes sharing state. Do not copy a running SQLite database without its WAL; use SQLite online backup.
+
+```bash
+uv run paperfrog risk status
+# Queue a reduction request to the currently running owning service:
+uv run paperfrog emergency flatten --confirm "FLATTEN ALL POSITIONS"
+# Verify completion via /positions, /orders and the audit ledger.
+uv run paperfrog account reconcile --help
+```
+
+A queued local flatten is not confirmation of closure. If the service is down, use Binance's own interface for emergency closure and then restart/reconcile. Never blindly retry an unknown exchange result. HTTP 503/timeouts can mean an order executed: the ledger queries the existing client ID and locks entries rather than creating another order.
+
+The strategy may lose money. Leverage does not create an edge; past performance does not establish future performance. Gaps and outages may defeat intended stops. Event classification may be wrong. Jurisdiction, tax, and exchange eligibility remain the operator's responsibility.
+
+## Reversal follow-up completed on 2026-10-14
+
+Two fixed candidates were implemented and tested against the same retained inputs: opposite breakout signals and confirmed failed breakouts. The original 30-day baseline was reproduced before comparison. Reversed signals returned -2.40% over the recent 97-coin month and -5.89% over the two-year three-coin pool. Confirmed failed breakouts returned -0.57% and -5.66%, respectively. Both remained negative with doubled costs and delayed entries; neither qualified. Cash returned 0%. These are exploratory tests of already-viewed history, not independent out-of-sample profitability evidence.
+
+165 software tests passed and one optional credentialed testnet test was skipped; Ruff and strict mypy checks passed. Software checks do not establish profitability. New PAPER entries are manually paused while collection/monitoring continue; existing positions are flat. Risk anchors/counters/locks are preserved. No real-money start or live arming occurred. New strategy modes were not activated in the running process. The user intends to explain the goal in a new conversation.
+
+Retained results: `reports/simple-reversal-study-v1/summary.json` and `comparison.csv`. Handoff: `reports/reversal-handoff.json`.

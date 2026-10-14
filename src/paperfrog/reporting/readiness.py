@@ -52,6 +52,7 @@ def readiness(evidence: dict[str, Any], config_hash: str, model_hash: str) -> di
             value is True
             if op == "true"
             else valid
+            and isinstance(value, (int, float))
             and (
                 value >= limit if op == "min" else value <= limit if op == "max" else value > limit
             )
@@ -124,6 +125,8 @@ def check_report(s: Settings, model_hash: str) -> dict[str, Any]:
 
 
 def arm(s: Settings, model_hash: str, confirmation: str) -> None:
+    if s.strategy_profile != "legacy":
+        raise SafeError("simple strategy has no exchange execution approval")
     if s.trading_mode != "live" or confirmation != "ARM LIVE TRADING":
         raise SafeError("local live arming requirements not satisfied")
     report = check_report(s, model_hash)
@@ -144,6 +147,8 @@ def arm(s: Settings, model_hash: str, confirmation: str) -> None:
 def verify_arm(s: Settings, model_hash: str) -> bool:
     if s.trading_mode != "live":
         return False
+    if s.strategy_profile != "legacy":
+        raise SafeError("simple strategy has no exchange execution approval")
     report = check_report(s, model_hash)
     path = s.state_dir / "live-arm.json"
     if not path.exists() or path.stat().st_mode & 0o077:

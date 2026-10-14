@@ -26,7 +26,7 @@ from paperfrog.storage.database import Store
 app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
-    help="paperfrog — funding feedback breakdown research and guarded execution.",
+    help="paperfrog — rank futures coins, explain trades and monitor risk.",
 )
 (
     config_app,
@@ -76,8 +76,12 @@ for name, sub in zip(
     ),
     strict=True,
 ):
-    app.add_typer(sub, name=name)
+    app.add_typer(
+        sub, name=name, hidden=name in {"data", "universe", "features", "model", "backtest"}
+    )
 config_path: Path | None = None
+simple_app = typer.Typer(no_args_is_help=True, help="Simple directional futures PAPER workflow")
+app.add_typer(simple_app, name="simple")
 
 
 @app.callback()
@@ -103,6 +107,11 @@ def settings() -> Settings:
 
 def emit(value: object) -> None:
     typer.echo(json.dumps(value, indent=2, default=str, allow_nan=False))
+
+
+def operating_store(s: Settings) -> Store:
+    directory = s.state_dir / "simple" if s.strategy_profile == "simple" else s.state_dir
+    return Store(directory / "paperfrog.sqlite")
 
 
 def execute(awaitable: object) -> object:
@@ -393,29 +402,93 @@ def report_readiness(evidence: Path | None = None) -> None:
         raise typer.Exit(2)
 
 
-@backtest_app.command("candle")
-def backtest_candle(start: str, end: str, output: Path, symbol: str = "SOLUSDT") -> None:
-    """Evaluate separate PAPER-only fixed candle/OI rules versus cash and cost stresses."""
-    from paperfrog.backtest.candle import evaluate_candles
-    from paperfrog.strategy.candle import load_candles
+@simple_app.command("collect")
+def simple_collect(days: int = 30) -> None:
+    """Scan current liquid contracts and download futures candles/funding for research."""
+    from paperfrog.simple.data import collect, scan
+    from paperfrog.simple.strategy import BAR_MS, WARMUP, require_paper
 
     s = settings()
-    frame = load_candles(s, symbol, milliseconds(start), milliseconds(end))
-    result = evaluate_candles(frame, s, symbol, output)
+    require_paper(s)
+    if not 3 <= days <= 180:
+        raise typer.BadParameter("choose 3 to 180 days")
+
+    async def work() -> None:
+        adapter = BinanceAdapter(s)
+        try:
+            await adapter.sync_time()
+            snapshot = await scan(adapter, s)
+            lake = Lake(s.data_dir / "simple")
+            end_ms = int(datetime.now(UTC).timestamp() * 1000) // BAR_MS * BAR_MS
+            result = await collect(
+                adapter, lake, snapshot, end_ms - days * 86400000 - WARMUP * BAR_MS, end_ms
+            )
+            snapshot["collection"] = result
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            path = lake.root / f"pool-{stamp}.json"
+            path.write_text(json.dumps(snapshot, indent=2) + "\n")
+            usable = [
+                symbol for symbol, result in result["results"].items() if "error" not in result
+            ]
+            emit(
+                {
+                    "snapshot": str(path),
+                    "usable_symbols": usable,
+                    "requested_symbols": len(snapshot["symbols"]),
+                    "start_ms": end_ms - days * 86400000,
+                    "end_ms": end_ms,
+                    "live_permitted": False,
+                }
+            )
+        finally:
+            await adapter.close()
+
+    execute(work())
+
+
+@simple_app.command("backtest")
+def simple_backtest(
+    start: str,
+    end: str,
+    output: Path,
+    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT",
+    lake: Path = Path("data"),
+    mode: str | None = None,
+) -> None:
+    """Replay the same directional PAPER strategy with cash, doubled costs and delay."""
+    from paperfrog.simple.backtest import evaluate, load_history
+    from paperfrog.simple.strategy import require_paper
+
+    s = settings()
+    require_paper(s)
+    if mode is not None:
+        if mode not in {"trend", "reverse", "failed_breakout"}:
+            raise typer.BadParameter("mode must be trend, reverse or failed_breakout")
+        s = s.model_copy(update={"simple_entry_mode": mode})
+    begin, finish = milliseconds(start), milliseconds(end)
+    if begin >= finish or begin % 900000 or finish % 900000:
+        raise typer.BadParameter("use aligned UTC 15-minute boundaries")
+    chosen = list(dict.fromkeys(symbols.split(",")))
+    frames, funding = load_history(Lake(lake), chosen, begin, finish)
+    result = execute(evaluate(frames, funding, s, begin, finish, output))
+    emit({"report": str(output / "evaluation.json"), **result})
+
+
+@simple_app.command("status")
+def simple_status() -> None:
+    s = settings()
+    store = Store(s.state_dir / "simple" / "paperfrog.sqlite")
     emit(
         {
-            "report": str(output / "evaluation.json"),
+            "mode": "paper",
+            "entry_mode": store.get("simple_entry_mode", "trend"),
+            "state": store.get("state"),
+            "pool_count": len(store.get("simple_pool", [])),
+            "selected": store.get("simple_selected", []),
+            "positions": store.get("simple_positions", {}),
+            "anchors": store.get("anchors"),
+            "risk_lock": store.get("risk_lock"),
             "live_permitted": False,
-            "evaluations": {
-                period: {
-                    case: {
-                        k: value.get(k)
-                        for k in ("net_return", "trades", "max_drawdown", "profit_factor")
-                    }
-                    for case, value in cases.items()
-                }
-                for period, cases in result["evaluations"].items()
-            },
         }
     )
 
@@ -424,7 +497,14 @@ def run_mode(mode: str, once: bool) -> None:
     s = settings()
     if s.trading_mode != mode:
         raise typer.BadParameter("command mode must match TRADING_MODE/YAML")
-    execute(Service(s).run(once))
+    if s.strategy_profile == "simple":
+        from paperfrog.simple.service import SimpleService
+        from paperfrog.simple.strategy import require_paper
+
+        require_paper(s)
+        execute(SimpleService(s).run(once))
+    else:
+        execute(Service(s).run(once))
 
 
 @run_app.command("paper")
@@ -445,6 +525,10 @@ def run_live(once: bool = False) -> None:
 @live_app.command("arm")
 def live_arm(confirm: Annotated[str, typer.Option()]) -> None:
     s = settings()
+    if s.strategy_profile != "legacy":
+        raise typer.BadParameter(
+            "simple strategy is PAPER-only pending separate research and execution approval"
+        )
     service = Service(s)
     service.load_model()
 
@@ -473,7 +557,7 @@ def live_disarm() -> None:
 @risk_app.command("status")
 def risk_status() -> None:
     s = settings()
-    store = Store(s.state_dir / "paperfrog.sqlite")
+    store = operating_store(s)
     emit(
         {
             "anchors": store.get("anchors"),
@@ -488,7 +572,7 @@ def risk_review_unlock(confirm: Annotated[str, typer.Option()]) -> None:
     if confirm != "REVIEW RISK LOCK":
         raise typer.BadParameter("local review confirmation required")
     s = settings()
-    store = Store(s.state_dir / "paperfrog.sqlite")
+    store = operating_store(s)
     # Never reset equity anchors. An unresolved drawdown re-locks at the next monitor tick.
     store.audit("local_risk_review", {"previous": store.get("risk_lock")})
     store.put("risk_lock", None)
@@ -500,7 +584,7 @@ def risk_review_unlock(confirm: Annotated[str, typer.Option()]) -> None:
 @account_app.command("reconcile")
 def account_reconcile() -> None:
     s = settings()
-    execute(Service(s).run(once=True))
+    run_mode(s.trading_mode, once=True)
 
 
 @account_app.command("configure")
@@ -527,7 +611,7 @@ def emergency_flatten(confirm: Annotated[str, typer.Option()]) -> None:
         raise typer.BadParameter('use --confirm "FLATTEN ALL POSITIONS"')
     s = settings()
     # Queue the request to the single owning service to prevent two execution processes.
-    store = Store(s.state_dir / "paperfrog.sqlite")
+    store = operating_store(s)
     operation = "local-" + os.urandom(12).hex()
     store.put("local_flatten_request", operation)
     emit(
