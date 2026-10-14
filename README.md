@@ -63,10 +63,17 @@ triggered by individual losses, and no promised profitability.
 The optional `active` profile uses a two-hour closed-candle breakout, minimum EMA
 separation of 0.4 ATR (standard: 0.5), and minimum directional flow of 0.03
 (standard: 0.05). It requires `SIMPLE_ENTRY_MODE=trend`. Both profiles use the same
-15-minute signals, five-second monitoring, two selected coins, two-position ceiling,
+15-minute signals, five-second monitoring, configurable watchlist, two-position ceiling,
 position sizing, 2x leverage, stops, exposure caps, entry caps and loss locks.
 Active can produce more eligible setups; additional trades and profitability are
 not guaranteed. Higher turnover can increase fees and losses.
+
+`SIMPLE_SELECTED_COUNT` controls the watchlist independently of the position limit.
+It defaults to 2 and accepts 1–10. Set it to 10 to evaluate up to ten eligible coins
+from the scanned pool each cycle. Fewer may qualify for the watchlist. The maximum
+remains two concurrent positions, subject to the same sizing, exposure, cooldown,
+entry-count and loss limits. A running process keeps its loaded settings; changing
+this value requires a restart and, for LIVE, renewed local authorization.
 
 The profile is shown by `/status`, `/simple` and `simple status`, and PAPER backtests
 use its matching indicator and execution rules. Switch only while flat: changing

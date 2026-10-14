@@ -8,6 +8,7 @@ from pandas.testing import assert_frame_equal
 from pydantic import ValidationError
 
 from paperfrog.domain.types import Quote, SafeError, State
+from paperfrog.settings import Settings
 from paperfrog.simple.backtest import replay
 from paperfrog.simple.data import funding, normalize
 from paperfrog.simple.engine import Engine
@@ -68,6 +69,18 @@ def quote(symbol="SOLUSDT", price=100, now_ms=200 * BAR_MS):
         Decimal(str(price)),
         now_ms,
     )
+
+
+def test_ten_coin_watchlist_preserves_eligibility_and_position_cap(settings):
+    s = Settings(_env_file=None, **{**settings.public(), "simple_selected_count": 10})
+    rows = {f"COIN{i:03}USDT": {**row(), "score": float(i)} for i in range(100)}
+    rows["COIN099USDT"]["daily_volume"] = 1
+    rows["COIN098USDT"]["atr_fraction"] = float("nan")
+    assert choose(rows, s) == [f"COIN{i:03}USDT" for i in range(97, 87, -1)]
+    assert len(choose(rows, settings)) == 2
+    assert s.max_concurrent_strategy_trades == 2
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{**settings.public(), "simple_selected_count": 11})
 
 
 async def engine_fixture(settings, store, filters):

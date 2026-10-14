@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     health_port: int = Field(8080, ge=1024, le=65535)
     symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT")
     simple_scan_limit: int = Field(100, ge=2, le=100)
-    simple_selected_count: int = Field(2, ge=1, le=2)
+    simple_selected_count: int = Field(2, ge=1, le=10)
     simple_poll_seconds: int = Field(5, ge=2, le=30)
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active"] = "standard"

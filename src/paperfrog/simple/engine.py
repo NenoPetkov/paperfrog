@@ -137,8 +137,13 @@ class Engine:
                     journal.get("execution_complete") is not True
                     or len(journal.get("fills", [])) != 1
                 ):
-                    raise SafeError("incomplete execution journal; account remains paused")
+                    raise SafeError(
+                        f"incomplete execution journal for {symbol}; verify original order "
+                        "and hosted protection before recovery; account remains paused"
+                    )
                 fill = Fill.model_validate(journal["fills"][0])
+                if fill.quantity <= 0 or fill.price <= 0:
+                    raise SafeError("invalid journaled entry fill; account remains paused")
                 self.record_entry(symbol, fill, intent)
             for symbol, closing in self.store.get("simple_closing", {}).items():
                 if symbol not in self.positions():

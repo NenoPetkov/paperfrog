@@ -335,6 +335,75 @@ async def test_unknown_entry_response_queries_without_resubmission(settings, sto
     await adapter.close()
 
 
+@pytest.mark.parametrize("source", ["cumQuote", "query", "unavailable"])
+async def test_zero_execution_price_uses_confirmed_data_without_resubmission(
+    settings, store, filters, source
+):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+
+    def handle(request):
+        response = sim.handle(request)
+        if request.url.path.endswith("/order"):
+            result = response.json()
+            if request.method == "POST" or source == "unavailable":
+                if source == "cumQuote":
+                    result["cumQuote"] = str(
+                        Decimal(result["executedQty"]) * Decimal(result["avgPrice"])
+                    )
+                result["avgPrice"] = "0"
+                return httpx.Response(200, json=result)
+        return response
+
+    await adapter.client.aclose()
+    adapter.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    if source == "unavailable":
+        with pytest.raises(UnknownOrder, match="execution price unavailable"):
+            await engine.enter("SOLUSDT", row, now)
+        assert store.get("state") == State.ERROR_SAFE
+        assert not store.get("reconciled")
+        assert store.get("simple_pending")
+        assert not engine.positions()
+        assert not sim.stops
+        assert len(store.unresolved_orders()) == 1
+        assert not store.rows("fills")
+        assert not await engine.coordinator.reconcile()
+    else:
+        await engine.enter("SOLUSDT", row, now)
+        assert engine.positions()["SOLUSDT"]["entry_price"] > 0
+        assert len(sim.stops) == 1
+        assert Decimal(next(iter(sim.stops.values()))["triggerPrice"]) > 0
+        assert not store.unresolved_orders()
+    assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 1
+    if source == "query":
+        assert sum(method == "GET" and path.endswith("/order") for method, path in sim.calls) == 1
+    await adapter.close()
+
+
+@pytest.mark.parametrize("price", ["NaN", "Infinity", "-1", "invalid", None])
+async def test_invalid_execution_price_fails_with_safe_error(settings, price):
+    adapter = BinanceAdapter(settings)
+    with pytest.raises(UnknownOrder, match="invalid execution pricing"):
+        adapter._fill({"executedQty": "1", "avgPrice": price})
+    await adapter.close()
+
+
+async def test_zero_quantity_expiry_does_not_require_execution_price(settings):
+    adapter = BinanceAdapter(settings)
+    fill = adapter._fill(
+        {
+            "clientOrderId": "unfilled",
+            "symbol": "SOLUSDT",
+            "side": "BUY",
+            "executedQty": "0",
+            "avgPrice": "0",
+            "status": "EXPIRED",
+            "orderId": 1,
+        }
+    )
+    assert fill.quantity == 0 and fill.price == 0 and fill.fee == 0
+    await adapter.close()
+
+
 @pytest.mark.parametrize("failure", ["partial", "reject_stop", "unknown_stop"])
 async def test_partial_entry_and_protection_failure_unwind(settings, store, filters, failure):
     engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
@@ -395,6 +464,32 @@ async def test_completed_entry_journal_recovers_without_another_order(settings, 
     assert not store.get("simple_pending")
     assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 1
     assert len(sim.stops) == 1
+    await adapter.close()
+
+
+@pytest.mark.parametrize("complete", [False, True])
+async def test_restart_does_not_adopt_zero_price_journal(settings, store, filters, complete):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    await engine.enter("SOLUSDT", row, now)
+    trade = engine.positions()["SOLUSDT"]
+    store.put(
+        "simple_pending",
+        {"SOLUSDT": {"id": trade["id"], "side": 1, "opened_ms": now, "stop_fraction": 0.016}},
+    )
+    store.put("simple_positions", {})
+    journal = store.get("trade:" + trade["id"])
+    journal["execution_complete"] = complete
+    journal["fills"][0]["price"] = "0"
+    store.put("trade:" + trade["id"], journal)
+    store.put("state", State.PAUSED)
+    calls_before = list(sim.calls)
+    restored = Engine(engine.s, store, filters, broker=engine.broker)
+    with pytest.raises(SafeError, match="account remains paused"):
+        await restored.restore()
+    assert not restored.positions()
+    assert store.get("simple_pending")
+    assert store.get("state") == State.PAUSED
+    assert sim.calls == calls_before
     await adapter.close()
 
 

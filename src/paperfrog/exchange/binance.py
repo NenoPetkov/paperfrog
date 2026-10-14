@@ -7,7 +7,7 @@ import json
 import random
 import time
 from collections.abc import AsyncIterator
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlencode
 
@@ -157,10 +157,26 @@ class BinanceAdapter:
             },
             signed=True,
         )
-        return self._fill(result)
+        try:
+            return self._fill(result)
+        except UnknownOrder:
+            # A successful submission can still lack execution pricing. Query its
+            # original identity; never repeat the mutating request.
+            return await self.query(order.symbol, order.client_id)
 
     def _fill(self, result: dict[str, Any]) -> Fill:
-        quantity, price = Decimal(result["executedQty"]), Decimal(result.get("avgPrice", "0"))
+        try:
+            quantity = Decimal(result["executedQty"])
+            price = Decimal(result.get("avgPrice", "0"))
+            if not quantity.is_finite() or quantity < 0 or not price.is_finite() or price < 0:
+                raise UnknownOrder("invalid execution pricing; reconcile original order")
+            if quantity > 0 and price == 0:
+                quote = Decimal(result.get("cumQuote", "0"))
+                if not quote.is_finite() or quote <= 0:
+                    raise UnknownOrder("execution price unavailable; reconcile original order")
+                price = quote / quantity
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            raise UnknownOrder("invalid execution pricing; reconcile original order") from None
         return Fill(
             client_id=result["clientOrderId"],
             symbol=result["symbol"],
