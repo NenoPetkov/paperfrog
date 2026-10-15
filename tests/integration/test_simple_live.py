@@ -43,6 +43,7 @@ class ExchangeSimulation:
         self.multi = True
         self.dual = False
         self.equity = "500"
+        self.available = None
         self.partial = False
         self.unknown_order = False
         self.reject_stop = False
@@ -75,7 +76,7 @@ class ExchangeSimulation:
         if path.endswith("/account"):
             result = {
                 "totalMarginBalance": self.equity,
-                "availableBalance": self.equity,
+                "availableBalance": self.available if self.available is not None else self.equity,
                 "assets": [
                     {"asset": "BNFCR", "availableBalance": self.equity},
                     {"asset": "USDC", "walletBalance": "500"},
@@ -261,6 +262,64 @@ async def test_bnfcr_aggregate_does_not_double_count_collateral(settings, store,
     engine.broker.account_at_ms = 0
     with pytest.raises(SafeError, match="stale"):
         engine.broker.equity()
+    await adapter.close()
+
+
+@pytest.mark.parametrize("available", ["500", "100"])
+async def test_margin_sizing_places_larger_entry_within_eighty_percent(
+    settings, store, filters, available
+):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings,
+        store,
+        filters,
+        simple_sizing_mode="margin",
+        risk_per_trade=0.04,
+        max_open_risk=0.05,
+        max_target_notional=1.6,
+        max_gross_notional=2.0,
+        max_net_beta=2.0,
+    )
+    sim.available = available
+    await engine.broker.refresh()
+    now = engine.broker.now_ms()
+    await engine.enter("SOLUSDT", row, now)
+    trade = engine.positions()["SOLUSDT"]
+    notional = Decimal(trade["quantity"]) * Decimal(str(trade["entry_price"]))
+    ceiling = min(Decimal("800"), Decimal(available) / Decimal("0.5005"))
+    assert ceiling - Decimal("1") < notional <= ceiling
+    assert notional / 2 <= Decimal(sim.equity) * Decimal("0.8")
+    assert len(sim.stops) == 1
+    assert store.rows("entries")[0]["risk"] <= 500 * 0.04
+    assert engine.risk.profit_guard_scale == 1
+    await adapter.close()
+
+
+async def test_margin_broker_rechecks_remaining_budget_before_submission(settings, store, filters):
+    from paperfrog.domain.types import Order
+
+    engine, sim, adapter, _, _ = await setup_engine(
+        settings, store, filters, simple_sizing_mode="margin"
+    )
+    order = Order(
+        client_id="pf-margin-budget-test",
+        symbol="SOLUSDT",
+        side=1,
+        quantity=Decimal("5"),
+        limit_price=Decimal("100"),
+    )
+    sim.quantity = Decimal("6")
+    with pytest.raises(SafeError, match="total margin cap"):
+        await engine.broker.submit(order)
+    assert not any(method == "POST" for method, _ in sim.calls)
+    sim.quantity = Decimal(0)
+    with pytest.raises(SafeError, match="position margin cap"):
+        await engine.broker.submit(order.model_copy(update={"quantity": Decimal("9")}))
+    assert not any(method == "POST" for method, _ in sim.calls)
+    sim.available = "100"
+    with pytest.raises(SafeError, match="estimated entry fee"):
+        await engine.broker.submit(order.model_copy(update={"quantity": Decimal("2")}))
+    assert not any(method == "POST" for method, _ in sim.calls)
     await adapter.close()
 
 

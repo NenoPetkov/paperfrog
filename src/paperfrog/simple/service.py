@@ -19,6 +19,7 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 from paperfrog.storage.lock import InstanceLock
 from paperfrog.telegram.control import Controls, Telegram
+from paperfrog.telegram.events import EventNotifications
 
 from .authorization import directory, verify_simple_arm
 from .data import candles, funding, scan
@@ -339,19 +340,7 @@ class SimpleService:
     async def notifications(self) -> None:
         while True:
             if self.telegram:
-                notices = self.store.get("simple_notices", {})
-                for key, message in notices.items():
-                    if self.store.get("simple_notice_sent:" + key):
-                        continue
-                    try:
-                        await self.telegram.notify("simple-" + key, message)
-                        self.store.put("simple_notice_sent:" + key, True)
-                    except SafeError:
-                        self.store.audit(
-                            "simple_telegram_degraded",
-                            {"reason": "notification unavailable; retry pending"},
-                        )
-                        break
+                await EventNotifications(self.s, self.store, self.telegram).deliver()
             await asyncio.sleep(5)
 
     async def run(self, once: bool = False) -> None:
@@ -372,6 +361,8 @@ class SimpleService:
                 )
                 await self.engine.restore()
                 self.store.put("operating_mode", self.s.trading_mode)
+                if not once:
+                    self.store.audit("simple_process_started", {"mode": self.s.trading_mode})
                 if live_broker is not None:
                     from datetime import UTC, datetime
 
@@ -446,5 +437,11 @@ class SimpleService:
                         await task
                 await self.exchange.close()
                 if self.telegram:
+                    if tasks:
+                        with contextlib.suppress(SafeError, TimeoutError):
+                            async with asyncio.timeout(3):
+                                await EventNotifications(
+                                    self.s, self.store, self.telegram
+                                ).deliver()
                     await self.telegram.client.aclose()
                 self.store.engine.dispose()

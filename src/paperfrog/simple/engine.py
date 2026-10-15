@@ -79,7 +79,13 @@ class Engine:
         if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules:
             raise SafeError("close existing PAPER positions before changing strategy rules")
         self.s, self.store, self.filters = s, store, filters
-        self.risk = RiskEngine(s, store, profit_guard_scale=max(1.0, s.risk_per_trade / 0.002))
+        self.risk = RiskEngine(
+            s,
+            store,
+            profit_guard_scale=(
+                max(1.0, s.risk_per_trade / 0.002) if s.simple_sizing_mode == "risk" else 1.0
+            ),
+        )
         self.broker: PaperBroker | LiveBroker = (
             broker
             if broker is not None
@@ -399,6 +405,23 @@ class Engine:
             max(0, equity * self.s.max_net_beta - outstanding),
             float(visible * q.mid) * self.s.max_participation,
         )
+        if self.s.simple_sizing_mode == "margin":
+            # Limits use current equity (USD/BNFCR aggregate), never the sum of
+            # collateral asset rows. Available margin also bounds each live order.
+            notional = min(
+                notional,
+                equity * self.s.simple_position_margin_cap * self.s.exchange_leverage,
+                max(
+                    0,
+                    equity * self.s.simple_total_margin_cap * self.s.exchange_leverage
+                    - outstanding,
+                ),
+            )
+            if isinstance(self.broker, LiveBroker):
+                notional = min(
+                    notional,
+                    float(self.broker.available) / (1 / self.s.exchange_leverage + self.s.fee_rate),
+                )
         if not math.isfinite(notional) or notional <= 0:
             raise SafeError("simple exposure budget exhausted")
         f = self.filters[symbol]

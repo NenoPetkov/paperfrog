@@ -36,14 +36,15 @@ class Settings(BaseSettings):
     artifacts_dir: Path = Path("artifacts")
     reports_dir: Path = Path("reports")
     display_timezone: str = "Europe/Sofia"
+    soft_loss_cooldown_minutes: int = Field(720, ge=1, le=720)
     max_strategy_entries_per_day: int = Field(12, ge=0, le=16)
     max_entries_per_symbol_per_day: int = Field(2, ge=1, le=2)
     max_concurrent_strategy_trades: int = Field(2, ge=1, le=2)
-    risk_per_trade: float = Field(0.002, gt=0, le=0.002)
-    max_open_risk: float = Field(0.005, gt=0, le=0.005)
-    max_target_notional: float = Field(0.08, gt=0, le=0.08)
-    max_gross_notional: float = Field(0.5, gt=0, le=0.5)
-    max_net_beta: float = Field(0.10, gt=0, le=0.10)
+    risk_per_trade: float = Field(0.002, gt=0, le=0.04)
+    max_open_risk: float = Field(0.005, gt=0, le=0.05)
+    max_target_notional: float = Field(0.08, gt=0, le=1.6)
+    max_gross_notional: float = Field(0.5, gt=0, le=2.0)
+    max_net_beta: float = Field(0.10, gt=0, le=2.0)
     daily_loss_limit: float = Field(0.0125, gt=0, le=0.0125)
     weekly_loss_limit: float = Field(0.035, gt=0, le=0.035)
     high_water_drawdown: float = Field(0.06, gt=0, le=0.06)
@@ -72,8 +73,28 @@ class Settings(BaseSettings):
     simple_poll_seconds: int = Field(5, ge=2, le=30)
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active"] = "standard"
+    simple_sizing_mode: Literal["risk", "margin"] = "risk"
+    simple_position_margin_cap: float = Field(0.8, gt=0, le=0.8)
+    simple_total_margin_cap: float = Field(1.0, gt=0, le=1.0)
     futures_account_mode: Literal["isolated", "credits"] = "isolated"
     simple_live_research_waiver: bool = False
+
+    @model_validator(mode="after")
+    def validate_sizing_budget(self) -> Self:
+        if self.simple_position_margin_cap > self.simple_total_margin_cap:
+            raise ValueError("position margin cap exceeds total margin cap")
+        if self.simple_sizing_mode == "margin":
+            if self.strategy_profile != "simple":
+                raise ValueError("margin sizing requires the simple profile")
+        elif (
+            self.risk_per_trade > 0.002
+            or self.max_open_risk > 0.005
+            or self.max_target_notional > 0.08
+            or self.max_gross_notional > 0.5
+            or self.max_net_beta > 0.10
+        ):
+            raise ValueError("larger limits require explicit simple margin sizing")
+        return self
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:

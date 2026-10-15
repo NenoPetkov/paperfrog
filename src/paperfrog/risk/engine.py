@@ -155,6 +155,11 @@ class RiskEngine:
         day = now.date().isoformat()
         if p.target > p.equity * self.s.max_target_notional + 1e-9 or p.gross < p.target:
             raise SafeError("target cap exceeded")
+        if self.s.simple_sizing_mode == "margin" and (
+            p.target
+            > p.equity * self.s.simple_position_margin_cap * self.s.exchange_leverage + 1e-9
+        ):
+            raise SafeError("position margin cap exceeded")
         if (
             abs(p.net_beta) > self.s.max_net_beta
             or not 0 <= p.participation <= self.s.max_participation
@@ -200,6 +205,11 @@ class RiskEngine:
                 raise SafeError("open risk cap")
             if active[2] + p.gross > p.equity * self.s.max_gross_notional + 1e-9:
                 raise SafeError("gross exposure cap")
+            if self.s.simple_sizing_mode == "margin" and (
+                active[2] + p.gross
+                > p.equity * self.s.simple_total_margin_cap * self.s.exchange_leverage + 1e-9
+            ):
+                raise SafeError("total margin cap exceeded")
             if self.store.get("cooldown:" + p.symbol, 0, conn) > now.timestamp():
                 raise SafeError("symbol cooldown")
             conn.execute(
@@ -243,13 +253,18 @@ class RiskEngine:
                 "risk_lock",
                 {
                     "state": State.SOFT_RISK_LOCK,
-                    "until": now.timestamp() + 43200,
+                    "until": now.timestamp() + self.s.soft_loss_cooldown_minutes * 60,
                     "reason": "three_losses",
                 },
                 conn,
             )
             self.store.put("state", State.SOFT_RISK_LOCK, conn)
-        self.store.audit("trade_closed", {"id": trade_id, "pnl": pnl}, conn)
+            self.store.audit("risk_lock", self.store.get("risk_lock", None, conn), conn)
+        self.store.audit(
+            "trade_closed",
+            {"id": trade_id, "symbol": row.symbol, "pnl": pnl, "consecutive_losses": losses},
+            conn,
+        )
 
     def resume(self, h: Health, now: datetime, live_armed: bool = False) -> None:
         self.require_health(h)

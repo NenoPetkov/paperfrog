@@ -88,6 +88,22 @@ class LiveBroker:
             await self.refresh()
             if order.quantity * order.limit_price / 2 > self.available:
                 raise SafeError("available margin insufficient")
+            if self.s.simple_sizing_mode == "margin":
+                notional = order.quantity * order.limit_price
+                equity = self.equity()
+                if notional > equity * Decimal(str(self.s.simple_position_margin_cap * 2)):
+                    raise SafeError("position margin cap exceeded")
+                occupied = sum(
+                    (
+                        abs(Decimal(row["positionAmt"])) * Decimal(row["markPrice"])
+                        for row in await self.exchange.position_details()
+                    ),
+                    Decimal(0),
+                )
+                if occupied + notional > equity * Decimal(str(self.s.simple_total_margin_cap * 2)):
+                    raise SafeError("total margin cap exceeded")
+                if notional * (Decimal("0.5") + Decimal(str(self.s.fee_rate))) > self.available:
+                    raise SafeError("available margin insufficient after estimated entry fee")
             self.exchange.entry_authorized = True
         return await self.exchange.submit(order)
 

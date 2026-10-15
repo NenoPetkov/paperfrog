@@ -1,0 +1,20 @@
+# Combined opt-in preset for the requested sizing, watchlist and cooldown.
+# PAPER execution by default; this file does not arm or start LIVE trading.
+trading_mode: paper
+live_trading_enabled: false
+strategy_profile: simple
+simple_sizing_mode: margin
+simple_position_margin_cap: 0.8
+simple_total_margin_cap: 1.0
+simple_entry_mode: trend
+simple_entry_profile: active
+simple_selected_count: 10
+soft_loss_cooldown_minutes: 5
+max_concurrent_strategy_trades: 2
+max_target_notional: 1.6
+max_gross_notional: 2.0
+max_net_beta: 2.0
+risk_per_trade: 0.04
+max_open_risk: 0.05
+state_dir: state/larger-positions-paper
+health_port: 8082

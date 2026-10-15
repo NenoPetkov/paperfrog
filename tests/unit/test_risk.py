@@ -21,6 +21,44 @@ def test_cap_validation(cap):
         Settings(_env_file=None, max_strategy_entries_per_day=cap)
 
 
+@pytest.mark.parametrize("minutes", [0, -1, 721])
+def test_loss_cooldown_cannot_be_disabled_or_invalid(minutes):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, soft_loss_cooldown_minutes=minutes)
+
+
+def test_five_minute_loss_lock_expires_but_preserves_loss_history(settings, store, health, now):
+    s = Settings(_env_file=None, **{**settings.public(), "soft_loss_cooldown_minutes": 5})
+    risk = RiskEngine(s, store)
+    for i in range(3):
+        risk.reserve(proposal(str(i), f"ALT{i}USDT"), health, now)
+        risk.closed(str(i), -1, now)
+    assert store.get("risk_lock")["until"] == now.timestamp() + 300
+    with pytest.raises(SafeError, match="cannot be overridden"):
+        risk.resume(health, now + timedelta(seconds=299))
+    risk.resume(health, now + timedelta(minutes=5))
+    assert store.get("state") == State.RUNNING
+    assert store.get("consecutive_losses") == 3
+    later = now + timedelta(minutes=6)
+    risk.reserve(proposal("fourth", "OTHERUSDT"), health, later)
+    risk.closed("fourth", -1, later)
+    assert store.get("risk_lock")["until"] == later.timestamp() + 300
+    assert store.get("consecutive_losses") == 4
+
+
+def test_shorter_cooldown_does_not_shorten_an_existing_lock(settings, store, health, now):
+    s = Settings(_env_file=None, **{**settings.public(), "soft_loss_cooldown_minutes": 5})
+    lock = {
+        "state": State.SOFT_RISK_LOCK,
+        "until": now.timestamp() + 43200,
+        "reason": "three_losses",
+    }
+    store.put("risk_lock", lock)
+    with pytest.raises(SafeError, match="cannot be overridden"):
+        RiskEngine(s, store).resume(health, now + timedelta(minutes=5))
+    assert store.get("risk_lock") == lock
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

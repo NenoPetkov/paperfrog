@@ -1,0 +1,2 @@
+# Prepared configuration only. Existing locks retain their recorded expiry.
+soft_loss_cooldown_minutes: 5

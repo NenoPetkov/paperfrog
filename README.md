@@ -1,5 +1,45 @@
 # paperfrog
 
+## Optional larger-position configuration
+
+All conversation changes are integrated into the main `src/paperfrog` package,
+including execution-price validation/requery, restart journal checks, the ten-coin
+watchlist option, margin sizing, configurable loss cooldown and Telegram events.
+The older copies under `state/prepared` are historical artifacts, not the active
+source or required patches.
+
+`larger-positions.yaml` combines the requested ten-coin active watchlist,
+five-minute consecutive-loss cooldown and larger sizing in one opt-in PAPER preset.
+It targets margin of up to 80%
+of current aggregate equity per position, with a 100% portfolio margin ceiling at
+2x leverage (160% and 200% notional respectively). For credits accounts the base
+is the exchange's USD/BNFCR aggregate equity, including unrealized PnL, not a sum
+of collateral balances or 80% of the remaining free margin on each entry.
+
+Live sizing additionally checks available margin and reserves estimated entry fees.
+Stops, liquidity, remaining portfolio capacity and planned-risk caps can reduce the
+size. This preset explicitly raises planned risk to at most 4% per trade and 5%
+across open trades. Daily/weekly/drawdown locks remain unchanged. A single stop can
+therefore exceed the daily loss threshold before that lock blocks later entries;
+these limits do not guarantee a maximum realized loss or prevent liquidation.
+
+The existing two-position limit, LONG/SHORT signals and four-hour holding limit
+remain. The default sizing mode and default limits remain unchanged. No existing
+live environment configuration or authorization is updated by this preset.
+
+`soft_loss_cooldown_minutes` controls future consecutive-loss locks. The default
+is 720 minutes; both `five-minute-cooldown.yaml` and the combined preset select five minutes. Existing lock
+expiry timestamps, loss history and other risk limits are preserved.
+
+Telegram notifications now follow the execution and risk audit log, including
+filled entries, reductions, closed PnL, soft and portfolio risk locks, execution
+errors, pauses and process restarts. The first subscription sends a current-state
+snapshot instead of replaying old history. Each chat has a durable delivery cursor;
+failed sends retry, and identical repeated errors are suppressed for five minutes.
+A crash after Telegram accepts a message but before the cursor is saved can cause
+a duplicate. Graceful shutdown attempts a bounded final delivery; queued messages
+survive a restart, but an offline process cannot send immediate alerts.
+
 paperfrog is a Python 3.12 futures research bot. Its default simple profile scans recent Binance USDT perpetual data, ranks up to 100 liquid crypto coins, selects up to two, chooses long/short from trend breakouts and trading flow, and monitors exits. Cash and zero trades are valid outcomes.
 
 **Default: PAPER. Trading edge: unproven.** The simple profile supports locally authorized exchange execution with an explicit operator waiver of research approval and waiting periods. Legacy model readiness remains separate. Tests verify software mechanics, not profitability. Read [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for delivered scope and material limitations before operating it.

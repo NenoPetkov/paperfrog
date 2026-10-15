@@ -23,6 +23,13 @@ class OfflineResearchSettings(Settings):
     weekly_loss_limit: float = Field(0.10, gt=0, le=0.10)
     high_water_drawdown: float = Field(0.20, gt=0, le=0.20)
 
+    @model_validator(mode="after")
+    def validate_sizing_budget(self) -> Self:
+        # This subclass has its own bounded, strictly offline risk experiment.
+        if self.simple_sizing_mode != "risk":
+            raise ValueError("offline research budget requires risk sizing")
+        return self
+
     @classmethod
     def settings_customise_sources(
         cls,
