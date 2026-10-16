@@ -1,5 +1,65 @@
 # paperfrog
 
+## One-minute slope entries
+
+Set `SIMPLE_ENTRY_TIMEFRAME=1m` for closed one-minute entry signals. The simple
+trend profile reranks the entire liquid altcoin pool every minute, using EMA 5/20,
+aligned one/three/five-minute returns, the latest candle body and trading flow.
+Shorts are blocked during an upward turn; longs are blocked during a downward
+turn. A fresh execution quote also blocks a counter-move greater than half the
+one-minute ATR after the signal close. Signals expire at the next minute boundary.
+These checks run again independently in the live broker before submission and
+are bound to the exact order. Missing, incomplete, stale or contrary inputs block entries.
+
+`SIMPLE_AI_REVIEW_MINUTES=1` selects an AI review for each completed minute, with
+at most 1,440 attempts per UTC day. This requires one-minute entry candles. The
+default review interval remains 15 minutes with 96 attempts per day. Each decision
+expires at the next review boundary; attempts and usage survive restarts. Reviews
+compose generic conditions over the refreshed minute
+features; a pause or unavailable review still blocks new entries. The minute loop
+continues while an AI request is pending. Forecasts cover the reviewed sample;
+validated generic rules apply to the changing minute watchlist. AI input explicitly
+labels minute trend/flow features and longer-horizon context. Diagnostic forecasts
+retain their separate 15-minute horizon and are not entry permission.
+
+Fifteen-minute candles still supply the existing ATR stop sizing, trailing distance,
+24-hour liquidity and BTC correlation/lag context. The independent BTC minute gate,
+position sizes, leverage, holding-time limits, daily entry caps and loss limits remain.
+Existing positions keep their original trend exit; new minute positions use minute
+trend exits. Stops only tighten, and reduce-only exits do not need minute entry permission.
+The legacy default setting is `15m`; `.env.example` selects `1m` for new installations.
+`simple status` exposes configured and loaded entry timeframes. A running process
+needs a restart, and LIVE source/configuration changes need renewed local authorization.
+The old 15-minute replay refuses minute mode instead of inventing minute signals.
+Faster signals can produce more noise and do not establish a profitable strategy.
+
+## Equity margin allocation: 10–50%
+
+`SIMPLE_SIZING_MODE=equity_range` with `SIMPLE_POSITION_MARGIN_CAP=0.5`
+selects the largest permitted entry allocation up to 50% of aggregate account
+equity as margin at the existing 2x leverage. Ordinary allocations must be at
+least 10% of equity after quantity rounding. If available margin cannot fund
+10% after estimated entry fees, the sole exception uses all remaining available
+margin after fees and exchange lot rounding. If another risk/exposure limit
+would force an ordinary allocation below 10%, or prevent full use of the small
+remaining balance, the entry is skipped. Exchange minimums still apply.
+
+This policy removes the top-quote participation cap from both sizing and risk
+reservation. Fresh spread/data, order-price limits, per-trade/open-risk budgets,
+portfolio exposure, loss locks, position count and protective exits remain.
+Sizing also considers remaining open-risk capacity before reserving a new entry.
+The live gateway independently checks the allocation against fresh account data.
+Short quantities use a conservative ask-side allocation price. Entry fees and
+lot rounding normally leave allocations slightly below the 50% target.
+
+Percentages describe entry allocations using current equity; market value and
+equity changes can change the displayed percentage after a fill. Each approved
+`simple_equity_allocation` audit records equity, available margin, planned margin
+fraction, all sizing caps, the limiting cap and any remaining-balance exception.
+PAPER and the original risk sizing remain defaults; other sizing policies retain
+their existing participation checks. Live policy changes require fresh local
+authorization and restart; Telegram cannot select this policy or arm it.
+
 ## Optional larger-position configuration
 
 All conversation changes are integrated into the main `src/paperfrog` package,
@@ -104,7 +164,8 @@ the AI cannot disable this gate or create that authorization.
 
 ## Optional adaptive AI entry rules
 
-`SIMPLE_AI_ENABLED=true` enables one OpenAI review per completed 15-minute candle,
+`SIMPLE_AI_ENABLED=true` enables one OpenAI review per completed review boundary
+(15 minutes by default, or every minute with `SIMPLE_AI_REVIEW_MINUTES=1`),
 using the configured `OPENAI_PRIMARY_MODEL` and a private local `OPENAI_API_KEY`.
 It defaults to false; PAPER remains the default execution mode. LIVE still requires
 all existing environment conditions and a local arm bound to the account, source
@@ -115,7 +176,7 @@ latest 32 closed candles and eleven numeric indicators, up to eight prior review
 with scored forecasts, and up to 50 closed trades expressed as approximate net
 returns. No balances, quantities, private open positions, order IDs or credentials
 are sent. Price history used to calculate indicators remains three days. Forecasts
-are scored only at their next-candle boundary; missing observations are left
+are scored only at their specified 15-minute target; missing observations are left
 unscored. Close-to-close forecast scores are diagnostics, not executable PnL.
 
 The model can compose new AND/OR entry conditions over trend, flow, volatility,
@@ -134,13 +195,15 @@ independent and unchanged. The AI cannot modify risk settings or manage existing
 positions. Its rules can replace the original breakout/flow entry trigger, so the
 adaptive strategy has different, unproven trading behavior even with fixed limits.
 
-Permissions expire at the next candle boundary. Missing, refused, malformed,
+Permissions expire at the next configured review boundary. Missing, refused, malformed,
 out-of-scope or late output blocks new entries; there is no static-strategy fallback.
 Monitoring and exits run independently while the request is pending. A live order
 also needs permission bound to its exact intent immediately before submission.
-There is at most one request attempt per boundary and 96 attempts per UTC day,
+There is at most one request attempt per boundary and 96 attempts per UTC day
+for 15-minute reviews, or 1,440 for explicitly selected one-minute reviews,
 durable across restarts, with no automatic request retries. Each request has a
-40-second deadline and `SIMPLE_AI_OUTPUT_LIMIT` (default 4000, maximum 8192 tokens).
+deadline of 40 seconds or the remaining permission window, whichever is shorter,
+and `SIMPLE_AI_OUTPUT_LIMIT` (default 4000, maximum 8192 tokens).
 These bounds constrain API usage, not a fixed monetary bill.
 
 `/simple` and `simple status` expose AI status and the most recent review. Reviews,
@@ -194,6 +257,23 @@ expiry, unavailable candle monitoring, BTC crisis, portfolio risk lock or manual
 Stops only tighten. Existing per-trade, exposure, daily/weekly/drawdown, cooldown and
 entry-count limits apply. Total direct exposure is additionally bounded by the existing
 net-beta notional budget, without assuming two opposite coin positions offset risk.
+
+For an eligible exchange entry, finish symbol setup first, then refresh that coin's
+book/mark and account margin together before calculating quantity and limit price.
+The actual spread and costs are checked using that new quote. Cached wide or stale
+quotes do not discard a potential setup before refresh. A refresh failure before
+submission leaves the signal available for a later monitoring pass; uncertain order
+outcomes still use query-only reconciliation. Only eligible, unconsumed signals
+perform the extra refresh. The 15-minute indicators, AI cadence, signal lifetime,
+entry thresholds, liquidity/risk budgets and exits are unchanged. No extra
+confirmation candle or price-distance filter is added. Fresher prices can still
+change sizing or the result of an existing execution check. Offline PAPER replay
+continues to use its supplied historical quotes.
+
+After restart, existing positions retain stop, holding-time and financial-risk
+monitoring while the first candle/BTC scan loads. New entries stay paused. A
+pending first scan is not a confirmed BTC crisis. This initial wait is bounded by
+`MARKET_STALE_SECONDS`; unavailable monitoring data then uses the existing exit.
 
 Telegram reports filled buys/sells with direction, price and size, plus closed
 PnL with estimated fees and recorded funding. `/status`, `/positions`, `/last_signal`, `/pause`, `/resume`

@@ -33,10 +33,16 @@ def strategy_hash(s: Settings) -> str:
         "data.py",
         "adaptive.py",
         "bitcoin.py",
+        "minute.py",
     ):
         digest.update(Path(__file__).with_name(name).read_bytes())
     root = Path(__file__).parent.parent
-    for name in ("exchange/binance.py", "execution/coordinator.py", "risk/engine.py"):
+    for name in (
+        "exchange/binance.py",
+        "execution/coordinator.py",
+        "risk/engine.py",
+        "risk/sizing.py",
+    ):
         digest.update((root / name).read_bytes())
     return digest.hexdigest()
 

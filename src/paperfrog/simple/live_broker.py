@@ -5,16 +5,19 @@ import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from paperfrog.domain.types import Fill, Order, OrderNotFound, Quote, SafeError
+from paperfrog.domain.types import EntryVeto, Fill, Order, OrderNotFound, Quote, SafeError
 from paperfrog.exchange.binance import BinanceAdapter
 from paperfrog.reporting.readiness import credential_binding
+from paperfrog.risk.sizing import require_equity_margin_allocation
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
 from .adaptive import active_plan
 from .authorization import verify_simple_arm
 from .bitcoin import require_order as require_btc_order
-from .strategy import BAR_MS, require_execution
+from .data import quote_snapshot
+from .minute import require_order as require_minute_order
+from .strategy import require_execution
 
 
 class LiveBroker:
@@ -55,6 +58,11 @@ class LiveBroker:
         self._equity, self.available = equity, available
         self.account_at_ms = self.now_ms()
 
+    async def refresh_quote(self, symbol: str) -> Quote:
+        quote = await quote_snapshot(self.exchange, symbol)
+        self.quotes[symbol] = quote
+        return quote
+
     def equity(self) -> Decimal:
         if not 0 <= self.now_ms() - self.account_at_ms <= self.s.account_stale_seconds * 1000:
             raise SafeError("exchange account valuation stale")
@@ -91,13 +99,14 @@ class LiveBroker:
                 raise SafeError("BTC is reference-only; new BTC positions are forbidden")
             self.require_authorization()
             await self.refresh()
+            size_error = EntryVeto if self.s.simple_sizing_mode == "equity_range" else SafeError
             if order.quantity * order.limit_price / 2 > self.available:
-                raise SafeError("available margin insufficient")
-            if self.s.simple_sizing_mode == "margin":
+                raise size_error("available margin insufficient")
+            if self.s.simple_sizing_mode in {"margin", "equity_range"}:
                 notional = order.quantity * order.limit_price
                 equity = self.equity()
                 if notional > equity * Decimal(str(self.s.simple_position_margin_cap * 2)):
-                    raise SafeError("position margin cap exceeded")
+                    raise size_error("position margin cap exceeded")
                 occupied = sum(
                     (
                         abs(Decimal(row["positionAmt"])) * Decimal(row["markPrice"])
@@ -106,12 +115,36 @@ class LiveBroker:
                     Decimal(0),
                 )
                 if occupied + notional > equity * Decimal(str(self.s.simple_total_margin_cap * 2)):
-                    raise SafeError("total margin cap exceeded")
+                    raise size_error("total margin cap exceeded")
                 if notional * (Decimal("0.5") + Decimal(str(self.s.fee_rate))) > self.available:
-                    raise SafeError("available margin insufficient after estimated entry fee")
+                    raise size_error("available margin insufficient after estimated entry fee")
+                if self.s.simple_sizing_mode == "equity_range":
+                    quote = self.quotes.get(order.symbol)
+                    if (
+                        quote is None
+                        or not 0
+                        <= self.now_ms() - quote.timestamp_ms
+                        <= self.s.market_stale_seconds * 1000
+                    ):
+                        raise EntryVeto("fresh quote required for equity margin allocation")
+                    filters = self.exchange.filters[order.symbol]
+                    allocation_price = max(
+                        order.limit_price, filters.round_price(quote.ask * Decimal("1.001"))
+                    )
+                    try:
+                        require_equity_margin_allocation(
+                            self.s,
+                            float(equity),
+                            float(order.quantity * allocation_price),
+                            float(self.available),
+                            float(filters.step * allocation_price),
+                        )
+                    except SafeError as exc:
+                        raise EntryVeto(str(exc)) from None
             if self.s.simple_ai_enabled:
                 now_ms = self.now_ms()
-                plan = active_plan(self.s, self.store, now_ms // BAR_MS * BAR_MS, now_ms)
+                review_ms = self.s.simple_ai_review_bar_ms
+                plan = active_plan(self.s, self.store, now_ms // review_ms * review_ms, now_ms)
                 permission = self.store.get("simple_ai_order:" + order.client_id, {})
                 if (
                     plan is None
@@ -122,6 +155,11 @@ class LiveBroker:
                 ):
                     raise SafeError("adaptive AI order permission missing or expired")
             require_btc_order(self.s, self.store, order, self.now_ms())
+            if self.s.simple_entry_timeframe == "1m":
+                quote = await self.refresh_quote(order.symbol)
+                require_minute_order(self.s, self.store, order, self.now_ms(), quote)
+                if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
+                    raise EntryVeto("simple spread veto at one-minute dispatch")
             self.exchange.entry_authorized = True
         return await self.exchange.submit(order)
 

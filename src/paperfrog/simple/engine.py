@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -12,6 +14,7 @@ from paperfrog.domain.types import Fill, Filters, Order, Quote, SafeError, State
 from paperfrog.execution.coordinator import Coordinator, client_id
 from paperfrog.paper.broker import PaperBroker
 from paperfrog.risk.engine import Health, Proposal, RiskEngine
+from paperfrog.risk.sizing import equity_margin_bounds, require_equity_margin_allocation
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
@@ -21,6 +24,9 @@ from .authorization import verify_simple_arm
 from .bitcoin import BTC
 from .bitcoin import entry_gate as btc_entry_gate
 from .live_broker import LiveBroker
+from .minute import MINUTE_MS
+from .minute import direction as minute_direction
+from .minute import veto as minute_veto
 from .strategy import (
     BAR_MS,
     RULES,
@@ -309,6 +315,10 @@ class Engine:
         self.store.put("simple_positions", positions)
 
     async def close(self, symbol: str, now_ms: int, reason: str) -> None:
+        if isinstance(self.broker, LiveBroker):
+            # Entry refresh may postdate the caller's loop timestamp. Check the
+            # current exchange clock without weakening stale/future quote limits.
+            now_ms = self.broker.now_ms()
         trade = self.positions()[symbol]
         q, f = self.broker.quotes[symbol], self.filters[symbol]
         if not 0 <= now_ms - q.timestamp_ms <= self.s.market_stale_seconds * 1000:
@@ -345,7 +355,12 @@ class Engine:
         await self.broker.cancel_protection(symbol)
 
     async def monitor(
-        self, now_ms: int, rows: dict[str, dict[str, Any]], crisis: bool = False
+        self,
+        now_ms: int,
+        rows: dict[str, dict[str, Any]],
+        crisis: bool = False,
+        *,
+        awaiting_initial_scan: bool = False,
     ) -> None:
         now = datetime.fromtimestamp(now_ms / 1000, UTC)
         if not await self.coordinator.reconcile():
@@ -357,6 +372,12 @@ class Engine:
             if q is None or not 0 <= now_ms - q.timestamp_ms <= self.s.market_stale_seconds * 1000:
                 raise SafeError("held market stale; entries blocked")
             row = rows.get(symbol)
+            if (
+                trade.get("entry_timeframe", "15m") == "15m"
+                and row is not None
+                and isinstance(row.get("risk_context"), dict)
+            ):
+                row = row["risk_context"]
             reason = (
                 "portfolio loss/risk limit reached"
                 if self.store.get("risk_lock")
@@ -364,7 +385,11 @@ class Engine:
                 if crisis
                 else exit_reason(trade, float(q.mark), now_ms, row, self.rules)
             )
-            if row is None or now_ms - row["timestamp_ms"] >= 2 * BAR_MS:
+            if not awaiting_initial_scan and (
+                row is None
+                or now_ms - row["timestamp_ms"]
+                >= 2 * (MINUTE_MS if row.get("entry_timeframe") == "1m" else BAR_MS)
+            ):
                 reason = reason or "closed-candle monitoring data unavailable"
             if reason:
                 await self.close(symbol, now_ms, reason)
@@ -379,6 +404,35 @@ class Engine:
                     self.store.put("simple_positions", positions)
         self.risk.anchors(float(self.broker.equity()), now)
 
+    def entry_signal(self, row: dict[str, Any], now_ms: int, spread: float) -> tuple[int, str]:
+        one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
+        minute_side, minute_reason = (0, "")
+        if self.s.simple_entry_timeframe == "1m":
+            minute_side, minute_reason = minute_direction(row, self.rules)
+            if not minute_side:
+                return 0, minute_reason
+        direction, reason = (
+            adaptive_signal(self.s, self.store, row, now_ms, self.rules, one_way_cost)
+            if self.s.simple_ai_enabled
+            else entry(
+                row,
+                one_way_cost,
+                self.s.simple_entry_mode,
+                replace(self.rules, entry_style="trend_follow")
+                if self.s.simple_entry_timeframe == "1m"
+                else self.rules,
+            )
+        )
+        if self.s.simple_entry_timeframe == "1m" and direction:
+            if direction != minute_side:
+                return 0, "AI entry direction conflicts with the closed one-minute slope"
+            reason = minute_reason + "; " + reason
+        if direction and self.s.simple_btc_reference_enabled:
+            btc_reason = btc_entry_gate(self.s, self.store, row, direction, now_ms)
+            if btc_reason:
+                return 0, btc_reason
+        return direction, reason
+
     async def enter(
         self, symbol: str, row: dict[str, Any], now_ms: int, maximum_signal_age_ms: int = BAR_MS
     ) -> None:
@@ -392,46 +446,74 @@ class Engine:
         q = self.broker.quotes.get(symbol)
         if not BAR_MS <= maximum_signal_age_ms <= 2 * BAR_MS:
             raise SafeError("invalid experimental signal delay")
+        if self.s.simple_entry_timeframe == "1m":
+            maximum_signal_age_ms = MINUTE_MS
         if (
-            q is None
-            or row["timestamp_ms"] > now_ms
+            row["timestamp_ms"] > now_ms
             or now_ms - row["timestamp_ms"] >= maximum_signal_age_ms
+            or (q is None and not isinstance(self.broker, LiveBroker))
         ):
             raise SafeError("new entry needs a fresh closed candle and quote")
-        self.risk.require_health(self.health(now_ms))
-        spread = float((q.ask - q.bid) / q.mid)
-        if spread > self.s.max_spread:
-            raise SafeError("simple spread veto")
-        direction, reason = entry(
-            row,
-            self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2,
-            self.s.simple_entry_mode,
-            self.rules,
-        )
-        if self.s.simple_ai_enabled:
-            direction, reason = adaptive_signal(
-                self.s,
-                self.store,
-                row,
-                now_ms,
-                self.rules,
-                self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2,
-            )
-        if direction and self.s.simple_btc_reference_enabled:
-            btc_reason = btc_entry_gate(self.s, self.store, row, direction, now_ms)
-            if btc_reason:
-                direction, reason = 0, btc_reason
+        if isinstance(self.broker, LiveBroker):
+            # Cheap candidate screening only. Cached spread must not discard a setup
+            # before its current quote is fetched. All execution gates run below.
+            spread = 0.0
+        else:
+            assert q is not None
+            self.risk.require_health(self.health(now_ms))
+            spread = float((q.ask - q.bid) / q.mid)
+            if spread > self.s.max_spread:
+                raise SafeError("simple spread veto")
+        direction, reason = self.entry_signal(row, now_ms, spread)
         self.store.put(
             "last_signal",
             {"symbol": symbol, "reason": reason, "timestamp_ms": int(row["timestamp_ms"])},
         )
         if not direction:
             return
-        trade_id = hashlib.sha256(
-            f"{self.strategy}:{symbol}:{int(row['timestamp_ms'])}".encode()
-        ).hexdigest()[:24]
+        signal_key = f"{self.strategy}:{symbol}:{int(row['timestamp_ms'])}"
+        if self.s.simple_entry_timeframe == "1m":
+            signal_key += ":1m"
+        trade_id = hashlib.sha256(signal_key.encode()).hexdigest()[:24]
         if self.store.get("simple_signal:" + trade_id):
             return
+        if isinstance(self.broker, LiveBroker):
+            self.broker.require_authorization()
+            await self.broker.exchange.prepare_simple_symbol(symbol)
+            # Exchange setup can take several requests. Refresh after it, then
+            # size and price the exact order from current market/account snapshots.
+            _, q = await asyncio.gather(self.broker.refresh(), self.broker.refresh_quote(symbol))
+            assert q is not None
+            now_ms = self.broker.now_ms()
+            if not 0 <= now_ms - row["timestamp_ms"] < maximum_signal_age_ms:
+                raise SafeError("new entry needs a fresh closed candle and quote")
+            self.risk.require_health(self.health(now_ms))
+            spread = float((q.ask - q.bid) / q.mid)
+            if spread > self.s.max_spread:
+                raise SafeError("simple spread veto")
+            direction, reason = self.entry_signal(row, now_ms, spread)
+            self.store.put(
+                "last_signal",
+                {"symbol": symbol, "reason": reason, "timestamp_ms": int(row["timestamp_ms"])},
+            )
+            if not direction:
+                return
+            self.store.audit(
+                "simple_entry_refreshed",
+                {
+                    "symbol": symbol,
+                    "quote_asof_ms": q.timestamp_ms,
+                    "signal_asof_ms": int(row["timestamp_ms"]),
+                    "refreshed_at_ms": now_ms,
+                },
+            )
+        assert q is not None
+        if self.s.simple_entry_timeframe == "1m":
+            reason_veto = minute_veto(row, direction, now_ms, float(q.mark), self.rules)
+            if reason_veto:
+                raise SafeError(reason_veto)
+            if self.store.get("simple_minute:" + symbol) != row:
+                raise SafeError("one-minute slope changed before entry")
         self.store.put("simple_signal:" + trade_id, True)
         equity = float(self.broker.equity())
         stop = min(
@@ -445,12 +527,45 @@ class Engine:
             abs(float(t["quantity"])) * float(self.broker.quotes[k].mark)
             for k, t in self.positions().items()
         )
-        notional = min(
-            equity * self.s.risk_per_trade * self.store.get("risk_multiplier", 1.0) / costs,
-            equity * self.s.max_target_notional,
-            max(0, equity * self.s.max_net_beta - outstanding),
-            float(visible * q.mid) * self.s.max_participation,
-        )
+        caps = {
+            "per_trade_risk": equity
+            * self.s.risk_per_trade
+            * self.store.get("risk_multiplier", 1.0)
+            / costs,
+            "target_notional": equity * self.s.max_target_notional,
+            "net_exposure": max(0, equity * self.s.max_net_beta - outstanding),
+        }
+        available_margin: float | None = None
+        if self.s.simple_sizing_mode == "equity_range":
+            available_margin = (
+                float(self.broker.available)
+                if isinstance(self.broker, LiveBroker)
+                else max(0, equity - outstanding / self.s.exchange_leverage)
+            )
+            bounds = equity_margin_bounds(self.s, equity, available_margin)
+            open_risk = sum(
+                float(item["risk"])
+                for item in self.store.rows("entries", 100000)
+                if not item["closed"]
+            )
+            caps.update(
+                position_margin=bounds.maximum_notional
+                / (
+                    1
+                    + self.s.simple_position_margin_cap * self.s.exchange_leverage * self.s.fee_rate
+                ),
+                available_margin=bounds.available_notional,
+                portfolio_margin=max(
+                    0,
+                    equity * self.s.simple_total_margin_cap * self.s.exchange_leverage
+                    - outstanding,
+                ),
+                gross_exposure=max(0, equity * self.s.max_gross_notional - outstanding),
+                open_risk=max(0, equity * self.s.max_open_risk - open_risk) / costs,
+            )
+        else:
+            caps["liquidity"] = float(visible * q.mid) * self.s.max_participation
+        notional = min(caps.values())
         if self.s.simple_sizing_mode == "margin":
             # Limits use current equity (USD/BNFCR aggregate), never the sum of
             # collateral asset rows. Available margin also bounds each live order.
@@ -474,7 +589,14 @@ class Engine:
         price = f.round_price(
             q.ask * Decimal("1.001") if direction > 0 else q.bid * Decimal(".999")
         )
-        quantity = f.round_quantity(Decimal(str(notional)) / price)
+        # A short limit is a minimum sale price. Use the conservative ask-side
+        # price for its allocation too, so a better short fill cannot inflate size.
+        allocation_price = (
+            max(price, f.round_price(q.ask * Decimal("1.001")))
+            if self.s.simple_sizing_mode == "equity_range"
+            else price
+        )
+        quantity = f.round_quantity(Decimal(str(notional)) / allocation_price)
         if quantity < f.min_quantity or quantity * price < f.min_notional:
             self.store.audit(
                 "simple_entry_skipped",
@@ -486,6 +608,31 @@ class Engine:
                 },
             )
             return
+        if self.s.simple_sizing_mode == "equity_range":
+            assert available_margin is not None
+            allocated = float(quantity * allocation_price)
+            try:
+                bounds = require_equity_margin_allocation(
+                    self.s, equity, allocated, available_margin, float(f.step * allocation_price)
+                )
+            except SafeError as exc:
+                self.store.audit("simple_entry_skipped", {"symbol": symbol, "reason": str(exc)})
+                return
+            self.store.audit(
+                "simple_equity_allocation",
+                {
+                    "symbol": symbol,
+                    "equity": equity,
+                    "available_margin": available_margin,
+                    "planned_notional": allocated,
+                    "planned_margin": allocated / self.s.exchange_leverage,
+                    "margin_fraction": allocated / self.s.exchange_leverage / equity,
+                    "remaining_balance": bounds.remaining_balance,
+                    "limiting_cap": min(caps, key=lambda key: caps[key]),
+                    "caps": caps,
+                    "quote_asof_ms": q.timestamp_ms,
+                },
+            )
         order = Order(
             client_id=client_id(trade_id, symbol),
             symbol=symbol,
@@ -493,12 +640,11 @@ class Engine:
             quantity=quantity,
             limit_price=price,
         )
-        actual = float(quantity * price)
+        actual = float(quantity * allocation_price)
         liquidation_distance = 1.0
         if isinstance(self.broker, LiveBroker):
             self.broker.require_authorization()
             f.validate(order)
-            await self.broker.exchange.prepare_simple_symbol(symbol)
             liquidation_distance = await self.broker.exchange.liquidation_buffer([order])
         proposal = Proposal(
             trade_id,
@@ -510,12 +656,15 @@ class Engine:
             direction * actual / equity,
             stop,
             liquidation_distance,
-            float(quantity / visible),
+            float(quantity / max(visible, Decimal(".00000001"))),
+            available_margin,
+            float(f.step * allocation_price),
         )
         intent: dict[str, Any] = {
             "id": trade_id,
             "side": direction,
             "entry_mode": self.s.simple_entry_mode,
+            "entry_timeframe": self.s.simple_entry_timeframe,
             "opened_ms": now_ms,
             "stop_fraction": stop,
         }
@@ -549,6 +698,15 @@ class Engine:
             )
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
+        if self.s.simple_entry_timeframe == "1m":
+            self.store.put(
+                "simple_minute_order:" + order.client_id,
+                {
+                    "config_hash": self.s.config_hash,
+                    "row": row,
+                    "order": order.model_dump(mode="json"),
+                },
+            )
         if isinstance(self.broker, LiveBroker):
             pending = self.store.get("simple_pending", {})
             pending[symbol] = intent
@@ -583,7 +741,7 @@ class Engine:
         self.record_entry(symbol, fill, intent)
         self.notice(
             trade_id + "-open",
-            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Why: {reason}. Ranked by recent liquidity and trend; volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
+            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Why: {reason}. Entry candles {self.s.simple_entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
         )
 
     def record_entry(self, symbol: str, fill: Fill, intent: dict[str, Any]) -> None:
@@ -595,6 +753,7 @@ class Engine:
             "id": trade_id,
             "side": direction,
             "entry_mode": self.s.simple_entry_mode,
+            "entry_timeframe": intent.get("entry_timeframe", "15m"),
             "quantity": str(fill.quantity),
             "entry_price": float(fill.price),
             "entry_fee": float(fill.fee),

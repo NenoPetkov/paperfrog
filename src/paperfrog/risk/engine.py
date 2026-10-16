@@ -11,6 +11,8 @@ from paperfrog.domain.types import SafeError, State
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .sizing import require_equity_margin_allocation
+
 
 @dataclass(frozen=True)
 class Proposal:
@@ -24,6 +26,8 @@ class Proposal:
     stop_fraction: float
     liquidation_distance: float
     participation: float
+    available_margin: float | None = None
+    quantity_step_notional: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -156,16 +160,22 @@ class RiskEngine:
         day = now.date().isoformat()
         if p.target > p.equity * self.s.max_target_notional + 1e-9 or p.gross < p.target:
             raise SafeError("target cap exceeded")
-        if self.s.simple_sizing_mode == "margin" and (
+        if self.s.simple_sizing_mode in {"margin", "equity_range"} and (
             p.target
             > p.equity * self.s.simple_position_margin_cap * self.s.exchange_leverage + 1e-9
         ):
             raise SafeError("position margin cap exceeded")
-        if (
-            abs(p.net_beta) > self.s.max_net_beta
-            or not 0 <= p.participation <= self.s.max_participation
+        if abs(p.net_beta) > self.s.max_net_beta or (
+            self.s.simple_sizing_mode != "equity_range"
+            and not 0 <= p.participation <= self.s.max_participation
         ):
             raise SafeError("beta or liquidity cap exceeded")
+        if self.s.simple_sizing_mode == "equity_range":
+            if p.available_margin is None:
+                raise SafeError("fresh available margin required for equity range sizing")
+            require_equity_margin_allocation(
+                self.s, p.equity, p.target, p.available_margin, p.quantity_step_notional
+            )
         if p.liquidation_distance < max(0.25, 5 * p.stop_fraction):
             raise SafeError("liquidation buffer insufficient")
         with self.store.transaction() as conn:
@@ -206,7 +216,7 @@ class RiskEngine:
                 raise SafeError("open risk cap")
             if active[2] + p.gross > p.equity * self.s.max_gross_notional + 1e-9:
                 raise SafeError("gross exposure cap")
-            if self.s.simple_sizing_mode == "margin" and (
+            if self.s.simple_sizing_mode in {"margin", "equity_range"} and (
                 active[2] + p.gross
                 > p.equity * self.s.simple_total_margin_cap * self.s.exchange_leverage + 1e-9
             ):

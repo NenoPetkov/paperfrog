@@ -1,3 +1,4 @@
+import json
 import time
 from decimal import Decimal
 
@@ -51,6 +52,12 @@ class ExchangeSimulation:
         self.unknown_stop = False
         self.stop_lookup_misses = 0
         self.income = []
+        self.bid = "99.95"
+        self.ask = "100.05"
+        self.bid_size = "100000"
+        self.ask_size = "100000"
+        self.market_time = None
+        self.market_unavailable = False
 
     def order_result(self, key, side, qty, price, status="FILLED"):
         result = {
@@ -75,7 +82,22 @@ class ExchangeSimulation:
         path, method, params = request.url.path, request.method, request.url.params
         self.calls.append((method, path))
         result = None
-        if path.endswith("/account"):
+        if path.endswith(("/bookTicker", "/premiumIndex")):
+            if self.market_unavailable:
+                return httpx.Response(503, json={"code": -1000})
+            now = int(time.time() * 1000) if self.market_time is None else self.market_time
+            result = (
+                {
+                    "bidPrice": self.bid,
+                    "askPrice": self.ask,
+                    "bidQty": self.bid_size,
+                    "askQty": self.ask_size,
+                    "time": now,
+                }
+                if path.endswith("/bookTicker")
+                else {"markPrice": str((Decimal(self.bid) + Decimal(self.ask)) / 2), "time": now}
+            )
+        elif path.endswith("/account"):
             result = {
                 "totalMarginBalance": self.equity,
                 "availableBalance": self.available if self.available is not None else self.equity,
@@ -254,6 +276,7 @@ def test_local_waiver_is_bound_to_account_config_and_strategy(settings):
         {"simple_entry_mode": "reverse"},
         {"simple_entry_profile": "active"},
         {"simple_btc_direction_policy": "neutral_allowed"},
+        {"simple_sizing_mode": "equity_range", "simple_position_margin_cap": 0.5},
     ):
         with pytest.raises(SafeError, match="authorization changed"):
             verify_simple_arm(live_settings(settings, **changes))
@@ -342,6 +365,189 @@ async def test_wrong_exchange_mode_still_blocks(settings, store, filters, attrib
     await adapter.close()
 
 
+def equity_range_options(**changes):
+    return {
+        "simple_sizing_mode": "equity_range",
+        "simple_position_margin_cap": 0.5,
+        "risk_per_trade": 0.04,
+        "max_open_risk": 0.05,
+        "max_target_notional": 1.6,
+        "max_gross_notional": 2.0,
+        "max_net_beta": 2.0,
+        **changes,
+    }
+
+
+@pytest.mark.parametrize("side", [1, -1])
+@pytest.mark.parametrize("available", ["500", "150", "20"])
+async def test_equity_range_live_sizes_without_top_quote_participation_cap(
+    settings, store, filters, side, available
+):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings, store, filters, **equity_range_options()
+    )
+    sim.available = available
+    sim.bid_size = sim.ask_size = "10"
+    if side < 0:
+        row.update(trend_atr=-2, flow=-0.4, prior_low=101)
+    try:
+        await engine.enter("SOLUSDT", row, now)
+        trade = engine.positions()["SOLUSDT"]
+        margin = Decimal(trade["quantity"]) * Decimal(str(trade["entry_price"])) / 2
+        assert trade["side"] == side and margin <= 250
+        if available == "20":
+            assert Decimal("19.75") < margin < 20
+        else:
+            assert margin >= 50
+            expected = min(250, Decimal(available) / Decimal("1.001"))
+            assert expected - 1 < margin <= expected
+        assert Decimal(trade["quantity"]) / 10 > Decimal(".01")
+        allocation = next(
+            json.loads(item["payload"])
+            for item in store.rows("audit")
+            if item["kind"] == "simple_equity_allocation"
+        )
+        assert allocation["remaining_balance"] == (available == "20")
+        assert "liquidity" not in allocation["caps"]
+        assert store.rows("entries")[0]["risk"] <= 20
+        assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+        # Exits are independent of sizing and remain available after disarming.
+        (directory(engine.s) / "live-arm.json").unlink()
+        await engine.close("SOLUSDT", engine.broker.now_ms(), "sizing does not restrict reductions")
+        assert not sim.quantity and await engine.coordinator.reconcile()
+    finally:
+        await adapter.close()
+
+
+async def test_equity_range_does_not_make_a_subminimum_trade_when_risk_is_tight(
+    settings, store, filters
+):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings, store, filters, **equity_range_options(risk_per_trade=0.001)
+    )
+    try:
+        await engine.enter("SOLUSDT", row, now)
+        assert not sim.quantity and not store.rows("orders") and not store.rows("entries")
+        assert any(
+            "10% minimum" in item["payload"]
+            for item in store.rows("audit")
+            if item["kind"] == "simple_entry_skipped"
+        )
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("quantity", ["0.5", "5.1"])
+async def test_equity_range_gateway_rejects_bypass_of_floor_and_ceiling(
+    settings, store, filters, quantity
+):
+    from paperfrog.domain.types import EntryVeto, Order
+
+    engine, sim, adapter, row, now = await setup_engine(
+        settings, store, filters, **equity_range_options()
+    )
+    try:
+        order = Order(
+            client_id="pf-equity-bypass",
+            symbol="SOLUSDT",
+            side=1,
+            quantity=Decimal(quantity),
+            limit_price=Decimal("100"),
+        )
+        with pytest.raises(EntryVeto):
+            await engine.broker.submit(order)
+        assert not sim.quantity and not any(
+            method == "POST" and path.endswith("/order") for method, path in sim.calls
+        )
+    finally:
+        await adapter.close()
+
+
+async def test_equity_range_rechecks_cash_before_submission_and_releases_local_veto(
+    settings, store, filters
+):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings, store, filters, **equity_range_options()
+    )
+    original = engine.broker.submit
+
+    async def changed_funds(order):
+        sim.available = "20"
+        return await original(order)
+
+    engine.broker.submit = changed_funds
+    try:
+        with pytest.raises(SafeError, match="available margin"):
+            await engine.enter("SOLUSDT", row, now)
+        assert not sim.quantity and not store.rows("entries")
+        assert not store.unresolved_orders() and not store.get("simple_pending")
+        assert store.rows("orders")[0]["state"] == "REJECTED"
+        assert store.get("state") == State.RUNNING and store.get("reconciled") is True
+    finally:
+        await adapter.close()
+
+
+async def test_equity_range_paper_positions_fit_the_remaining_open_risk_budget(
+    settings, store, filters
+):
+    from dataclasses import replace
+
+    from test_simple import engine_fixture, quote, row
+
+    s = Settings(_env_file=None, **{**settings.public(), **equity_range_options()})
+    engine = await engine_fixture(s, store, filters)
+    now = 200 * BAR_MS
+    store.put("simple_selected", ["SOLUSDT", "ETHUSDT"])
+    for symbol in ("SOLUSDT", "ETHUSDT"):
+        await engine.quote(replace(quote(symbol), bid=Decimal("99.9"), ask=Decimal("100.1")), now)
+    obs = {**row(), "atr": 1.2, "atr_fraction": 0.012}
+    await engine.enter("SOLUSDT", obs, now)
+    await engine.enter("ETHUSDT", obs, now)
+    entries = store.rows("entries")
+    assert len(engine.positions()) == 2
+    allocations = [
+        json.loads(item["payload"])
+        for item in store.rows("audit")
+        if item["kind"] == "simple_equity_allocation"
+    ]
+    assert (
+        sum(item["risk"] for item in entries) <= allocations[0]["equity"] * s.max_open_risk + 1e-8
+    )
+    assert allocations[0]["limiting_cap"] == "open_risk"
+    assert all(0.1 <= item["margin_fraction"] <= 0.5 for item in allocations)
+
+
+@pytest.mark.parametrize("failure", ["partial", "unknown", "stop"])
+async def test_equity_range_preserves_partial_unwind_and_uncertain_order_recovery(
+    settings, store, filters, failure
+):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings, store, filters, **equity_range_options()
+    )
+    if failure == "partial":
+        sim.partial = True
+    elif failure == "unknown":
+        sim.unknown_order = True
+    else:
+        sim.reject_stop = True
+    try:
+        with pytest.raises(SafeError):
+            await engine.enter("SOLUSDT", row, now)
+        if failure == "unknown":
+            assert store.unresolved_orders()
+            assert await engine.coordinator.reconcile()
+            assert (
+                sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 1
+            )
+        else:
+            assert not sim.quantity and not engine.positions()
+            assert (
+                sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 2
+            )
+    finally:
+        await adapter.close()
+
+
 @pytest.mark.parametrize("profile", ["standard", "active"])
 async def test_live_entry_is_bounded_protected_and_not_duplicated(
     settings, store, filters, profile
@@ -362,6 +568,154 @@ async def test_live_entry_is_bounded_protected_and_not_duplicated(
     await adapter.close()
 
 
+@pytest.mark.parametrize("side", [1, -1])
+async def test_entry_refreshes_price_liquidity_and_margin_after_setup(
+    settings, store, filters, side
+):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings, store, filters, simple_sizing_mode="margin"
+    )
+    if side < 0:
+        row.update(trend_atr=-2, flow=-0.4, prior_low=101)
+    original = adapter.prepare_simple_symbol
+
+    async def prepare(symbol):
+        await original(symbol)
+        sim.bid, sim.ask = "149.95", "150.05"
+        sim.bid_size = sim.ask_size = "100"
+        sim.available = "15"
+
+    adapter.prepare_simple_symbol = prepare
+    try:
+        await engine.enter("SOLUSDT", row, now)
+        trade = engine.positions()["SOLUSDT"]
+        fresh = engine.broker.quotes["SOLUSDT"]
+        price = filters["SOLUSDT"].round_price(
+            fresh.ask * Decimal("1.001") if side > 0 else fresh.bid * Decimal(".999")
+        )
+        expected = filters["SOLUSDT"].round_quantity(Decimal("15") / Decimal("0.5005") / price)
+        assert trade["side"] == side and Decimal(str(trade["entry_price"])) == price
+        assert Decimal(trade["quantity"]) == expected
+        assert fresh.bid_size == fresh.ask_size == Decimal("100")
+        book_index = sim.calls.index(("GET", "/fapi/v1/ticker/bookTicker"))
+        assert any(path.endswith("/symbolConfig") for _, path in sim.calls[:book_index])
+        assert sim.calls.index(("POST", "/fapi/v1/order")) > book_index
+        assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+        assert store.rows("entries")[0]["risk"] <= 500 * engine.s.risk_per_trade
+        assert any(r["kind"] == "simple_entry_refreshed" for r in store.rows("audit"))
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("cached_problem", ["wide", "missing", "stale"])
+async def test_cached_quote_does_not_discard_a_still_valid_candle_setup(
+    settings, store, filters, monkeypatch, cached_problem
+):
+    from dataclasses import replace
+
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    cached = engine.broker.quotes["SOLUSDT"]
+    if cached_problem == "wide":
+        engine.broker.quotes["SOLUSDT"] = replace(cached, bid=Decimal("99"), ask=Decimal("101"))
+    elif cached_problem == "missing":
+        engine.broker.quotes.clear()
+    else:
+        engine.broker.quotes["SOLUSDT"] = replace(cached, timestamp_ms=0)
+    # No shorter signal lifetime: this setup remains eligible 14 minutes into its candle.
+    current_ms = row["timestamp_ms"] + 14 * 60000
+    monkeypatch.setattr(time, "time", lambda: current_ms / 1000)
+    try:
+        await engine.enter("SOLUSDT", row, current_ms)
+        assert sim.quantity > 0 and len(store.rows("entries")) == 1
+        assert engine.broker.quotes["SOLUSDT"].timestamp_ms == current_ms
+    finally:
+        await adapter.close()
+
+
+async def test_current_spread_veto_can_recover_without_consuming_the_signal(
+    settings, store, filters
+):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    sim.bid, sim.ask = "99", "101"
+    try:
+        with pytest.raises(SafeError, match="spread veto"):
+            await engine.enter("SOLUSDT", row, now)
+        assert not sim.quantity and not store.rows("orders") and not store.rows("entries")
+        sim.bid, sim.ask = "99.95", "100.05"
+        await engine.enter("SOLUSDT", row, engine.broker.now_ms())
+        assert sim.quantity > 0 and len(store.rows("entries")) == 1
+        assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 1
+    finally:
+        await adapter.close()
+
+
+async def test_quote_refresh_failure_does_not_consume_or_submit_the_signal(
+    settings, store, filters
+):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    sim.market_unavailable = True
+    try:
+        with pytest.raises(SafeError):
+            await engine.enter("SOLUSDT", row, now)
+        assert not sim.quantity and not store.rows("orders") and not store.rows("entries")
+        assert store.get("state") == State.RUNNING and store.get("reconciled") is True
+        sim.market_unavailable = False
+        await engine.enter("SOLUSDT", row, engine.broker.now_ms())
+        assert sim.quantity > 0 and len(store.rows("entries")) == 1
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("age_ms", [61000, -5000])
+async def test_refreshed_market_data_preserves_existing_freshness_limits(
+    settings, store, filters, age_ms
+):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    sim.market_time = now - age_ms
+    try:
+        with pytest.raises(SafeError, match="stale futures mark data"):
+            await engine.enter("SOLUSDT", row, now)
+        assert not sim.quantity and not store.rows("orders") and not store.rows("entries")
+        assert store.get("state") == State.RUNNING
+    finally:
+        await adapter.close()
+
+
+async def test_quote_refresh_is_only_for_eligible_unconsumed_entry_signals(
+    settings, store, filters
+):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    try:
+        await engine.enter("SOLUSDT", {**row, "flow": 0}, now)
+        assert not any(path.endswith("/bookTicker") for _, path in sim.calls)
+        await engine.enter("SOLUSDT", row, now)
+        await engine.enter("SOLUSDT", row, engine.broker.now_ms())
+        assert sum(path.endswith("/bookTicker") for _, path in sim.calls) == 1
+        assert len(store.rows("entries")) == 1
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("age_ms", [61000, -5000])
+async def test_exit_keeps_quote_age_limits_after_entry_refresh(settings, store, filters, age_ms):
+    from dataclasses import replace
+
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    try:
+        await engine.enter("SOLUSDT", row, now)
+        quote = engine.broker.quotes["SOLUSDT"]
+        engine.broker.quotes["SOLUSDT"] = replace(
+            quote, timestamp_ms=engine.broker.now_ms() - age_ms
+        )
+        with pytest.raises(SafeError, match="fresh quote required for reduction"):
+            await engine.close("SOLUSDT", now - 1000, "age checks still apply")
+        assert sim.quantity > 0
+        assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+        assert len(store.rows("orders")) == 1
+    finally:
+        await adapter.close()
+
+
 async def test_active_live_rules_still_reject_unapproved_experiments(settings, store, filters):
     from dataclasses import replace
 
@@ -377,6 +731,64 @@ async def test_active_live_rules_still_reject_unapproved_experiments(settings, s
             broker=engine.broker,
         )
     await adapter.close()
+
+
+@pytest.mark.parametrize(
+    "condition", ["waiting", "timeout", "risk", "stop", "hold", "confirmed_crisis"]
+)
+async def test_initial_scan_wait_keeps_protection_without_fabricating_a_btc_crisis(
+    settings, store, filters, monkeypatch, condition
+):
+    import paperfrog.simple.service as service_module
+
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    await engine.enter("SOLUSDT", row, now)
+    await engine.restore()
+    service = SimpleService(engine.s)
+    service.store.engine.dispose()
+    await service.exchange.close()
+    service.store, service.engine, service.exchange = store, engine, adapter
+    # A real restart begins with an empty in-memory scan and the default crisis flag.
+    assert not service.rows and service.crisis and not service.scan_complete
+    if condition == "timeout":
+        service.initial_scan_deadline = time.monotonic() - 1
+    elif condition == "risk":
+        store.put(
+            "risk_lock", {"state": State.DAILY_RISK_LOCK, "until": None, "reason": "daily_loss"}
+        )
+    elif condition == "stop":
+        sim.bid, sim.ask = "97.95", "98.05"
+    elif condition == "hold":
+        positions = engine.positions()
+        positions["SOLUSDT"]["opened_ms"] = now - engine.rules.maximum_hold_bars * BAR_MS - 1000
+        store.put("simple_positions", positions)
+    elif condition == "confirmed_crisis":
+        service.rows, service.scan_complete = {"SOLUSDT": row}, True
+
+    async def sleep(seconds):
+        service.stop.set()
+
+    monkeypatch.setattr(service_module.asyncio, "sleep", sleep)
+    try:
+        await service.monitor()
+        if condition == "waiting":
+            assert sim.quantity > 0 and engine.positions()
+            assert store.get("state") == State.PAUSED
+            assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+            assert len(store.rows("orders")) == 1
+        else:
+            assert not sim.quantity and not engine.positions()
+            closed = store.get("simple_closed")[-1]
+            expected = {
+                "timeout": "closed-candle monitoring data unavailable",
+                "risk": "portfolio loss/risk limit reached",
+                "stop": "protective stop or volatility trailing stop reached",
+                "hold": "4-hour holding limit reached",
+                "confirmed_crisis": "BTC market crisis detected",
+            }
+            assert closed["reason"] == expected[condition]
+    finally:
+        await adapter.close()
 
 
 async def test_restart_settles_confirmed_hosted_stop(settings, store, filters):

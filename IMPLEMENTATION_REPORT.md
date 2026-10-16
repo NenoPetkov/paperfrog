@@ -1,5 +1,76 @@
 # paperfrog implementation report
 
+## Equity margin range and removal of quote participation — 2026-10-16
+
+The operator explicitly requested live removal of the top-price participation
+rule and new 10–50% equity margin sizing, with an all-remaining-funds exception.
+The opt-in `equity_range` policy targets up to 50% of total aggregate equity,
+reserves estimated fees, and enforces an ordinary 10% minimum after lot rounding.
+Only insufficient available funds permit a smaller entry; it must consume the
+remaining fee-reserved capacity within one quantity increment. Other risk limits
+cannot create undersized ordinary trades or be overridden to meet the floor.
+
+The old participation cap is absent from this policy's sizing and risk gate.
+It remains enforced in the original modes. Per-trade/open risk, portfolio margin,
+gross/net exposure, leverage, position count, exchange minimums, loss locks and
+protective exits remain. Current open-risk capacity reduces the new allocation
+before reservation. A shared validator enforces range/fallback in planning, risk
+reservation and the live gateway using independently refreshed available margin.
+Short allocation uses the conservative ask-side price, and local pre-submission
+sizing vetoes release only confirmed unsubmitted reservations. Every approved
+allocation records all caps and its determining cap in the private audit.
+
+The range applies to entry sizing snapshots; mark/equity changes after execution
+can change displayed allocation percentages. Larger execution relative to the
+best quote can increase partial/no fills or impact; existing IOC limits, hosted
+protection, partial unwind and uncertain-order reconciliation remain enforced.
+The policy is source/configuration bound and requires renewed local arming.
+PAPER and standard risk sizing remain defaults. No profitability is established.
+
+Verification: 485 tests passed, one credentialed testnet test skipped. Ruff lint
+and formatting passed; strict mypy passed over 27 source files including risk,
+execution, simple strategy, exchange and CLI. New cases cover both directions,
+ordinary 10–50% allocations, fee-reserved remaining funds, disabled participation
+limits, independent gateway bounds, existing risk/lock budgets, local veto release,
+partial unwind and uncertain-order query-only recovery. Software checks do not
+establish profitability.
+
+## Exchange entry snapshot freshness — 2026-10-16
+
+At the operator's request, qualifying exchange entries now refresh the selected
+coin's book/mark and account margin after symbol setup and before sizing/pricing.
+The existing signal, cost, spread, health and BTC gates are checked with current
+inputs; exact AI/BTC intent binding and final broker checks remain. Cheap candidate
+screening uses minimum costs only to decide whether to request fresh data, never
+as order permission. It does not discard a candidate because an old quote has a
+wide spread. Refresh failures and spread vetoes before order intent do not consume
+the candle signal. Order uncertainty still preserves query-only recovery.
+
+No additional entry threshold, price-distance veto, confirmation candle, shorter
+signal lifetime or AI review is introduced. The 15-minute technical inputs and
+permission boundary remain unchanged, as do sizing limits, leverage, loss locks,
+cooldowns and exits. Current prices/liquidity/margin can still alter quantity or
+an existing gate's outcome; identical realized trade counts cannot be guaranteed.
+Historical PAPER replay remains deterministic using its supplied quote snapshots.
+
+Verification: 450 tests passed, one credentialed testnet test skipped. Ruff lint
+and formatting passed; strict mypy passed over 26 source files including risk,
+execution, simple strategy, exchange and CLI. Tests cover both entry directions,
+changed quotes/margin during setup, recovery from cached or unavailable quotes,
+full candle eligibility, unchanged data-age limits, protective exits and duplicate
+submission prevention. Live reductions use the current exchange clock so a newly
+refreshed quote is not rejected using an earlier iteration timestamp. These checks
+establish software behavior, not profitability or a guaranteed trade count.
+
+Live activation exposed a pre-existing startup race: the initial `crisis=True`
+flag could close an existing position before the first scan had returned. A
+bounded initial-scan wait now distinguishes unknown context from an observed BTC
+crisis. Stops, holding-time and financial-risk exits continue during this wait;
+new entries remain paused. Missing monitoring data still exits after the existing
+market-staleness timeout. Regression cases cover pending/expired initial scans,
+actual BTC crisis, stop, holding-time and financial-risk exits. Deployment retained
+the actual closure in trade/audit history and did not invoke risk resets.
+
 ## Neutral BTC and active AI entry review — 2026-10-16
 
 At the operator's request, optional `SIMPLE_BTC_DIRECTION_POLICY=neutral_allowed`
@@ -385,3 +456,40 @@ Two fixed candidates were implemented and tested against the same retained input
 165 software tests passed and one optional credentialed testnet test was skipped; Ruff and strict mypy checks passed. Software checks do not establish profitability. New PAPER entries are manually paused while collection/monitoring continue; existing positions are flat. Risk anchors/counters/locks are preserved. No real-money start or live arming occurred. New strategy modes were not activated in the running process. The user intends to explain the goal in a new conversation.
 
 Retained results: `reports/simple-reversal-study-v1/summary.json` and `comparison.csv`. Handoff: `reports/reversal-handoff.json`.
+# One-minute entry timing
+
+`SIMPLE_ENTRY_TIMEFRAME=1m` adds a separately scheduled closed-minute scan and
+watchlist ranking across the entire liquid pool. Entry timing requires EMA 5/20,
+same-direction one/three/five-minute moves, fast-average slope, latest candle body
+and taker flow. Counter-moves after the close are checked against half the minute
+ATR with a freshly read quote at dispatch. Minute permissions expire at the next
+boundary and bind the source/configuration, exact order and most recent minute
+observation. Invalid/gapped/future/stale data and changed observations fail closed.
+
+AI permission is reviewed every minute when `SIMPLE_AI_REVIEW_MINUTES=1`, with a
+1,440-attempt UTC daily cap. The default remains 15-minute reviews and 96 attempts.
+Decisions expire at the next configured review boundary, including at actual order
+dispatch. Requests use at most 40 seconds and cannot outlive that permission window.
+The single-attempt journal and existing usage survive restarts or a cadence change;
+failed, refused, stale or late responses do not permit a static fallback. Monitoring
+and the minute scan continue independently while the request is pending. Diagnostic
+forecasts retain their separate 15-minute horizon. Rules evaluate minute features in the
+permission window and cannot bypass the deterministic slope gate. Inputs identify
+the differing feature horizons and define the sign of downward breakout distance.
+The previous generated `breakout_down_atr <= 0` condition is not treated as proof
+of a fresh downward breakout. AI may still veto an otherwise eligible minute entry.
+
+Risk ATR, stop/trailing distances, BTC correlation/lag context and market-crisis
+checks retain 15-minute data. Independent minute BTC direction/shock checks remain.
+No size, leverage, entry-count, holding-time or loss limit increases are introduced.
+Pre-existing positions retain their original trend exit, hosted protection and
+holding-time checks; new entries record their own timeframe. Entry permission
+failure cannot veto reduce-only protection or exits. Historical 15-minute replay
+refuses this mode because it cannot reproduce these minute decisions.
+
+Tests cover aligned slopes in both directions, rebounds despite a persistent EMA
+trend, missing/duplicate/invalid/unclosed candles, minute expiry, order binding,
+mid-submission price turns, fresh watchlist ranking, AI permission/forecast timing,
+BTC gates, preserved stop sizing and legacy-position/reduce-only exits. Software
+validation does not establish profitability. Restart and renewed local LIVE arming
+are required to load a changed source/configuration.

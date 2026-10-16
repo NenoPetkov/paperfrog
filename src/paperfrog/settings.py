@@ -72,15 +72,17 @@ class Settings(BaseSettings):
     simple_scan_limit: int = Field(100, ge=2, le=100)
     simple_selected_count: int = Field(2, ge=1, le=10)
     simple_poll_seconds: int = Field(5, ge=2, le=30)
+    simple_entry_timeframe: Literal["1m", "15m"] = "15m"
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active"] = "standard"
     simple_max_hold_hours: int = Field(4, ge=1, le=24)
-    simple_sizing_mode: Literal["risk", "margin"] = "risk"
+    simple_sizing_mode: Literal["risk", "margin", "equity_range"] = "risk"
     simple_position_margin_cap: float = Field(0.8, gt=0, le=0.8)
     simple_total_margin_cap: float = Field(1.0, gt=0, le=1.0)
     futures_account_mode: Literal["isolated", "credits"] = "isolated"
     simple_live_research_waiver: bool = False
     simple_ai_enabled: bool = False
+    simple_ai_review_minutes: int = Field(15, ge=1, le=15)
     simple_ai_output_limit: int = Field(4000, ge=512, le=8192)
     simple_btc_reference_enabled: bool = True
     simple_btc_direction_policy: Literal["strict", "neutral_allowed"] = "strict"
@@ -89,9 +91,13 @@ class Settings(BaseSettings):
     def validate_sizing_budget(self) -> Self:
         if self.simple_position_margin_cap > self.simple_total_margin_cap:
             raise ValueError("position margin cap exceeds total margin cap")
-        if self.simple_sizing_mode == "margin":
+        if self.simple_sizing_mode in {"margin", "equity_range"}:
             if self.strategy_profile != "simple":
                 raise ValueError("margin sizing requires the simple profile")
+            if self.simple_sizing_mode == "equity_range" and not (
+                0.1 <= self.simple_position_margin_cap <= 0.5
+            ):
+                raise ValueError("equity range sizing requires a 10% to 50% position margin cap")
         elif (
             self.risk_per_trade > 0.002
             or self.max_open_risk > 0.005
@@ -104,6 +110,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.simple_ai_review_minutes not in {1, 15}:
+            raise ValueError("AI review interval must be 1 or 15 minutes")
+        if self.simple_ai_review_minutes == 1 and self.simple_entry_timeframe != "1m":
+            raise ValueError("one-minute AI reviews require one-minute entry candles")
+        if self.simple_entry_timeframe == "1m" and (
+            self.strategy_profile != "simple" or self.simple_entry_mode != "trend"
+        ):
+            raise ValueError("one-minute entries require the simple trend profile")
         if self.simple_ai_enabled and (
             self.strategy_profile != "simple" or self.simple_entry_mode != "trend"
         ):
@@ -134,13 +148,14 @@ class Settings(BaseSettings):
         return dict(self.model_dump(mode="json"))
 
     def simple_parameters(self) -> dict[str, object]:
-        return dict(
+        parameters = dict(
             self.model_dump(
                 mode="json",
                 include={
                     "simple_selected_count",
                     "simple_entry_mode",
                     "simple_entry_profile",
+                    "simple_entry_timeframe",
                     "simple_max_hold_hours",
                     "simple_sizing_mode",
                     "simple_position_margin_cap",
@@ -157,12 +172,28 @@ class Settings(BaseSettings):
                     "high_water_drawdown",
                     "profit_guard_scale",
                     "simple_ai_enabled",
+                    "simple_ai_review_minutes",
                     "simple_ai_output_limit",
                     "simple_btc_reference_enabled",
                     "simple_btc_direction_policy",
                 },
             )
         )
+        if self.simple_sizing_mode == "equity_range":
+            parameters.update(
+                simple_position_margin_min=0.1,
+                simple_remaining_margin_fallback=True,
+                simple_liquidity_cap_enabled=False,
+            )
+        return parameters
+
+    @property
+    def simple_entry_bar_ms(self) -> int:
+        return 60_000 if self.simple_entry_timeframe == "1m" else 900_000
+
+    @property
+    def simple_ai_review_bar_ms(self) -> int:
+        return self.simple_ai_review_minutes * 60_000
 
     @property
     def config_hash(self) -> str:

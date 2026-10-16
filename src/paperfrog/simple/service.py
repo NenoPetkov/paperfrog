@@ -22,12 +22,15 @@ from paperfrog.telegram.control import Controls, Telegram
 from paperfrog.telegram.events import EventNotifications
 from paperfrog.telegram.formatting import positions_text, status_text
 
-from .adaptive import Advisor, enrich
+from .adaptive import Advisor, enrich, request_limit
 from .authorization import directory, verify_simple_arm
 from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_reference, pair_features
-from .data import candles, funding, scan
+from .data import candles, funding, quote_snapshot, scan
 from .engine import Engine
 from .live_broker import LiveBroker
+from .minute import HISTORY_BARS
+from .minute import direction as minute_direction
+from .minute import frame as minute_frame
 from .strategy import BAR_MS, choose, execution_rules, indicators, require_execution, strategy_name
 
 
@@ -47,8 +50,12 @@ class SimpleService:
         self.exchange = BinanceAdapter(s)
         self.engine: Engine | None = None
         self.rows: dict[str, dict[str, Any]] = {}
+        self.context_rows: dict[str, dict[str, Any]] = {}
+        self.minute_frames: dict[str, Any] = {}
         self.selected: list[str] = []
         self.crisis = True
+        self.scan_complete = False
+        self.initial_scan_deadline = time.monotonic() + s.market_stale_seconds
         self.stop = asyncio.Event()
         self.mutex = asyncio.Lock()
         self.controls = Controls(s, self.store, self.resume, self.flatten, self.status)
@@ -71,7 +78,9 @@ class SimpleService:
                 or not self.selected
                 or self.crisis
                 or any(
-                    not 0 <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0) < BAR_MS
+                    not 0
+                    <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0)
+                    < self.s.simple_entry_bar_ms
                     for symbol in self.selected
                 )
             ):
@@ -124,8 +133,13 @@ class SimpleService:
                 + strategy_name(self.s.simple_entry_mode, self.rules),
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
+                "entry_timeframe": self.s.simple_entry_timeframe,
+                "ai_review_minutes": self.s.simple_ai_review_minutes,
+                "risk_context_timeframe": "15m",
                 "loaded_settings": self.s.simple_parameters(),
-                "breakout_minutes": self.rules.breakout_bars * BAR_MS // 60000,
+                "breakout_minutes": 5
+                if self.s.simple_entry_timeframe == "1m"
+                else self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
                 "selected": self.selected,
@@ -142,6 +156,8 @@ class SimpleService:
                 "profitability": "unproven",
                 "adaptive_ai": {
                     "enabled": self.s.simple_ai_enabled,
+                    "review_minutes": self.s.simple_ai_review_minutes,
+                    "max_requests_per_utc_day": request_limit(self.s),
                     "model": self.s.openai_primary_model if self.s.simple_ai_enabled else None,
                     "status": self.store.get("simple_ai_status"),
                     "last_review": self.store.get("simple_ai_active"),
@@ -192,7 +208,7 @@ class SimpleService:
                                 ),
                                 self.rules,
                             )
-                            if self.advisor is not None:
+                            if self.advisor is not None or self.s.simple_entry_timeframe == "1m":
                                 frame = await asyncio.to_thread(enrich, frame)
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
                             blocked = False
@@ -242,31 +258,39 @@ class SimpleService:
                             else None,
                         )
                         self.store.put("simple_btc_pairs", pairs)
-                    self.rows = rows
+                    self.context_rows = rows
+                    if self.s.simple_entry_timeframe == "15m":
+                        self.rows = rows
                     self.crisis = "BTCUSDT" not in rows or any(
                         blocked for _, _, blocked, _ in observations
                     )
-                    self.selected = choose(
+                    context_selected = choose(
                         {symbol: rows[symbol] for symbol in snapshot["symbols"] if symbol in rows},
                         self.s,
                         self.rules,
                     )
-                    self.store.put("simple_selected", self.selected)
+                    if self.s.simple_entry_timeframe == "15m":
+                        self.selected = context_selected
+                        self.store.put("simple_selected", self.selected)
                     self.store.put("simple_pool", snapshot["symbols"])
                     self.store.put("simple_scan_at_ms", int(time.time() * 1000))
                     self.store.audit(
-                        "simple_selection",
+                        "simple_selection"
+                        if self.s.simple_entry_timeframe == "15m"
+                        else "simple_risk_context",
                         {
                             "asof_ms": boundary,
                             "pool_size": len(snapshot["symbols"]),
                             "usable_size": len(rows),
-                            "selected": self.selected,
+                            "selected": context_selected,
                             "selection": "recent trailing liquidity, stable volatility and trend strength",
                             "execution_mode": self.s.trading_mode,
                         },
                     )
+                    if self.s.simple_entry_timeframe == "15m":
+                        self.scan_complete = True
                 last_boundary = boundary
-                if self.advisor is not None:
+                if self.advisor is not None and self.s.simple_entry_timeframe == "15m":
                     await self.advisor.review(
                         {
                             symbol: frame
@@ -279,6 +303,147 @@ class SimpleService:
             except (SafeError, ValueError, OSError, KeyError) as exc:
                 self.store.audit("simple_scan_degraded", {"reason": type(exc).__name__})
                 await asyncio.sleep(10)
+
+    async def refresh_minutes(self, boundary: int) -> None:
+        """Rank the entire liquid pool every minute, independently of slow AI reviews."""
+        if not self.context_rows:
+            return
+        pool = list(
+            dict.fromkeys(
+                [
+                    *self.store.get("simple_pool", []),
+                    *(self.engine.positions() if self.engine else {}),
+                ]
+            )
+        )
+        contexts = self.context_rows
+        if int(contexts.get(BTC, {}).get("timestamp_ms", 0)) != boundary // BAR_MS * BAR_MS:
+            raise SafeError("waiting for current closed 15-minute risk context")
+        semaphore = asyncio.Semaphore(5)
+
+        async def one(symbol: str) -> tuple[str, Any]:
+            context = contexts.get(symbol)
+            if context is None or symbol == BTC:
+                return symbol, None
+            async with semaphore:
+                try:
+                    async with asyncio.timeout(12):
+                        raw = await self.exchange.request(
+                            "GET",
+                            "/fapi/v1/klines",
+                            {
+                                "symbol": symbol,
+                                "interval": "1m",
+                                "limit": HISTORY_BARS,
+                                "startTime": boundary - HISTORY_BARS * MINUTE_MS,
+                                "endTime": boundary - 1,
+                            },
+                        )
+                    data = await asyncio.to_thread(minute_frame, raw, context, boundary)
+                    await asyncio.to_thread(
+                        self.lake.append,
+                        "perp_1m",
+                        symbol,
+                        data[
+                            [
+                                "timestamp_ms",
+                                "open_ms",
+                                "open",
+                                "high",
+                                "low",
+                                "close",
+                                "quote_volume",
+                                "taker_buy_quote",
+                            ]
+                        ],
+                        "binance_simple_closed_minute_klines",
+                    )
+                    return symbol, data
+                except (SafeError, ValueError, TypeError, KeyError, IndexError, TimeoutError):
+                    return symbol, None
+
+        observations = await asyncio.gather(*(one(symbol) for symbol in pool))
+        if not 0 <= self.now_ms() - boundary < MINUTE_MS:
+            raise SafeError("one-minute scan expired; new entries blocked")
+        frames = {symbol: data for symbol, data in observations if data is not None}
+        rows = {symbol: data.iloc[-1].to_dict() for symbol, data in frames.items()}
+        eligible = {
+            symbol: row for symbol, row in rows.items() if minute_direction(row, self.rules)[0]
+        }
+        selected = choose(eligible, self.s, self.rules)
+        async with self.mutex:
+            self.rows, self.minute_frames, self.selected = rows, frames, selected
+            # Missing observations immediately revoke dispatch permission for that symbol.
+            for symbol in pool:
+                self.store.put("simple_minute:" + symbol, rows.get(symbol))
+            self.store.put("simple_selected", selected)
+            self.store.put("simple_scan_at_ms", self.now_ms())
+            self.store.audit(
+                "simple_selection",
+                {
+                    "asof_ms": boundary,
+                    "entry_timeframe": "1m",
+                    "pool_size": len(pool),
+                    "usable_size": len(rows),
+                    "selected": selected,
+                    "selection": "closed one-minute EMA 5/20, aligned 1/3/5-minute slope and flow",
+                    "execution_mode": self.s.trading_mode,
+                    "signals": {
+                        symbol: {
+                            key: rows[symbol][key]
+                            for key in (
+                                "close",
+                                "trend_atr",
+                                "flow",
+                                "return_1m",
+                                "return_3m",
+                                "return_5m",
+                            )
+                        }
+                        for symbol in selected
+                    },
+                },
+            )
+            self.scan_complete = True
+
+    async def minute_research(self) -> None:
+        last_boundary = -1
+        while not self.stop.is_set():
+            boundary = self.now_ms() // MINUTE_MS * MINUTE_MS
+            if boundary == last_boundary or not self.context_rows:
+                await asyncio.sleep(1)
+                continue
+            try:
+                await self.refresh_minutes(boundary)
+                last_boundary = boundary
+            except (SafeError, ValueError, OSError, KeyError) as exc:
+                self.store.audit("simple_minute_degraded", {"error_type": type(exc).__name__})
+                await asyncio.sleep(5)
+
+    async def minute_ai_reviews(self) -> None:
+        """Review fresh minute observations on the locally configured AI cadence."""
+        last_boundary = -1
+        while not self.stop.is_set():
+            review_ms = self.s.simple_ai_review_bar_ms
+            boundary = self.now_ms() // review_ms * review_ms
+            frames = {
+                symbol: data[data.timestamp_ms <= boundary]
+                for symbol, data in self.minute_frames.items()
+            }
+            selected = [
+                symbol
+                for symbol in self.selected
+                if (
+                    symbol in frames
+                    and len(frames[symbol]) >= 61
+                    and int(frames[symbol].iloc[-1].timestamp_ms) == boundary
+                )
+            ]
+            if boundary == last_boundary or not selected or self.advisor is None:
+                await asyncio.sleep(1)
+                continue
+            await self.advisor.review(frames, selected, boundary)
+            last_boundary = boundary
 
     async def bitcoin_reference(self) -> None:
         """Refresh the independent short-term BTC gate every closed minute."""
@@ -314,21 +479,7 @@ class SimpleService:
                 await asyncio.sleep(5)
 
     async def fetch_quote(self, symbol: str) -> Quote:
-        book, premium = await asyncio.gather(
-            self.exchange.request("GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol}),
-            self.exchange.request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol}),
-        )
-        if not 0 <= self.now_ms() - int(premium["time"]) <= self.s.market_stale_seconds * 1000:
-            raise SafeError("stale futures mark data")
-        return Quote(
-            symbol,
-            Decimal(book["bidPrice"]),
-            Decimal(book["askPrice"]),
-            Decimal(book["bidQty"]),
-            Decimal(book["askQty"]),
-            Decimal(premium["markPrice"]),
-            int(book["time"]),
-        )
+        return await quote_snapshot(self.exchange, symbol)
 
     async def monitor(self) -> None:
         while not self.stop.is_set():
@@ -395,14 +546,31 @@ class SimpleService:
                             self.store.put("local_flatten_request", None)
                             self.store.audit("simple_flatten_verified", {"operation": operation})
                     if engine.positions() or self.selected:
-                        await engine.monitor(self.now_ms(), self.rows, self.crisis)
+                        observed_scan = self.scan_complete or bool(self.rows)
+                        awaiting_initial_scan = (
+                            not observed_scan and time.monotonic() < self.initial_scan_deadline
+                        )
+                        await engine.monitor(
+                            self.now_ms(),
+                            {
+                                **self.context_rows,
+                                **{
+                                    symbol: {**row, "risk_context": self.context_rows.get(symbol)}
+                                    for symbol, row in self.rows.items()
+                                },
+                            },
+                            self.crisis if observed_scan else False,
+                            awaiting_initial_scan=awaiting_initial_scan,
+                        )
                     self.store.put("market_healthy_at", time.time() if fetched else 0)
                     now = self.now_ms()
                     fresh = (
                         bool(self.selected)
                         and not self.crisis
                         and all(
-                            0 <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0) < BAR_MS
+                            0
+                            <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0)
+                            < self.s.simple_entry_bar_ms
                             for symbol in self.selected
                         )
                         and all(
@@ -550,6 +718,14 @@ class SimpleService:
                     tasks.append(
                         asyncio.create_task(self.bitcoin_reference(), name="BTC minute reference")
                     )
+                if self.s.simple_entry_timeframe == "1m":
+                    tasks.append(
+                        asyncio.create_task(self.minute_research(), name="one-minute entries")
+                    )
+                    if self.advisor is not None:
+                        tasks.append(
+                            asyncio.create_task(self.minute_ai_reviews(), name="AI entry policy")
+                        )
                 if self.telegram:
                     tasks.append(
                         asyncio.create_task(self.telegram.poll(), name="Telegram commands")

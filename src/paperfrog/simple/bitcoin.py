@@ -245,9 +245,12 @@ def entry_gate(
     reason = direction_gate(s, store, side, now_ms)
     if reason:
         return reason
+    expected_pair_asof = int(row["timestamp_ms"])
+    if s.simple_entry_timeframe == "1m":
+        expected_pair_asof = expected_pair_asof // BAR_MS * BAR_MS
     if (
         row.get("btc_pair_valid") is not True
-        or int(row.get("btc_pair_asof_ms", 0)) != int(row["timestamp_ms"])
+        or int(row.get("btc_pair_asof_ms", 0)) != expected_pair_asof
         or not 0 <= now_ms - int(row["btc_pair_asof_ms"]) < BAR_MS
     ):
         return "BTC/altcoin lag evidence missing, weak or stale"

@@ -88,6 +88,10 @@ async def replay(
     memory_ledger: bool = False,
 ) -> dict[str, Any]:
     require_paper(s)
+    if s.simple_entry_timeframe == "1m":
+        raise SafeError(
+            "one-minute entry replay needs recorded minute signals and 15-minute risk context"
+        )
     if s.simple_ai_enabled:
         raise SafeError(
             "adaptive AI replay requires recorded forward decisions; historical AI is not fabricated"

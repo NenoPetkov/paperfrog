@@ -5,20 +5,45 @@ import math
 import re
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
 
 from paperfrog.data.lake import Lake
 from paperfrog.data.universe import STABLE
-from paperfrog.domain.types import SafeError
+from paperfrog.domain.types import Quote, SafeError
 from paperfrog.exchange.binance import BinanceAdapter
 from paperfrog.settings import Settings
 
 from .strategy import BAR_MS, indicators, require_execution
 
 
-def normalize(rows: list[list[Any]], end_ms: int) -> pd.DataFrame:
+async def quote_snapshot(adapter: BinanceAdapter, symbol: str) -> Quote:
+    """Read current book and mark together, with the existing market-age limit."""
+    book, premium = await asyncio.gather(
+        adapter.request("GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol}),
+        adapter.request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol}),
+    )
+    now_ms = int(time.time() * 1000) + adapter.offset_ms
+    maximum_age_ms = adapter.s.market_stale_seconds * 1000
+    if not 0 <= now_ms - int(premium["time"]) <= maximum_age_ms:
+        raise SafeError("stale futures mark data")
+    quote = Quote(
+        symbol,
+        Decimal(book["bidPrice"]),
+        Decimal(book["askPrice"]),
+        Decimal(book["bidQty"]),
+        Decimal(book["askQty"]),
+        Decimal(premium["markPrice"]),
+        int(book["time"]),
+    )
+    if not 0 <= now_ms - quote.timestamp_ms <= maximum_age_ms:
+        raise SafeError("simple quote stale or future dated")
+    return quote
+
+
+def normalize(rows: list[list[Any]], end_ms: int, interval_ms: int = BAR_MS) -> pd.DataFrame:
     records = [
         {
             "timestamp_ms": int(r[6]) + 1,
@@ -36,7 +61,7 @@ def normalize(rows: list[list[Any]], end_ms: int) -> pd.DataFrame:
     if not records:
         raise SafeError("no closed futures candles returned")
     x = pd.DataFrame(records)
-    if not (x.open_ms == x.timestamp_ms - BAR_MS).all():
+    if not (x.open_ms == x.timestamp_ms - interval_ms).all():
         raise SafeError("invalid futures candle availability")
     return x
 

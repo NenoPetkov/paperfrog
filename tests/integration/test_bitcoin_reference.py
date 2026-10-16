@@ -443,15 +443,15 @@ async def test_btc_reversal_before_dispatch_prevents_the_entry(settings, store, 
         store.put("simple_btc_fast", fast)
     store.put("consecutive_losses", 2)
     anchors_before = store.get("anchors")
-    original = engine.broker.refresh
+    original = engine.broker.submit
 
-    async def reverse_during_refresh():
-        await original()
+    async def reverse_during_submit(order):
         value = store.get("simple_btc_fast")
         value["direction"] = -1
         store.put("simple_btc_fast", value)
+        return await original(order)
 
-    engine.broker.refresh = reverse_during_refresh
+    engine.broker.submit = reverse_during_submit
     with pytest.raises(SafeError, match="BTC"):
         await engine.enter("SOLUSDT", {**obs, **fields}, now_ms)
     assert not sim.quantity
