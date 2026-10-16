@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     simple_poll_seconds: int = Field(5, ge=2, le=30)
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active"] = "standard"
+    simple_max_hold_hours: int = Field(4, ge=1, le=24)
     simple_sizing_mode: Literal["risk", "margin"] = "risk"
     simple_position_margin_cap: float = Field(0.8, gt=0, le=0.8)
     simple_total_margin_cap: float = Field(1.0, gt=0, le=1.0)
@@ -122,6 +123,29 @@ class Settings(BaseSettings):
 
     def public(self) -> dict[str, object]:
         return dict(self.model_dump(mode="json"))
+
+    def simple_parameters(self) -> dict[str, object]:
+        return dict(
+            self.model_dump(
+                mode="json",
+                include={
+                    "simple_selected_count",
+                    "simple_entry_mode",
+                    "simple_entry_profile",
+                    "simple_max_hold_hours",
+                    "simple_sizing_mode",
+                    "simple_position_margin_cap",
+                    "simple_total_margin_cap",
+                    "soft_loss_cooldown_minutes",
+                    "risk_per_trade",
+                    "max_open_risk",
+                    "max_target_notional",
+                    "max_gross_notional",
+                    "max_net_beta",
+                    "max_concurrent_strategy_trades",
+                },
+            )
+        )
 
     @property
     def config_hash(self) -> str:

@@ -23,13 +23,22 @@ across open trades. Daily/weekly/drawdown locks remain unchanged. A single stop 
 therefore exceed the daily loss threshold before that lock blocks later entries;
 these limits do not guarantee a maximum realized loss or prevent liquidation.
 
-The existing two-position limit, LONG/SHORT signals and four-hour holding limit
-remain. The default sizing mode and default limits remain unchanged. No existing
+The existing two-position limit and LONG/SHORT signals remain. The combined preset
+sets an eight-hour maximum hold; `SIMPLE_MAX_HOLD_HOURS` defaults to four hours and
+accepts 1–24. Stops, trend reversal and risk exits can close positions earlier.
+The default sizing mode and default limits remain unchanged. No existing
 live environment configuration or authorization is updated by this preset.
 
 `soft_loss_cooldown_minutes` controls future consecutive-loss locks. The default
 is 720 minutes; both `five-minute-cooldown.yaml` and the combined preset select five minutes. Existing lock
 expiry timestamps, loss history and other risk limits are preserved.
+
+No build is required. A running Python process keeps its loaded code and settings.
+`simple status` reports `configured_settings` and `loaded_settings` separately;
+the latter is the last startup snapshot (null for older processes), not proof that
+the process is still alive. A restart is required to load changes, and LIVE source
+or configuration changes require renewed local authorization. The combined YAML
+is PAPER-only by default and does not modify `.env` or existing lock expiries.
 
 Telegram notifications now follow the execution and risk audit log, including
 filled entries, reductions, closed PnL, soft and portfolio risk locks, execution

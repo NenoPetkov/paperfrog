@@ -115,11 +115,12 @@ ACTIVE_RULES = replace(
 
 
 def execution_rules(s: Settings) -> Rules:
+    rules = RULES
     if s.simple_entry_profile == "active":
         if s.simple_entry_mode != "trend":
             raise SafeError("active entry profile requires trend mode")
-        return ACTIVE_RULES
-    return RULES
+        rules = ACTIVE_RULES
+    return replace(rules, maximum_hold_bars=s.simple_max_hold_hours * 4)
 
 
 def strategy_name(mode: SimpleEntryMode, rules: Rules = RULES) -> str:

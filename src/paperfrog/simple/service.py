@@ -106,6 +106,7 @@ class SimpleService:
                 "strategy": strategy_name(self.s.simple_entry_mode, self.rules),
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
+                "loaded_settings": self.s.simple_parameters(),
                 "breakout_minutes": self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
@@ -361,6 +362,7 @@ class SimpleService:
                 )
                 await self.engine.restore()
                 self.store.put("operating_mode", self.s.trading_mode)
+                self.store.put("simple_loaded_settings", self.s.simple_parameters())
                 if not once:
                     self.store.audit("simple_process_started", {"mode": self.s.trading_mode})
                 if live_broker is not None:

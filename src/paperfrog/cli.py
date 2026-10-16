@@ -503,6 +503,8 @@ def simple_status() -> None:
             "risk_lock": store.get("risk_lock"),
             "live_permitted": armed,
             "live_armed": armed,
+            "configured_settings": s.simple_parameters(),
+            "loaded_settings": store.get("simple_loaded_settings"),
             "research_requirements": "waived_by_operator"
             if s.simple_live_research_waiver
             else "required",

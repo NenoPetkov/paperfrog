@@ -83,6 +83,25 @@ def test_ten_coin_watchlist_preserves_eligibility_and_position_cap(settings):
         Settings(_env_file=None, **{**settings.public(), "simple_selected_count": 11})
 
 
+def test_eight_hour_holding_limit_still_honors_earlier_stops(settings):
+    s = Settings(_env_file=None, **{**settings.public(), "simple_max_hold_hours": 8})
+    rules = execution_rules(s)
+    trade = {"side": 1, "stop_price": 90, "opened_ms": 0, "entry_mode": "trend"}
+    assert rules.maximum_hold_bars == 32
+    assert exit_reason(trade, 100, 4 * 3600_000, None, rules) is None
+    assert exit_reason(trade, 100, 8 * 3600_000 - 1, None, rules) is None
+    assert exit_reason(trade, 100, 8 * 3600_000, None, rules) == "8-hour holding limit reached"
+    assert "stop" in exit_reason(trade, 89, 3600_000, None, rules)
+    assert execution_rules(settings).maximum_hold_bars == 16
+
+
+def test_displayed_operating_settings_exclude_credentials(settings):
+    parameters = settings.simple_parameters()
+    assert parameters["simple_max_hold_hours"] == 4
+    assert parameters["soft_loss_cooldown_minutes"] == 720
+    assert not any("secret" in k or "token" in k or "api_key" in k for k in parameters)
+
+
 async def engine_fixture(settings, store, filters):
     engine = Engine(settings, store, filters)
     await engine.restore()
