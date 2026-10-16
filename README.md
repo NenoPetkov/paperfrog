@@ -40,11 +40,13 @@ the process is still alive. A restart is required to load changes, and LIVE sour
 or configuration changes require renewed local authorization. The combined YAML
 is PAPER-only by default and does not modify `.env` or existing lock expiries.
 
-Telegram notifications now follow the execution and risk audit log, including
-filled entries, reductions, closed PnL, soft and portfolio risk locks, execution
-errors, pauses and process restarts. The first subscription sends a current-state
-snapshot instead of replaying old history. Each chat has a durable delivery cursor;
-failed sends retry, and identical repeated errors are suppressed for five minutes.
+Telegram sends friendly startup/running messages, successful buys and sells, closed
+PnL, and actual status changes with their reasons. Routine skipped candidates
+(including sizes below the exchange minimum) stay in the local audit instead of
+generating per-coin Telegram alerts. `/status` shows only status and open positions.
+Loss cooldowns remain enforced and explain when automatic recovery is possible.
+The first subscription sends a current-state snapshot instead of replaying old
+history. Each chat has a durable delivery cursor; failed sends retry.
 A crash after Telegram accepts a message but before the cursor is saved can cause
 a duplicate. Graceful shutdown attempts a bounded final delivery; queued messages
 survive a restart, but an offline process cannot send immediate alerts.
@@ -97,8 +99,8 @@ Stops only tighten. Existing per-trade, exposure, daily/weekly/drawdown, cooldow
 entry-count limits apply. Total direct exposure is additionally bounded by the existing
 net-beta notional budget, without assuming two opposite coin positions offset risk.
 
-Telegram sends OPEN LONG/SHORT and CLOSE explanations, price/size/stop and realized
-PnL after fees/funding. `/status`, `/positions`, `/last_signal`, `/pause`, `/resume`
+Telegram reports filled buys/sells with direction, price and size, plus closed
+PnL with estimated fees and recorded funding. `/status`, `/positions`, `/last_signal`, `/pause`, `/resume`
 and confirmed `/flatten` work with the simple profile. Notification retries run separately
 from monitoring. `/pause` pauses entries while exits continue. Restart with open PAPER
 positions restores protection and stays paused until explicit `/resume`.
@@ -124,7 +126,7 @@ remains two concurrent positions, subject to the same sizing, exposure, cooldown
 entry-count and loss limits. A running process keeps its loaded settings; changing
 this value requires a restart and, for LIVE, renewed local authorization.
 
-The profile is shown by `/status`, `/simple` and `simple status`, and PAPER backtests
+The profile is shown by `/simple` and `simple status`, and PAPER backtests
 use its matching indicator and execution rules. Switch only while flat: changing
 profiles with open positions is refused. A live profile/configuration or source change
 invalidates the existing local arm; stop the service and complete local authorization
@@ -171,6 +173,16 @@ If the process is offline, the initial stop remains available, while software tr
 wait for recovery. Confirmed hosted stop executions are reconciled after restart.
 Account equity includes actual exchange costs and funding; per-trade PnL notifications
 currently use configured fee estimates and authoritative funding income.
+
+Stop verification journals the exchange algo ID and retries a temporarily missing
+lookup at most twice, within the existing protection deadline. It never resubmits
+the stop or entry. The identifiers follow Binance's [algo order API](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade#query-algo-order).
+Signed timestamp failures resync and retry reads only. Market scans offload disk and
+indicator work so monitoring can continue, and snapshot ages use the current
+exchange clock. A failed entry can recover automatically after its unwind, position
+reconciliation and protection cleanup are verified, with fresh data, local LIVE
+authorization and all existing risk gates still required. Unknown order outcomes,
+incomplete journals and unverified protection continue to block entries.
 
 ### Historical tests
 

@@ -96,11 +96,11 @@ class Controls:
             elif command in {"/stop", "/pause", "/lock"}:
                 self.store.put("manual_lock", True)
                 if not self.store.get("risk_lock"):
-                    self.store.put("state", State.PAUSED)
-                response = "New entries paused. Risk monitoring and exits remain active."
+                    self.store.transition(State.PAUSED, "you asked me to pause")
+                response = "⏸ Entries paused. I'm still watching open positions and exits."
             elif command in {"/resume", "/start_trading"}:
                 await self.resume()
-                response = "Resumed " + self.s.trading_mode + "."
+                response = "🐸 Back on watch! Trading is running."
             elif command == "/flatten":
                 code = secrets.token_hex(4)
                 self.challenges[key] = (hashlib.sha256(code.encode()).hexdigest(), now + 60)

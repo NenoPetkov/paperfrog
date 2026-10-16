@@ -97,6 +97,18 @@ class Store:
             {"k": key, "v": json.dumps(value, allow_nan=False)},
         )
 
+    def transition(self, state: str, reason: str, conn: Connection | None = None) -> None:
+        """Journal a state change and its reason atomically, once per transition."""
+        if conn is None:
+            with self.transaction() as connection:
+                self.transition(state, reason, connection)
+            return
+        previous = self.get("state", None, conn)
+        self.put("state", state, conn)
+        if previous != state:
+            self.put("state_reason", reason, conn)
+            self.audit("state_transition", {"from": previous, "to": state, "reason": reason}, conn)
+
     def audit(self, kind: str, payload: Any, conn: Connection | None = None) -> None:
         if conn is None:
             with self.engine.begin() as connection:

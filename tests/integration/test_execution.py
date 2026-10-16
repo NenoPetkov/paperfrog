@@ -216,3 +216,36 @@ async def test_stop_partial_continues_on_later_quote(broker):
         )
     )
     assert not await broker.positions()
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+async def test_timestamp_rejection_resyncs_only_reads(method):
+    calls = []
+    account_reads = 0
+
+    def handle(request):
+        nonlocal account_reads
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("/time"):
+            import time
+
+            return httpx.Response(200, json={"serverTime": int(time.time() * 1000)})
+        account_reads += 1
+        if account_reads == 1:
+            return httpx.Response(400, json={"code": -1021})
+        return httpx.Response(200, json={"confirmed": True})
+
+    s = Settings(_env_file=None, binance_api_key="mock-key", binance_api_secret="mock-secret")
+    adapter = BinanceAdapter(s, httpx.AsyncClient(transport=httpx.MockTransport(handle)))
+    if method == "GET":
+        assert await adapter.request(method, "/fapi/v3/account", signed=True) == {"confirmed": True}
+        assert calls == [
+            ("GET", "/fapi/v3/account"),
+            ("GET", "/fapi/v1/time"),
+            ("GET", "/fapi/v3/account"),
+        ]
+    else:
+        with pytest.raises(SafeError, match="-1021"):
+            await adapter.request(method, "/fapi/v1/order", signed=True)
+        assert calls == [("POST", "/fapi/v1/order")]
+    await adapter.close()

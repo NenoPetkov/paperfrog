@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from paperfrog.domain.types import Fill, Order, Quote, SafeError
+from paperfrog.domain.types import Fill, Order, OrderNotFound, Quote, SafeError
 from paperfrog.exchange.binance import BinanceAdapter
 from paperfrog.reporting.readiness import credential_binding
 from paperfrog.settings import Settings
@@ -139,11 +140,24 @@ class LiveBroker:
         await self.exchange.cancel_entries()
 
     async def query_stop(self, key: str) -> dict[str, Any]:
-        return dict(
-            await self.exchange.request(
-                "GET", "/fapi/v1/algoOrder", {"clientAlgoId": key}, signed=True
-            )
+        stop: dict[str, Any] = next(
+            (v for v in self.store.get("live_stops", {}).values() if v["key"] == key), {}
         )
+        params = {"algoId": stop["algo_id"]} if stop.get("algo_id") else {"clientAlgoId": key}
+        for attempt in range(3):
+            try:
+                return dict(
+                    await self.exchange.request("GET", "/fapi/v1/algoOrder", params, signed=True)
+                )
+            except OrderNotFound:
+                if attempt == 2:
+                    raise SafeError(
+                        "hosted stop lookup failed; protection cannot be confirmed"
+                    ) from None
+                # A just-created stop can briefly be absent from the lookup index.
+                # Retry only the lookup, within the coordinator's protection deadline.
+                await asyncio.sleep(0.2 * (attempt + 1))
+        raise SafeError("hosted protection unavailable")
 
     def validate_stop(self, result: dict[str, Any], symbol: str, stop: dict[str, Any]) -> None:
         if not (
@@ -173,7 +187,11 @@ class LiveBroker:
             return
         stops[symbol] = {"key": key, "side": side, "trigger": str(trigger), "state": "INTENDED"}
         self.store.put("live_stops", stops)
-        await self.exchange.protect(symbol, side, trigger, key)
+        created = await self.exchange.create_stop(symbol, side, trigger, key)
+        self.validate_stop(created, symbol, stops[symbol])
+        if created.get("algoId"):
+            stops[symbol]["algo_id"] = str(created["algoId"])
+            self.store.put("live_stops", stops)
         result = await self.query_stop(key)
         self.validate_stop(result, symbol, stops[symbol])
         if result.get("algoStatus") != "NEW":

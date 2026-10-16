@@ -28,7 +28,9 @@ def worker(settings, store, chats=(123,)):
     return EventNotifications(s, store, sender), sender
 
 
-async def test_failed_entry_fills_loss_and_lock_are_all_delivered(settings, store, health, now):
+async def test_fills_losses_and_cooldown_delivered_without_skipped_entry_spam(
+    settings, store, health, now
+):
     events, sender = worker(settings, store)
     await events.deliver()
     risk = RiskEngine(settings, store)
@@ -59,10 +61,11 @@ async def test_failed_entry_fills_loss_and_lock_are_all_delivered(settings, stor
     )
     await events.deliver()
     messages = [m["text"] for m in sender.sent]
-    assert sum("ENTRY FILLED" in m and "SHORT" in m for m in messages) == 3
-    assert sum("CLOSED — LOSS" in m for m in messages) == 3
-    assert sum("RISK LOCK" in m and "three_losses" in m for m in messages) == 1
-    assert any("order not found" in m for m in messages)
+    assert sum("Sold" in m and "SHORT" in m for m in messages) == 3
+    assert sum("closed · loss" in m for m in messages) == 3
+    assert sum("breather after 3 losses" in m and "automatically" in m for m in messages) == 1
+    assert not any("order not found" in m for m in messages)
+    assert not any("SOFT_RISK_LOCK" in m for m in messages)
 
 
 async def test_failed_chat_retries_without_replaying_successful_chat(settings, store):
@@ -75,7 +78,7 @@ async def test_failed_chat_retries_without_replaying_successful_chat(settings, s
     # New worker instance simulates restart: delivery state lives in SQLite.
     await EventNotifications(events.s, store, sender).deliver()
     for chat in (123, 456):
-        assert sum(m["chat_id"] == chat and "STATE: RUNNING" in m["text"] for m in sender.sent) == 1
+        assert sum(m["chat_id"] == chat and "Running!" in m["text"] for m in sender.sent) == 1
 
 
 async def test_failed_initial_snapshot_does_not_skip_later_events(settings, store):
@@ -86,8 +89,8 @@ async def test_failed_initial_snapshot_does_not_skip_later_events(settings, stor
     sender.fail.clear()
     await events.deliver()
     assert len(sender.sent) == 2
-    assert "NOTIFICATIONS CONNECTED" in sender.sent[0]["text"]
-    assert "STATE: RUNNING" in sender.sent[1]["text"]
+    assert "Telegram connected" in sender.sent[0]["text"]
+    assert "Running!" in sender.sent[1]["text"]
 
 
 async def test_startup_is_sent_on_each_restart_and_repeated_errors_are_suppressed(settings, store):
@@ -97,8 +100,8 @@ async def test_startup_is_sent_on_each_restart_and_repeated_errors_are_suppresse
         store.audit("simple_process_started", {})
         store.audit("simple_monitor_degraded", {"reason": "exchange transport unavailable"})
         await events.deliver()
-    assert sum("BOT PROCESS STARTED" in m["text"] for m in sender.sent) == 2
-    assert sum("exchange transport unavailable" in m["text"] for m in sender.sent) == 1
+    assert sum("I'm awake!" in m["text"] for m in sender.sent) == 2
+    assert not any("exchange transport unavailable" in m["text"] for m in sender.sent)
 
 
 @pytest.mark.parametrize("pnl,label", [(1, "PROFIT"), (-1, "LOSS"), (0, "FLAT")])
@@ -109,4 +112,40 @@ async def test_close_labels(settings, store, pnl, label):
         "trade_closed", {"id": "trade", "symbol": "SOLUSDT", "pnl": pnl, "consecutive_losses": 0}
     )
     await events.deliver()
-    assert f"CLOSED — {label}" in sender.sent[-1]["text"]
+    assert f"closed · {label.lower()}" in sender.sent[-1]["text"]
+
+
+async def test_real_state_changes_include_reason_once_and_keep_audit_details(settings, store):
+    events, sender = worker(settings, store)
+    await events.deliver()
+    for _ in range(3):
+        store.transition("DEGRADED", "exchange transport unavailable")
+        store.audit(
+            "simple_entry_blocked", {"symbol": "SOLUSDT", "reason": "minimum notional not met"}
+        )
+    store.transition("RUNNING", "health and execution checks passed")
+    store.transition("ERROR_SAFE", "order not found; absence does not authorize resubmission")
+    await events.deliver()
+    texts = [m["text"] for m in sender.sent]
+    assert sum("Fresh Binance data is unavailable" in m for m in texts) == 1
+    assert sum("Running!" in m for m in texts) == 1
+    assert sum("hasn't confirmed an order" in m for m in texts) == 1
+    assert not any("ERROR_SAFE" in m or "minimum notional" in m for m in texts)
+    assert sum(row["kind"] == "simple_entry_blocked" for row in store.rows("audit")) == 3
+
+
+async def test_simple_status_contains_only_status_and_open_positions(settings):
+    from paperfrog.simple.service import SimpleService
+
+    service = SimpleService(settings)
+    service.store.put("state", "RUNNING")
+    service.store.put(
+        "simple_positions",
+        {"SOLUSDT": {"side": 1, "quantity": "2", "entry_price": 100, "id": "private-journal-id"}},
+    )
+    assert await service.status("/status") == (
+        "🟢 Running\n\nOpen positions:\n• SOLUSDT · LONG · 2 @ 100"
+    )
+    assert "loaded_settings" in json.loads(await service.diagnostics("/status"))
+    await service.exchange.close()
+    service.store.engine.dispose()

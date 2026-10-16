@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 import httpx
 import websockets
 
-from paperfrog.domain.types import Fill, Filters, Order, SafeError, UnknownOrder
+from paperfrog.domain.types import Fill, Filters, Order, OrderNotFound, SafeError, UnknownOrder
 from paperfrog.settings import Settings
 
 
@@ -90,13 +90,17 @@ class BinanceAdapter:
                 await asyncio.sleep(min(wait, 120) + random.random())
                 continue
             if response.is_error:
-                code = (
-                    response.json().get("code")
-                    if response.headers.get("content-type", "").startswith("application/json")
-                    else None
-                )
+                try:
+                    error = response.json()
+                    code = error.get("code") if isinstance(error, dict) else None
+                except ValueError:
+                    code = None
+                if code == -1021 and signed and method == "GET" and attempt == 0:
+                    # Only retry reads. A mutation is never replayed after a clock error.
+                    await self.sync_time()
+                    continue
                 if code == -2013:
-                    raise SafeError("order not found; absence does not authorize resubmission")
+                    raise OrderNotFound("order not found; absence does not authorize resubmission")
                 raise SafeError(
                     f"Binance request rejected: HTTP {response.status_code}, code {code}"
                 )
@@ -227,10 +231,15 @@ class BinanceAdapter:
                 )
 
     async def protect(self, symbol: str, side: int, trigger: Decimal, key: str) -> None:
+        await self.create_stop(symbol, side, trigger, key)
+
+    async def create_stop(
+        self, symbol: str, side: int, trigger: Decimal, key: str
+    ) -> dict[str, Any]:
         if self.s.trading_mode == "paper":
             raise SafeError("paper mode cannot change exchange stops")
         # Close-all cannot be combined with quantity or reduceOnly per Binance.
-        await self.request(
+        result = await self.request(
             "POST",
             "/fapi/v1/algoOrder",
             {
@@ -246,6 +255,7 @@ class BinanceAdapter:
             },
             signed=True,
         )
+        return dict(result)
 
     async def verify_risk_settings(self, symbols: tuple[str, ...]) -> None:
         mode = await self.request("GET", "/fapi/v1/positionSide/dual", signed=True)

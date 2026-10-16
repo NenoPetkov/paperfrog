@@ -103,7 +103,7 @@ async def candles(
             raise SafeError("requested simple history missing")
         x = normalize(rows, end_ms)
         chunks.append(x)
-        lake.append("perp_15m", symbol, x, "binance_simple_closed_klines")
+        await asyncio.to_thread(lake.append, "perp_15m", symbol, x, "binance_simple_closed_klines")
         next_ms = int(rows[-1][6]) + 1
         if next_ms <= cursor:
             raise SafeError("simple candle pagination stalled")
@@ -120,7 +120,7 @@ async def candles(
         or int(frame.timestamp_ms.iloc[-1]) != end_ms
     ):
         raise SafeError("simple candle coverage incomplete")
-    indicators(frame)  # Validate chronological and numeric integrity before use.
+    await asyncio.to_thread(indicators, frame)  # Validate integrity without blocking monitoring.
     return frame
 
 

@@ -69,18 +69,18 @@ class Coordinator:
                 if query_only
                 else await self.broker.submit(order)
             )
-        except SafeError:
+        except SafeError as failure:
             with self.store.transaction() as conn:
                 conn.execute(
                     text("UPDATE orders SET state=:s WHERE id=:i"),
                     {"s": "UNKNOWN", "i": order.client_id},
                 )
-                self.store.put("state", State.ERROR_SAFE, conn)
+                self.store.transition(State.ERROR_SAFE, str(failure), conn)
                 self.store.put("reconciled", False, conn)
                 self.store.audit("unknown_order", {"client_id": order.client_id}, conn)
             raise
         if fill.status not in {"FILLED", "CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}:
-            self.store.put("state", State.ERROR_SAFE)
+            self.store.transition(State.ERROR_SAFE, "order not terminal; reconciliation required")
             raise UnknownOrder("order not terminal; reconcile before continuing")
         with self.store.transaction() as conn:
             conn.execute(
@@ -242,7 +242,12 @@ class Coordinator:
                 if isinstance(failure, TimeoutError):
                     self.store.put("reconciled", False)
                 # Unknown orders require a fresh position reconciliation before any repair.
-                self.store.put("state", State.ERROR_SAFE)
+                self.store.transition(
+                    State.ERROR_SAFE,
+                    str(failure)
+                    if isinstance(failure, SafeError)
+                    else "entry protection deadline exceeded",
+                )
                 if self.store.get("reconciled", False):
                     for f in reversed(filled):
                         if f.quantity:
@@ -283,6 +288,23 @@ class Coordinator:
                         if single_exchange:
                             for f in filled:
                                 await self.broker.cancel_protection(f.symbol)
+                            self.store.audit(
+                                "simple_entry_aborted",
+                                {
+                                    "symbol": proposal.symbol,
+                                    "reason": str(failure)
+                                    if isinstance(failure, SafeError)
+                                    else "entry protection deadline exceeded",
+                                    "flat_verified": True,
+                                },
+                            )
+                            if not self.store.get("risk_lock") and not self.store.get(
+                                "manual_lock"
+                            ):
+                                self.store.transition(
+                                    State.DEGRADED,
+                                    "failed entry unwound; flat account verified; checking fresh data before retry",
+                                )
                 raise
 
     async def reconcile(self) -> bool:
@@ -307,7 +329,9 @@ class Coordinator:
         consistent = consistent and actual == expected
         self.store.put("reconciled", consistent)
         if not consistent:
-            self.store.put("state", State.ERROR_SAFE)
+            self.store.transition(
+                State.ERROR_SAFE, "exchange positions or orders do not match the journal"
+            )
         self.store.audit(
             "reconciliation",
             {"consistent": consistent, "actual": {k: str(v) for k, v in actual.items()}},
@@ -316,7 +340,7 @@ class Coordinator:
 
     async def flatten(self, quotes: dict[str, Quote], operation: str) -> bool:
         async with self._mutex:
-            self.store.put("state", State.EMERGENCY_FLATTENING)
+            self.store.transition(State.EMERGENCY_FLATTENING, "operator requested emergency close")
             self.store.put("manual_lock", True)
             await self.broker.cancel_entries()
             # Resolve all ambiguous submissions first. Unknown external positions may be reduced
@@ -349,7 +373,12 @@ class Coordinator:
                     await self.broker.cancel_protection(symbol)
                 self.store.put("expected_positions", {})
                 self.store.put("reconciled", True)
-            self.store.put("state", State.SOFT_RISK_LOCK if closed else State.ERROR_SAFE)
+            self.store.transition(
+                State.SOFT_RISK_LOCK if closed else State.ERROR_SAFE,
+                "emergency close verified; manual pause active"
+                if closed
+                else "emergency close incomplete",
+            )
             self.store.audit("flatten_result", {"closed": closed, "operation": operation})
             return closed
 

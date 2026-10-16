@@ -16,6 +16,10 @@ class UnknownOrder(SafeError):
     """The exchange may have accepted the request; never resubmit blindly."""
 
 
+class OrderNotFound(SafeError):
+    """A lookup found no order; this never permits submitting it again."""
+
+
 class State(StrEnum):
     BOOTING = "BOOTING"
     SYNCING = "SYNCING"

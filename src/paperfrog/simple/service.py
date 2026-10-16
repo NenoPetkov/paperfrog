@@ -20,6 +20,7 @@ from paperfrog.storage.database import Store
 from paperfrog.storage.lock import InstanceLock
 from paperfrog.telegram.control import Controls, Telegram
 from paperfrog.telegram.events import EventNotifications
+from paperfrog.telegram.formatting import positions_text, status_text
 
 from .authorization import directory, verify_simple_arm
 from .data import candles, funding, scan
@@ -78,12 +79,22 @@ class SimpleService:
                 return False
             self.auto_start = False
             self.store.put("manual_lock", True)
-            self.store.put("state", State.PAUSED)
+            self.store.transition(State.PAUSED, "operator requested closing all positions")
             for symbol in list(self.engine.positions()):
                 await self.engine.close(symbol, self.now_ms(), "operator requested flatten")
             return not await self.engine.broker.positions()
 
     async def status(self, command: str) -> str:
+        positions = (
+            self.engine.positions() if self.engine else self.store.get("simple_positions", {})
+        )
+        if command == "/status":
+            return status_text(self.store.get("state", State.BOOTING), positions)
+        if command == "/positions":
+            return positions_text(positions)
+        return await self.diagnostics(command)
+
+    async def diagnostics(self, command: str) -> str:
         armed = False
         if self.s.trading_mode == "live":
             with contextlib.suppress(SafeError):
@@ -144,7 +155,8 @@ class SimpleService:
                 ) -> tuple[str, dict[str, Any] | None, bool]:
                     async with semaphore:
                         try:
-                            frame = indicators(
+                            frame = await asyncio.to_thread(
+                                indicators,
                                 await candles(
                                     self.exchange,
                                     self.lake,
@@ -196,6 +208,23 @@ class SimpleService:
                 self.store.audit("simple_scan_degraded", {"reason": type(exc).__name__})
                 await asyncio.sleep(10)
 
+    async def fetch_quote(self, symbol: str) -> Quote:
+        book, premium = await asyncio.gather(
+            self.exchange.request("GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol}),
+            self.exchange.request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol}),
+        )
+        if not 0 <= self.now_ms() - int(premium["time"]) <= self.s.market_stale_seconds * 1000:
+            raise SafeError("stale futures mark data")
+        return Quote(
+            symbol,
+            Decimal(book["bidPrice"]),
+            Decimal(book["askPrice"]),
+            Decimal(book["bidQty"]),
+            Decimal(book["askQty"]),
+            Decimal(premium["markPrice"]),
+            int(book["time"]),
+        )
+
     async def monitor(self) -> None:
         while not self.stop.is_set():
             try:
@@ -206,28 +235,13 @@ class SimpleService:
                     await engine.broker.refresh()
                     await engine.broker.refresh_funding(self.now_ms())
                 symbols = list(dict.fromkeys([*engine.positions(), *self.selected]))
-                fetched = []
-                for symbol in symbols:
-                    book, premium = await asyncio.gather(
-                        self.exchange.request(
-                            "GET", "/fapi/v1/ticker/bookTicker", {"symbol": symbol}
-                        ),
-                        self.exchange.request("GET", "/fapi/v1/premiumIndex", {"symbol": symbol}),
-                    )
-                    now = self.now_ms()
-                    if not 0 <= now - int(premium["time"]) <= self.s.market_stale_seconds * 1000:
-                        raise SafeError("stale futures mark data")
-                    fetched.append(
-                        Quote(
-                            symbol,
-                            Decimal(book["bidPrice"]),
-                            Decimal(book["askPrice"]),
-                            Decimal(book["bidQty"]),
-                            Decimal(book["askQty"]),
-                            Decimal(premium["markPrice"]),
-                            int(book["time"]),
-                        )
-                    )
+                semaphore = asyncio.Semaphore(3)
+
+                async def one(symbol: str, semaphore: asyncio.Semaphore = semaphore) -> Quote:
+                    async with semaphore:
+                        return await self.fetch_quote(symbol)
+
+                fetched = await asyncio.gather(*(one(symbol) for symbol in symbols))
                 # Funding after downtime is resolved from actual settlements before fresh trading.
                 pending_funding = []
                 for symbol, trade in engine.positions().items():
@@ -264,20 +278,21 @@ class SimpleService:
                             Decimal(str(row["mark"])),
                         )
                     for quote in fetched:
-                        await engine.quote(quote, now)
+                        await engine.quote(quote, self.now_ms())
                     operation = self.store.get("local_flatten_request")
                     if operation:
                         self.auto_start = False
                         self.store.put("manual_lock", True)
-                        self.store.put("state", State.PAUSED)
+                        self.store.transition(State.PAUSED, "local emergency close requested")
                         for symbol in list(engine.positions()):
                             await engine.close(symbol, now, "local emergency flatten requested")
                         if not await engine.broker.positions():
                             self.store.put("local_flatten_request", None)
                             self.store.audit("simple_flatten_verified", {"operation": operation})
                     if engine.positions() or self.selected:
-                        await engine.monitor(now, self.rows, self.crisis)
+                        await engine.monitor(self.now_ms(), self.rows, self.crisis)
                     self.store.put("market_healthy_at", time.time() if fetched else 0)
+                    now = self.now_ms()
                     fresh = (
                         bool(self.selected)
                         and not self.crisis
@@ -285,19 +300,23 @@ class SimpleService:
                             0 <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0) < BAR_MS
                             for symbol in self.selected
                         )
+                        and all(
+                            symbol in engine.broker.quotes
+                            and 0
+                            <= now - engine.broker.quotes[symbol].timestamp_ms
+                            <= self.s.market_stale_seconds * 1000
+                            for symbol in self.selected
+                        )
                     )
                     if (
                         (self.auto_start or self.store.get("state") == State.DEGRADED)
+                        and self.store.get("state") not in {State.ERROR_SAFE, State.RUNNING}
                         and fresh
                         and not self.store.get("manual_lock")
                         and not self.store.get("risk_lock")
                     ):
                         await engine.resume(now)
                         self.auto_start = False
-                        engine.notice(
-                            "started",
-                            f"Simple futures {self.s.trading_mode.upper()} started: scanning up to {self.s.simple_scan_limit} coins and selecting up to {self.s.simple_selected_count}. Entries and closes include reasons. Profitability is unproven.",
-                        )
                     lock = self.store.get("risk_lock")
                     if (
                         lock
@@ -314,8 +333,12 @@ class SimpleService:
                         and not self.store.get("local_flatten_request")
                     ):
                         for symbol in self.selected:
+                            if self.store.get("state") != State.RUNNING:
+                                break
                             try:
-                                await engine.enter(symbol, self.rows[symbol], now)
+                                if isinstance(engine.broker, LiveBroker):
+                                    await engine.broker.refresh()
+                                await engine.enter(symbol, self.rows[symbol], self.now_ms())
                             except (SafeError, ValueError) as exc:
                                 self.store.audit(
                                     "simple_entry_blocked",
@@ -329,11 +352,17 @@ class SimpleService:
                     self.store.put("heartbeat", time.time())
             except (SafeError, ValueError, KeyError, OSError) as exc:
                 self.exchange.entry_authorized = False
-                self.store.put("state", State.DEGRADED)
+                reason = str(exc) if isinstance(exc, SafeError) else type(exc).__name__
+                if (
+                    not self.store.get("risk_lock")
+                    and not self.store.get("manual_lock")
+                    and self.store.get("state") != State.ERROR_SAFE
+                ):
+                    self.store.transition(State.DEGRADED, reason)
                 self.store.put("market_healthy_at", 0)
                 self.store.audit(
                     "simple_monitor_degraded",
-                    {"reason": str(exc) if isinstance(exc, SafeError) else type(exc).__name__},
+                    {"reason": reason},
                 )
                 self.store.put("heartbeat", time.time())
             await asyncio.sleep(self.s.simple_poll_seconds)
@@ -377,7 +406,7 @@ class SimpleService:
                     if self.s.trading_mode == "paper":
                         self.store.put("manual_lock", True)
                 if once:
-                    print(await self.status("/status"))
+                    print(await self.diagnostics("/status"))
                     return
                 # Bind synchronously before tasks can place simulated entries or poll Telegram.
                 import socket
@@ -399,7 +428,7 @@ class SimpleService:
 
                 @app.get("/simple")
                 async def simple_status() -> dict[str, Any]:
-                    return dict(json.loads(await self.status("/status")))
+                    return dict(json.loads(await self.diagnostics("/status")))
 
                 server = uvicorn.Server(
                     uvicorn.Config(
@@ -407,25 +436,39 @@ class SimpleService:
                     )
                 )
                 tasks = [
-                    asyncio.create_task(self.research()),
-                    asyncio.create_task(self.monitor()),
-                    asyncio.create_task(self.notifications()),
-                    asyncio.create_task(server.serve(sockets=[sock])),
+                    asyncio.create_task(self.research(), name="market research"),
+                    asyncio.create_task(self.monitor(), name="trade monitoring"),
+                    asyncio.create_task(self.notifications(), name="Telegram notifications"),
+                    asyncio.create_task(server.serve(sockets=[sock]), name="health server"),
                 ]
                 if self.telegram:
-                    tasks.append(asyncio.create_task(self.telegram.poll()))
+                    tasks.append(
+                        asyncio.create_task(self.telegram.poll(), name="Telegram commands")
+                    )
                 stop_task = asyncio.create_task(self.stop.wait())
                 tasks.append(stop_task)
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 if stop_task not in done:
-                    self.store.put("state", State.ERROR_SAFE)
+                    failed = next(task for task in tasks if task in done)
+                    error = None if failed.cancelled() else failed.exception()
+                    detail = type(error).__name__ if error else "task exited"
+                    self.store.transition(
+                        State.ERROR_SAFE,
+                        f"{failed.get_name()} stopped ({detail}); restart required",
+                    )
                     self.store.put("manual_lock", True)
                     self.store.audit(
                         "simple_critical_task_stopped",
-                        {"action": "stop entries; supervisor restart required"},
+                        {
+                            "action": "stop entries; supervisor restart required",
+                            "task": failed.get_name(),
+                            "error_type": detail,
+                        },
                     )
             finally:
-                self.store.put("state", State.PAUSED)
+                self.store.transition(
+                    State.PAUSED, "bot process stopped; hosted protection retained"
+                )
                 self.store.audit(
                     "simple_shutdown",
                     {"action": "entries paused; positions and hosted protection retained"},

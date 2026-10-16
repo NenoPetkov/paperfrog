@@ -13,6 +13,7 @@ from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 from paperfrog.telegram.control import Telegram
+from paperfrog.telegram.formatting import readable_reason, state_label, status_text
 
 
 class EventNotifications:
@@ -27,63 +28,84 @@ class EventNotifications:
                     {"id": payload["client_id"]},
                 ).scalar()
             reducing = bool(json.loads(intent)["reduce_only"]) if intent else None
-            action = (
-                "REDUCTION FILLED" if reducing else "ENTRY FILLED" if reducing is False else "FILL"
+            action = "Bought" if payload["side"] > 0 else "Sold"
+            direction = "LONG" if payload["side"] > 0 else "SHORT"
+            detail = (
+                " · reducing position"
+                if reducing
+                else f" · {direction}"
+                if reducing is False
+                else ""
             )
-            direction = "BUY" if payload["side"] > 0 else "SELL"
-            position = "LONG" if payload["side"] > 0 else "SHORT"
             return (
-                f"{action}: {payload['symbol']} {direction}"
-                + (f" / {position}" if reducing is False else "")
-                + f", quantity {payload['quantity']}, price {payload['price']}."
-                + (
-                    " Protection is not yet confirmed by this fill event."
-                    if reducing is False
-                    else ""
-                )
+                f"{'🛬' if reducing else '🐸'} {action} {payload['symbol']}{detail}\n"
+                f"{payload['quantity']} at {payload['price']}"
             )
         if kind == "trade_closed":
             pnl = float(payload["pnl"])
-            label = "LOSS" if pnl < 0 else "PROFIT" if pnl > 0 else "FLAT"
+            label = "profit" if pnl > 0 else "loss" if pnl < 0 else "flat"
             unit = "BNFCR" if self.s.futures_account_mode == "credits" else "USDT"
             return (
-                f"CLOSED — {label}: {payload.get('symbol', payload['id'])}; "
-                f"recorded net PnL {pnl:+.6f} {unit} (configured fee estimates). "
-                f"Consecutive losses: {payload.get('consecutive_losses', 'unknown')}."
+                f"{'✅' if pnl >= 0 else '🧾'} {payload.get('symbol', payload['id'])} closed · {label}\n"
+                f"Net result: {pnl:+.6f} {unit} (estimated fees)."
             )
         if kind == "risk_lock":
             expiry = payload.get("until")
             until = (
-                datetime.fromtimestamp(float(expiry), ZoneInfo(self.s.display_timezone)).isoformat()
+                datetime.fromtimestamp(float(expiry), ZoneInfo(self.s.display_timezone)).strftime(
+                    "%d %b, %H:%M %Z"
+                )
                 if expiry is not None
-                else "local review required"
+                else None
             )
-            return f"RISK LOCK: {payload.get('state', 'locked')}; reason: {payload['reason']}; until: {until}. New entries blocked."
-        if kind == "simple_explanation":
-            message = str(payload["message"])
-            # Closed PnL is delivered by trade_closed, including aborted entries.
-            return None if message.startswith("CLOSE ") else message
+            if payload["reason"] == "three_losses":
+                return (
+                    "☕ Taking a breather after 3 losses in a row.\n"
+                    f"New entries can resume automatically after {until}, once checks pass."
+                )
+            reasons = {
+                "daily_loss": "Today's loss limit was reached",
+                "profit_giveback": "The daily profit protection limit was reached",
+                "weekly_local_review": "The weekly loss limit was reached",
+                "high_water": "The account drawdown limit was reached",
+            }
+            reason = reasons.get(payload["reason"], "An account risk limit was reached")
+            followup = (
+                f"I'll recheck after {until}."
+                if until
+                else "A local risk review is needed before resuming."
+            )
+            return f"⏸ {reason}. New entries are paused.\n{followup}"
         if kind == "simple_hosted_stop":
-            return f"HOSTED STOP FILLED: {payload['symbol']}, quantity {payload['quantity']}, price {payload['price']}."
+            action = "Bought" if payload["side"] > 0 else "Sold"
+            return (
+                f"🛟 Stop filled: {action.lower()} {payload['symbol']}\n"
+                f"{payload['quantity']} at {payload['price']}"
+            )
         if kind == "state_transition":
-            return f"STATE: {payload['to']}."
+            state = payload["to"]
+            if state.endswith("RISK_LOCK") and payload.get("reason") in {
+                "three_losses",
+                "daily_loss",
+                "profit_giveback",
+                "weekly_local_review",
+                "high_water",
+            }:
+                return None  # The risk_lock event includes the cause and expiry.
+            if state == "RUNNING":
+                return "🐸 Running! I'm watching for trades and managing open positions."
+            return f"{state_label(state)}\n{readable_reason(payload.get('reason', 'Checking entry permissions'))}"
+        if kind == "simple_entry_aborted":
+            return (
+                f"🛟 {payload['symbol']}: the entry didn't complete, so I closed it back out.\n"
+                f"{readable_reason(payload['reason'])} Position closure verified on Binance."
+            )
         if kind == "local_risk_review":
-            return "LOCAL RISK REVIEW: lock clearance requested; entries remain manually paused until resume succeeds."
-        if kind == "unknown_order":
-            return "URGENT: order outcome uncertain. Entries blocked; original order must be reconciled."
-        if kind in {"simple_monitor_degraded", "simple_entry_blocked"}:
-            return f"{kind.upper()}: {payload.get('symbol', 'account')}: {payload.get('reason', 'unavailable')}."
-        if kind in {"simple_shutdown", "simple_critical_task_stopped", "simple_flatten_verified"}:
-            return f"{kind.upper()}: {payload.get('action', 'flatten verified')}."
+            return "🐸 Risk review recorded. Entries stay paused until resume checks pass."
         if kind == "simple_process_started":
-            return "BOT PROCESS STARTED: checking signals and entry permissions."
-        if kind == "telegram_response" and payload.get("command") in {
-            "/pause",
-            "/stop",
-            "/lock",
-            "/confirm_flatten",
-        }:
-            return f"CONTROL: {payload['response']}"
+            return "🐸 I'm awake! Checking Binance, positions and fresh data before trading."
+        # Skipped candidates and repeated polling failures remain in the local audit.
+        # State transitions provide actionable alerts without per-symbol error spam.
         return None
 
     async def deliver(self) -> None:
@@ -99,9 +121,8 @@ class EventNotifications:
                     ).scalar_one()
                     positions = self.store.get("simple_positions", {}, conn)
                     lock = self.store.get("risk_lock", None, conn)
-                    snapshot = (
-                        f"NOTIFICATIONS CONNECTED. State: {self.store.get('state', 'unknown', conn)}. "
-                        f"Recorded positions: {', '.join(positions) or 'none'}."
+                    snapshot = "🐸 Telegram connected!\n" + status_text(
+                        self.store.get("state", "BOOTING", conn), positions
                     )
                     if lock:
                         snapshot += "\n" + str(self.render("risk_lock", lock))
@@ -123,11 +144,7 @@ class EventNotifications:
                     )
                 for row in rows:
                     message = self.render(row["kind"], json.loads(row["payload"]))
-                    repeated = row["kind"] in {
-                        "simple_monitor_degraded",
-                        "simple_entry_blocked",
-                        "risk_lock",
-                    }
+                    repeated = row["kind"] == "risk_lock"
                     repeat_key = (
                         prefix
                         + "repeat:"
@@ -143,7 +160,7 @@ class EventNotifications:
                         stamp = datetime.fromtimestamp(
                             row["ts"] / 1000, ZoneInfo(self.s.display_timezone)
                         )
-                        await self.send(chat, f"{stamp.isoformat()}\n{message}")
+                        await self.send(chat, f"{message}\n🕒 {stamp:%d %b, %H:%M %Z}")
                         if repeated:
                             self.store.put(repeat_key, {"message": message, "ts": row["ts"]})
                     self.store.put(prefix + "cursor", row["id"])
@@ -156,5 +173,8 @@ class EventNotifications:
     async def send(self, chat: int, message: str) -> None:
         await self.telegram.call(
             "sendMessage",
-            {"chat_id": chat, "text": f"paperfrog {self.s.trading_mode.upper()}\n{message}"[:4000]},
+            {
+                "chat_id": chat,
+                "text": f"🐸 paperfrog · {self.s.trading_mode.upper()}\n{message}"[:4000],
+            },
         )

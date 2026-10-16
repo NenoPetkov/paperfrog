@@ -101,8 +101,9 @@ class RiskEngine:
             }
             if lock and (not old or rank[State(lock["state"])] >= rank[State(old["state"])]):
                 self.store.put("risk_lock", lock, conn)
-                self.store.put("state", lock["state"], conn)
-                self.store.audit("risk_lock", lock, conn)
+                self.store.transition(lock["state"], str(lock["reason"]), conn)
+                if lock != old:
+                    self.store.audit("risk_lock", lock, conn)
             self.store.put(
                 "risk_multiplier",
                 0.5 if peak_profit >= protected_profit - 1e-9 else 1.0,
@@ -258,7 +259,7 @@ class RiskEngine:
                 },
                 conn,
             )
-            self.store.put("state", State.SOFT_RISK_LOCK, conn)
+            self.store.transition(State.SOFT_RISK_LOCK, "three_losses", conn)
             self.store.audit("risk_lock", self.store.get("risk_lock", None, conn), conn)
         self.store.audit(
             "trade_closed",
@@ -278,8 +279,7 @@ class RiskEngine:
                 raise SafeError("profit lock active")
             self.store.put("risk_lock", None, conn)
             self.store.put("manual_lock", False, conn)
-            self.store.put("state", State.RUNNING, conn)
-            self.store.audit("state_transition", {"to": State.RUNNING}, conn)
+            self.store.transition(State.RUNNING, "health and execution checks passed", conn)
 
 
 def crisis_score(

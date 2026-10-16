@@ -114,6 +114,10 @@ class Engine:
         self.store.audit("simple_explanation", {"message": message}, conn)
 
     def health(self, now_ms: int) -> Health:
+        if isinstance(self.broker, LiveBroker):
+            # Network calls can refresh the account after the caller sampled its clock.
+            # Compare both snapshots with the current exchange clock, never an old loop time.
+            now_ms = self.broker.now_ms()
         ages = [
             (now_ms - q.timestamp_ms) / 1000
             for q in self.broker.quotes.values()
@@ -183,13 +187,21 @@ class Engine:
             )
         if not await self.coordinator.reconcile():
             raise SafeError("simple startup reconciliation failed")
-        self.store.put("state", State.PAUSED)
+        lock = self.store.get("risk_lock")
+        self.store.transition(
+            lock["state"] if lock else State.PAUSED,
+            lock["reason"]
+            if lock
+            else "startup reconciliation complete; waiting for fresh market data",
+        )
 
     async def resume(self, now_ms: int) -> None:
         if not await self.coordinator.reconcile():
             raise SafeError("simple reconciliation failed")
         await self.require_journal()
         armed = verify_simple_arm(self.s) if self.s.trading_mode == "live" else False
+        if isinstance(self.broker, LiveBroker):
+            now_ms = self.broker.now_ms()
         self.risk.resume(self.health(now_ms), datetime.fromtimestamp(now_ms / 1000, UTC), armed)
 
     async def require_journal(self) -> None:
@@ -306,7 +318,7 @@ class Engine:
         self.store.put("simple_closing", closing)
         fill = await self.coordinator.submit_once(order)
         if fill.quantity != abs(quantity):
-            self.store.put("state", State.ERROR_SAFE)
+            self.store.transition(State.ERROR_SAFE, "partial reduction; reconciliation required")
             raise SafeError("partial reduction; reconciliation required")
         with self.store.transaction() as conn:
             self.finish(symbol, fill, now_ms, reason, conn)
@@ -356,6 +368,8 @@ class Engine:
         if symbol in self.positions() or symbol not in self.store.get("simple_selected", []):
             return
         await self.require_journal()
+        if isinstance(self.broker, LiveBroker):
+            now_ms = self.broker.now_ms()
         q = self.broker.quotes.get(symbol)
         if not BAR_MS <= maximum_signal_age_ms <= 2 * BAR_MS:
             raise SafeError("invalid experimental signal delay")
@@ -429,6 +443,17 @@ class Engine:
             q.ask * Decimal("1.001") if direction > 0 else q.bid * Decimal(".999")
         )
         quantity = f.round_quantity(Decimal(str(notional)) / price)
+        if quantity < f.min_quantity or quantity * price < f.min_notional:
+            self.store.audit(
+                "simple_entry_skipped",
+                {
+                    "symbol": symbol,
+                    "reason": "allowed size below exchange minimum",
+                    "allowed_notional": str(quantity * price),
+                    "minimum_notional": str(f.min_notional),
+                },
+            )
+            return
         order = Order(
             client_id=client_id(trade_id, symbol),
             symbol=symbol,

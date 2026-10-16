@@ -48,6 +48,7 @@ class ExchangeSimulation:
         self.unknown_order = False
         self.reject_stop = False
         self.unknown_stop = False
+        self.stop_lookup_misses = 0
         self.income = []
 
     def order_result(self, key, side, qty, price, status="FILLED"):
@@ -166,7 +167,14 @@ class ExchangeSimulation:
             if self.unknown_stop:
                 return httpx.Response(503, json={"code": -1000})
         elif path.endswith("/algoOrder") and method == "GET":
-            result = self.stops.get(params["clientAlgoId"])
+            if self.stop_lookup_misses:
+                self.stop_lookup_misses -= 1
+                return httpx.Response(400, json={"code": -2013})
+            result = self.stops.get(params.get("clientAlgoId"))
+            if "algoId" in params:
+                result = next(
+                    (s for s in self.stops.values() if str(s["algoId"]) == params["algoId"]), None
+                )
         elif path.endswith("/algoOrder") and method == "DELETE":
             for stop in self.stops.values():
                 if str(stop["algoId"]) == params["algoId"]:
@@ -630,4 +638,165 @@ async def test_authorized_live_scanner_reads_public_market_data(settings, filter
     adapter = BinanceAdapter(s, httpx.AsyncClient(transport=httpx.MockTransport(handle)))
     snapshot = await scan(adapter, s)
     assert snapshot["symbols"] == ["SOLUSDT"] and len(called) == 2
+    await adapter.close()
+
+
+async def test_new_stop_lookup_delay_keeps_entry_and_never_resubmits(settings, store, filters):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    sim.stop_lookup_misses = 2
+    await engine.enter("SOLUSDT", row, now)
+    assert sim.quantity > 0 and engine.positions()["SOLUSDT"]
+    assert store.get("state") == State.RUNNING
+    assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+    assert store.get("live_stops")["SOLUSDT"]["algo_id"] == "1"
+    assert sum(method == "POST" and path.endswith("/algoOrder") for method, path in sim.calls) == 1
+    assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 1
+    await adapter.close()
+
+
+async def test_missing_stop_unwinds_and_allows_verified_recovery(settings, store, filters):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    sim.stop_lookup_misses = 3
+    with pytest.raises(SafeError, match="protection cannot be confirmed"):
+        await engine.enter("SOLUSDT", row, now)
+    assert sim.quantity == 0 and not engine.positions()
+    assert not store.unresolved_orders() and not store.get("simple_pending")
+    assert store.get("state") == State.DEGRADED
+    assert await engine.coordinator.reconcile()
+    await engine.resume(engine.broker.now_ms())
+    assert store.get("state") == State.RUNNING
+    # Recovery does not submit a replacement entry for the same signal.
+    await engine.enter("SOLUSDT", row, engine.broker.now_ms())
+    assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 2
+    await adapter.close()
+
+
+async def test_confirmed_unwind_does_not_clear_loss_cooldown(settings, store, filters):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    store.put("consecutive_losses", 2)
+    sim.stop_lookup_misses = 3
+    with pytest.raises(SafeError):
+        await engine.enter("SOLUSDT", row, now)
+    assert sim.quantity == 0
+    assert store.get("state") == State.SOFT_RISK_LOCK
+    assert store.get("risk_lock")["reason"] == "three_losses"
+    with pytest.raises(SafeError, match="cannot be overridden"):
+        await engine.resume(engine.broker.now_ms())
+    await adapter.close()
+
+
+async def test_health_uses_clock_after_account_refresh(settings, store, filters):
+    engine, _, adapter, _, now = await setup_engine(settings, store, filters)
+    await engine.broker.refresh()
+    # A newly refreshed snapshot must not appear to be from the future merely
+    # because the caller's old iteration timestamp predates that refresh.
+    assert engine.health(now - 500).account_age >= 0
+    engine.broker.account_at_ms -= engine.s.account_stale_seconds * 1000 + 1000
+    with pytest.raises(SafeError, match="stale or invalid"):
+        engine.risk.require_health(engine.health(now))
+    await adapter.close()
+
+
+async def test_under_minimum_entry_is_skipped_before_exchange_mutations(settings, store, filters):
+    from dataclasses import replace
+
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    engine.filters["SOLUSDT"] = replace(engine.filters["SOLUSDT"], min_notional=Decimal("1000"))
+    await engine.enter("SOLUSDT", row, now)
+    assert not sim.quantity and not store.rows("entries")
+    assert all(method == "GET" for method, _ in sim.calls)
+    assert store.get("state") == State.RUNNING
+    assert any(r["kind"] == "simple_entry_skipped" for r in store.rows("audit"))
+    await adapter.close()
+
+
+async def test_runtime_resumes_confirmed_failed_entry_without_manual_command(
+    settings, store, filters, monkeypatch
+):
+    import paperfrog.simple.service as service_module
+
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    sim.reject_stop = True
+    with pytest.raises(SafeError):
+        await engine.enter("SOLUSDT", row, now)
+    assert store.get("state") == State.DEGRADED
+    service = SimpleService(engine.s)
+    service.store.engine.dispose()
+    await service.exchange.close()
+    service.store, service.engine, service.exchange = store, engine, adapter
+    service.rows, service.selected, service.crisis = {"SOLUSDT": row}, ["SOLUSDT"], False
+    service.auto_start = False
+
+    async def fetch_quote(symbol):
+        from dataclasses import replace
+
+        return replace(engine.broker.quotes[symbol], timestamp_ms=service.now_ms())
+
+    async def sleep(seconds):
+        service.stop.set()
+
+    monkeypatch.setattr(service, "fetch_quote", fetch_quote)
+    monkeypatch.setattr(service_module.asyncio, "sleep", sleep)
+    await service.monitor()
+    assert store.get("state") == State.RUNNING
+    assert not store.get("manual_lock") and not sim.quantity
+    assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 2
+    await adapter.close()
+
+
+async def test_runtime_retries_transport_failure_and_only_announces_state_changes(
+    settings, store, filters, monkeypatch
+):
+    import paperfrog.simple.service as service_module
+
+    engine, sim, adapter, row, _ = await setup_engine(settings, store, filters)
+    row["flow"] = 0
+    service = SimpleService(engine.s)
+    service.store.engine.dispose()
+    await service.exchange.close()
+    service.store, service.engine, service.exchange = store, engine, adapter
+    service.rows, service.selected, service.crisis = {"SOLUSDT": row}, ["SOLUSDT"], False
+    service.auto_start = False
+    attempts = 0
+
+    async def fetch_quote(symbol):
+        nonlocal attempts
+        from dataclasses import replace
+
+        attempts += 1
+        if attempts <= 2:
+            raise SafeError("exchange transport unavailable")
+        return replace(engine.broker.quotes[symbol], timestamp_ms=service.now_ms())
+
+    async def sleep(seconds):
+        if attempts >= 3:
+            service.stop.set()
+
+    monkeypatch.setattr(service, "fetch_quote", fetch_quote)
+    monkeypatch.setattr(service_module.asyncio, "sleep", sleep)
+    await service.monitor()
+    assert store.get("state") == State.RUNNING
+    assert not sim.quantity
+    import json
+
+    transitions = [
+        json.loads(r["payload"]) for r in store.rows("audit") if r["kind"] == "state_transition"
+    ]
+    assert sum(r["to"] == State.DEGRADED for r in transitions) == 1
+    await adapter.close()
+
+
+async def test_restart_keeps_cooldown_visible_and_preserves_expiry(settings, store, filters):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    await engine.enter("SOLUSDT", row, now)
+    store.put("consecutive_losses", 2)
+    sim.fire_stop()
+    restored = Engine(engine.s, store, filters, broker=engine.broker)
+    await restored.restore()
+    lock = store.get("risk_lock")
+    assert lock["reason"] == "three_losses"
+    assert store.get("state") == State.SOFT_RISK_LOCK
+    await restored.restore()
+    assert store.get("risk_lock") == lock
+    assert store.get("state") == State.SOFT_RISK_LOCK
     await adapter.close()
