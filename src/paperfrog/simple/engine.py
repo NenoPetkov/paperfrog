@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -129,10 +130,12 @@ class Engine:
             # Network calls can refresh the account after the caller sampled its clock.
             # Compare both snapshots with the current exchange clock, never an old loop time.
             now_ms = self.broker.now_ms()
+        symbols = set(self.positions()) | set(self.store.get("simple_selected", []))
         ages = [
-            (now_ms - q.timestamp_ms) / 1000
-            for q in self.broker.quotes.values()
-            if q.symbol in self.positions() or q.symbol in self.store.get("simple_selected", [])
+            (now_ms - self.broker.quotes[symbol].timestamp_ms) / 1000
+            if symbol in self.broker.quotes
+            else float("inf")
+            for symbol in symbols
         ]
         # model_valid means frozen strategy rules; exchange authorization is checked separately.
         return Health(
@@ -206,7 +209,16 @@ class Engine:
             else "startup reconciliation complete; waiting for fresh market data",
         )
 
-    async def resume(self, now_ms: int, *, override_locks: bool = False) -> None:
+    async def resume(
+        self,
+        now_ms: int,
+        *,
+        override_locks: bool = False,
+        override_resume_market_checks: bool = False,
+        before_reset: Callable[[], None] | None = None,
+    ) -> None:
+        if override_resume_market_checks and not override_locks:
+            raise SafeError("market-check override requires an explicit operator reset")
         if override_locks:
             # Recover known journaled executions and verify hosted stops before
             # acknowledging financial locks. Unknown outcomes still fail closed.
@@ -217,14 +229,41 @@ class Engine:
         armed = verify_simple_arm(self.s) if self.s.trading_mode == "live" else False
         if isinstance(self.broker, LiveBroker):
             if override_locks:
+                # Recovery can take longer than quote TTL, and the one-minute
+                # watchlist may include symbols not yet polled by the monitor.
+                # Refresh after recovery, not from the pre-recovery cache.
+                broker = self.broker
+                symbols = sorted(set(self.positions()) | set(self.store.get("simple_selected", [])))
+                semaphore = asyncio.Semaphore(3)
+
+                async def refresh(symbol: str) -> Quote:
+                    async with semaphore:
+                        return await broker.refresh_quote(symbol)
+
+                results = await asyncio.gather(
+                    *(refresh(s) for s in symbols), return_exceptions=True
+                )
+                for symbol, result in zip(symbols, results, strict=True):
+                    if isinstance(result, BaseException):
+                        if not override_resume_market_checks or not isinstance(result, SafeError):
+                            raise result
+                        # A failed read never becomes a fabricated quote. The
+                        # next entry must fetch and validate actual market data.
+                        broker.quotes.pop(symbol, None)
+                        self.store.audit(
+                            "simple_force_resume_quote_unavailable", {"symbol": symbol}
+                        )
                 await self.broker.refresh()
             now_ms = self.broker.now_ms()
+        if before_reset is not None:
+            before_reset()
         self.risk.resume(
             self.health(now_ms),
             datetime.fromtimestamp(now_ms / 1000, UTC),
             armed,
             override_locks=override_locks,
             equity=float(self.broker.equity()) if override_locks else None,
+            override_resume_market_checks=override_resume_market_checks,
         )
 
     async def require_journal(self) -> None:

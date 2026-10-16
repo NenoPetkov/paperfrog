@@ -61,6 +61,27 @@ async def test_no_dangerous_telegram_commands(controls, command):
     controls.resume.assert_not_called()
 
 
+async def test_refuse_force_has_exact_syntax_and_authenticated_deduplicated_dispatch(controls):
+    controls.force_resume = AsyncMock()
+    assert await controls.handle(update("/refuse_force", uid=99)) is None
+    assert await controls.handle(update("/refuse_force", forward_origin={"type": "user"})) is None
+    response = await controls.handle(update("/refuse_force extra"))
+    assert "Unknown" in response[1]
+    controls.force_resume.assert_not_called()
+    request = update("/refuse_force")
+    response = await controls.handle(request)
+    assert "checks overridden" in response[1]
+    assert await controls.handle(request) is None
+    controls.force_resume.assert_awaited_once()
+    controls.resume.assert_not_called()
+
+
+async def test_legacy_profile_does_not_fall_back_to_unrestricted_resume(controls):
+    response = await controls.handle(update("/refuse_force"))
+    assert response[1].startswith("Refused:")
+    controls.resume.assert_not_called()
+
+
 async def test_flatten_requires_one_time_bound_code(controls):
     reply = await controls.handle(update("/flatten"))
     code = reply[1].split()[-1]

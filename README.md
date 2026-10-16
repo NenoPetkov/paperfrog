@@ -346,6 +346,26 @@ these baselines or override an unexpired lock. Reconciliation, protective stops,
 fresh data, crisis checks, pending emergency closure and existing local live
 authorization still have to pass. Position, entry-count and exposure caps still apply.
 
+Operator resume refreshes the selected/held contracts' book and mark quotes after
+execution recovery and then refreshes account equity. A cold quote cache or quotes
+that expired during reconciliation no longer require waiting for the polling loop.
+Normal resume rechecks candle readiness after those network calls; its refusal now
+distinguishes missing candidates, a stale candle scan, crisis/reference readiness,
+market quotes and account data. Genuine stale or invalid exchange responses still
+block ordinary resume.
+
+`/refuse_force` is an explicit, audited **resume-time** market-check override for the
+simple profile. It resets the same financial locks as `/resume` even when the scan
+is empty/expired, the crisis flag is active, or market quotes cannot be refreshed.
+It does not arm LIVE, change risk limits, fabricate a quote or submit an order.
+Reconciliation, hosted protection, fresh positive account equity and the pending
+emergency-close gate remain mandatory. This is a one-time resume acknowledgement,
+not a persistent override of trading rules: entry/exit logic, fresh executable
+quotes, AI permission, BTC gates and crisis handling continue normally. The bot
+may therefore be RUNNING while waiting for a valid trading opportunity. `/pause`
+or `/stop` pauses entries as usual. The command accepts no arguments and uses the
+same Telegram allowlist, replay protection and rate limit as other commands.
+
 The optional account settings accept `DAILY_LOSS_LIMIT=0.125`,
 `WEEKLY_LOSS_LIMIT=0.35`, `HIGH_WATER_DRAWDOWN=0.60` and
 `PROFIT_GUARD_SCALE=10`. At scale 10, profit protection starts at a 7.5% daily peak

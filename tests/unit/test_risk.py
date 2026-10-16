@@ -300,6 +300,51 @@ def test_operator_reset_requires_valid_fresh_equity(settings, store, health, now
     assert store.get("manual_lock")
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"account_age": float("inf")},
+        {"account_age": -1},
+        {"reconciled": False},
+        {"filters_loaded": False},
+        {"model_valid": False},
+        {"event_allowed": False},
+    ],
+)
+def test_forced_resume_cannot_override_account_or_execution_health(
+    settings, store, health, now, changes
+):
+    store.put("manual_lock", True)
+    with pytest.raises(SafeError):
+        RiskEngine(settings, store).resume(
+            replace(health, **changes),
+            now,
+            override_locks=True,
+            equity=10000,
+            override_resume_market_checks=True,
+        )
+    assert store.get("manual_lock")
+
+
+def test_force_override_is_one_resume_only(settings, store, health, now):
+    risk = RiskEngine(settings, store)
+    market_unhealthy = replace(health, market_age=float("inf"), crisis_score=1)
+    with pytest.raises(SafeError, match="explicit operator reset"):
+        risk.resume(market_unhealthy, now, override_resume_market_checks=True)
+    risk.resume(
+        market_unhealthy,
+        now,
+        override_locks=True,
+        equity=10000,
+        override_resume_market_checks=True,
+    )
+    assert store.get("state") == State.RUNNING
+    with pytest.raises(SafeError):
+        risk.require_health(market_unhealthy)
+    with pytest.raises(SafeError):
+        risk.resume(market_unhealthy, now)
+
+
 def test_operator_resume_does_not_arm_live(settings, store, health, now):
     s = settings.model_copy(update={"trading_mode": "live"})
     store.put("manual_lock", True)

@@ -1229,7 +1229,14 @@ async def telegram_resume_fixture(settings, store, filters):
     service.store.engine.dispose()
     service.store, service.engine, service.exchange = store, engine, adapter
     service.rows, service.selected, service.crisis = {"SOLUSDT": row}, ["SOLUSDT"], False
-    controls = Controls(engine.s, store, service.resume, service.flatten, service.status)
+    controls = Controls(
+        engine.s,
+        store,
+        service.resume,
+        service.flatten,
+        service.status,
+        force_resume=service.refuse_force,
+    )
     update = {
         "update_id": time.time_ns(),
         "message": {
@@ -1312,6 +1319,8 @@ async def test_telegram_resume_keeps_financial_locks_when_execution_is_unhealthy
         sim.quantity = Decimal("1")
     elif failure == "stale":
         service.engine.broker.quotes.clear()
+        # A cold cache is now refreshed. Truly stale exchange data must still fail.
+        sim.market_time = service.now_ms() - int(service.s.market_stale_seconds * 1000) - 1
     elif failure == "crisis":
         service.crisis = True
     elif failure == "future_candle":

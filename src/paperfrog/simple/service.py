@@ -59,7 +59,9 @@ class SimpleService:
         self.initial_scan_deadline = time.monotonic() + s.market_stale_seconds
         self.stop = asyncio.Event()
         self.mutex = asyncio.Lock()
-        self.controls = Controls(s, self.store, self.resume, self.flatten, self.status)
+        self.controls = Controls(
+            s, self.store, self.resume, self.flatten, self.status, force_resume=self.refuse_force
+        )
         self.telegram = (
             Telegram(s, self.store, self.controls)
             if s.telegram_bot_token.get_secret_value()
@@ -71,22 +73,40 @@ class SimpleService:
         """Use Binance's synchronized UTC clock when checking exchange timestamps."""
         return int(time.time() * 1000) + self.exchange.offset_ms
 
+    def require_resume_market(self) -> None:
+        if self.engine is None:
+            raise SafeError("execution engine is not ready")
+        if self.crisis:
+            raise SafeError("BTC crisis gate active or reference scan unavailable")
+        if not self.selected:
+            raise SafeError("no eligible coins in the latest scan; waiting for a qualifying setup")
+        now = self.now_ms()
+        if any(
+            not 0
+            <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0)
+            < self.s.simple_entry_bar_ms
+            for symbol in self.selected
+        ):
+            raise SafeError("closed-candle scan is missing, expired or future-dated")
+
     async def resume(self) -> None:
+        await self.resume_operator(force=False)
+
+    async def refuse_force(self) -> None:
+        await self.resume_operator(force=True)
+
+    async def resume_operator(self, *, force: bool) -> None:
         async with self.mutex:
-            now = self.now_ms()
-            if (
-                self.engine is None
-                or not self.selected
-                or self.crisis
-                or any(
-                    not 0
-                    <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0)
-                    < self.s.simple_entry_bar_ms
-                    for symbol in self.selected
-                )
-            ):
-                raise SafeError("fresh scan and non-crisis market required")
-            await self.engine.resume(now, override_locks=True)
+            if self.engine is None:
+                raise SafeError("execution engine is not ready")
+            if not force:
+                self.require_resume_market()
+            await self.engine.resume(
+                self.now_ms(),
+                override_locks=True,
+                override_resume_market_checks=force,
+                before_reset=None if force else self.require_resume_market,
+            )
             self.auto_start = False
 
     async def flatten(self, operation: str) -> bool:

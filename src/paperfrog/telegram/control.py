@@ -18,6 +18,7 @@ COMMANDS = {
     "/status",
     "/start_trading",
     "/resume",
+    "/refuse_force",
     "/stop",
     "/pause",
     "/positions",
@@ -41,6 +42,8 @@ class Controls:
         resume: Callable[[], Awaitable[None]],
         flatten: Callable[[str], Awaitable[bool]],
         status: Callable[[str], Awaitable[str]],
+        *,
+        force_resume: Callable[[], Awaitable[None]] | None = None,
     ):
         self.s, self.store, self.resume, self.flatten, self.status = (
             settings,
@@ -50,6 +53,7 @@ class Controls:
             status,
         )
         self.challenges: dict[tuple[int, int], tuple[str, float]] = {}
+        self.force_resume = force_resume
         self.rate: dict[tuple[int, int], list[float]] = {}
 
     async def handle(self, update: dict[str, Any]) -> tuple[int, str] | None:
@@ -94,6 +98,7 @@ class Controls:
             if command == "/help":
                 response = "paperfrog | " + self.s.trading_mode + "\n" + " ".join(sorted(COMMANDS))
                 response += "\n/resume resets financial locks and cooldowns after execution and health checks."
+                response += "\n/refuse_force resets the same locks despite resume-time scan/crisis checks. Local authorization, reconciliation and order-execution gates still apply."
             elif command in {"/stop", "/pause", "/lock"}:
                 self.store.put("manual_lock", True)
                 if not self.store.get("risk_lock"):
@@ -102,6 +107,14 @@ class Controls:
             elif command in {"/resume", "/start_trading"}:
                 await self.resume()
                 response = "🐸 Financial locks and cooldowns reset. Trading is running."
+            elif command == "/refuse_force":
+                if self.force_resume is None:
+                    raise SafeError("force resume is only supported by the simple profile")
+                await self.force_resume()
+                response = (
+                    "🐸 Financial locks and cooldowns reset. Resume scan/crisis checks overridden. "
+                    "Trading is enabled; new orders still require fresh executable data and strategy permission."
+                )
             elif command == "/flatten":
                 code = secrets.token_hex(4)
                 self.challenges[key] = (hashlib.sha256(code.encode()).hexdigest(), now + 60)

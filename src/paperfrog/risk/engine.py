@@ -126,15 +126,14 @@ class RiskEngine:
             now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         ).timestamp()
 
-    def require_health(self, h: Health) -> None:
+    def require_health(self, h: Health, *, market_checks: bool = True) -> None:
         if not all((h.reconciled, h.model_valid, h.filters_loaded, h.event_allowed)):
             raise SafeError("entry health gates failed")
-        if (
-            not 0 <= h.market_age <= self.s.market_stale_seconds
-            or not 0 <= h.account_age <= self.s.account_stale_seconds
-        ):
-            raise SafeError("stale or invalid data")
-        if h.crisis_score:
+        if not 0 <= h.account_age <= self.s.account_stale_seconds:
+            raise SafeError("stale or invalid data: exchange account snapshot")
+        if market_checks and not 0 <= h.market_age <= self.s.market_stale_seconds:
+            raise SafeError("stale or invalid data: missing, expired or future-dated market quote")
+        if market_checks and h.crisis_score:
             raise SafeError("crisis entry veto")
 
     def reserve(self, p: Proposal, h: Health, now: datetime) -> None:
@@ -285,8 +284,13 @@ class RiskEngine:
         *,
         override_locks: bool = False,
         equity: float | None = None,
+        override_resume_market_checks: bool = False,
     ) -> None:
-        self.require_health(h)
+        if override_resume_market_checks and not override_locks:
+            raise SafeError("market-check override requires an explicit operator reset")
+        # This override affects the resume acknowledgement only. Reservations and
+        # order dispatch still call require_health with all checks enabled.
+        self.require_health(h, market_checks=not override_resume_market_checks)
         if now.tzinfo is None:
             raise SafeError("UTC clock required")
         now = now.astimezone(UTC)
@@ -332,6 +336,7 @@ class RiskEngine:
                         ),
                         "previous_cooldowns": cooldowns,
                         "equity": equity,
+                        "resume_market_checks_overridden": override_resume_market_checks,
                     },
                     conn,
                 )
@@ -350,7 +355,9 @@ class RiskEngine:
             self.store.put("manual_lock", False, conn)
             self.store.transition(
                 State.RUNNING,
-                "operator reset risk locks; health and execution checks passed"
+                "operator reset risk locks; resume market checks overridden; order gates remain active"
+                if override_resume_market_checks
+                else "operator reset risk locks; health and execution checks passed"
                 if override_locks
                 else "health and execution checks passed",
                 conn,
