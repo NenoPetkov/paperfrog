@@ -244,7 +244,7 @@ uv run python scripts/telegram_ids.py
 
 Use `/help`, `/status`, `/positions`, `/orders`, `/risk`, `/last_signal`, `/daily`, `/health`, `/version`. `/stop` and `/pause` stop new entries. `/resume` and `/start_trading` can resume only the already configured mode with all gates satisfied. `/lock` creates a manual pause. `/flatten` returns a random code; submit `/confirm_flatten CODE` within 60 seconds in the same allowed chat as the same user. Codes are single-use and are not audited in plaintext.
 
-Telegram cannot arm live mode, change leverage, raise risk, promote a model, override a hard lock, or terminate the process. Edited, forwarded, old and unapproved group commands are rejected. Poll offsets and deduplication survive restart.
+Telegram cannot arm live mode, change leverage or configured risk thresholds, promote a model, or terminate the process. Authenticated `/resume` and `/start_trading` explicitly reset financial locks and equity baselines after execution, health and existing local authorization checks; resets retain the previous values in the audit. Edited, forwarded, old and unapproved group commands are rejected. Poll offsets and deduplication survive restart.
 
 ## OpenAI event risk
 

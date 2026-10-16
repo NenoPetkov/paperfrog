@@ -87,7 +87,18 @@ class Service:
         if self.s.trading_mode == "live":
             self.arm_valid = verify_arm(self.s, self.model.hash)
         await self.coordinator.reconcile()
-        self.risk.resume(self.health(), datetime.now(UTC), self.arm_valid)
+        if isinstance(self.broker, PaperBroker):
+            equity = float(self.broker.equity())
+        else:
+            equity = float((await self.exchange.account())["totalMarginBalance"])
+        self.account_at = time.time()
+        self.risk.resume(
+            self.health(),
+            datetime.now(UTC),
+            self.arm_valid,
+            override_locks=True,
+            equity=equity,
+        )
         self.exchange.entry_authorized = self.s.trading_mode != "paper"
 
     async def flatten(self, operation: str) -> bool:

@@ -19,9 +19,10 @@ of collateral balances or 80% of the remaining free margin on each entry.
 Live sizing additionally checks available margin and reserves estimated entry fees.
 Stops, liquidity, remaining portfolio capacity and planned-risk caps can reduce the
 size. This preset explicitly raises planned risk to at most 4% per trade and 5%
-across open trades. Daily/weekly/drawdown locks remain unchanged. A single stop can
-therefore exceed the daily loss threshold before that lock blocks later entries;
-these limits do not guarantee a maximum realized loss or prevent liquidation.
+across open trades. It also opts into 10x account thresholds: 12.5% daily loss,
+35% weekly loss and 60% high-water drawdown, with `profit_guard_scale: 10`.
+These are much larger loss allowances; they do not guarantee a maximum realized
+loss or prevent liquidation. Default account limits remain 1.25%, 3.5% and 6%.
 
 The existing two-position limit and LONG/SHORT signals remain. The combined preset
 sets an eight-hour maximum hold; `SIMPLE_MAX_HOLD_HOURS` defaults to four hours and
@@ -31,7 +32,7 @@ live environment configuration or authorization is updated by this preset.
 
 `soft_loss_cooldown_minutes` controls future consecutive-loss locks. The default
 is 720 minutes; both `five-minute-cooldown.yaml` and the combined preset select five minutes. Existing lock
-expiry timestamps, loss history and other risk limits are preserved.
+expiry timestamps and loss history are preserved until an explicit `/resume` reset.
 
 No build is required. A running Python process keeps its loaded code and settings.
 `simple status` reports `configured_settings` and `loaded_settings` separately;
@@ -44,7 +45,7 @@ Telegram sends friendly startup/running messages, successful buys and sells, clo
 PnL, and actual status changes with their reasons. Routine skipped candidates
 (including sizes below the exchange minimum) stay in the local audit instead of
 generating per-coin Telegram alerts. `/status` shows only status and open positions.
-Loss cooldowns remain enforced and explain when automatic recovery is possible.
+Loss cooldowns explain when automatic recovery is possible; `/resume` can reset them early.
 The first subscription sends a current-state snapshot instead of replaying old
 history. Each chat has a durable delivery cursor; failed sends retry.
 A crash after Telegram accepts a message but before the cursor is saved can cause
@@ -104,6 +105,23 @@ PnL with estimated fees and recorded funding. `/status`, `/positions`, `/last_si
 and confirmed `/flatten` work with the simple profile. Notification retries run separately
 from monitoring. `/pause` pauses entries while exits continue. Restart with open PAPER
 positions restores protection and stays paused until explicit `/resume`.
+
+`/resume` (also `/start_trading`) explicitly resets financial locks, daily and weekly
+equity baselines, the high-water mark, profit protection, consecutive-loss counts,
+symbol cooldowns and manual pauses using fresh current equity. Previous baselines,
+locks and counters are retained in an audit record; trade and order history remains
+intact. This permits further losses after a reset. Automatic recovery does not reset
+these baselines or override an unexpired lock. Reconciliation, protective stops,
+fresh data, crisis checks, pending emergency closure and existing local live
+authorization still have to pass. Position, entry-count and exposure caps still apply.
+
+The optional account settings accept `DAILY_LOSS_LIMIT=0.125`,
+`WEEKLY_LOSS_LIMIT=0.35`, `HIGH_WATER_DRAWDOWN=0.60` and
+`PROFIT_GUARD_SCALE=10`. At scale 10, profit protection starts at a 7.5% daily peak
+gain, the minimum giveback is 3.5% of starting equity and the profit entry cap is
+12.5%; the relative giveback remains 35% of peak profit. Settings changes require
+a restart and renewed local LIVE authorization. Telegram cannot change thresholds
+or create that authorization.
 
 Current limits are 12 entries total and two per coin per UTC day, with at most two
 positions. Selection may change during the day. The bot does not force a 5–20-trade

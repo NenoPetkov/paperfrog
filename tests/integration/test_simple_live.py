@@ -14,6 +14,7 @@ from paperfrog.simple.engine import Engine
 from paperfrog.simple.live_broker import LiveBroker
 from paperfrog.simple.service import SimpleService
 from paperfrog.simple.strategy import BAR_MS, require_execution
+from paperfrog.telegram.control import Controls
 
 
 def live_settings(settings, **changes):
@@ -799,4 +800,151 @@ async def test_restart_keeps_cooldown_visible_and_preserves_expiry(settings, sto
     await restored.restore()
     assert store.get("risk_lock") == lock
     assert store.get("state") == State.SOFT_RISK_LOCK
+    await adapter.close()
+
+
+async def telegram_resume_fixture(settings, store, filters):
+    engine, sim, adapter, row, now = await setup_engine(
+        settings,
+        store,
+        filters,
+        telegram_allowed_user_ids=(1,),
+        telegram_allowed_chat_ids=(2,),
+    )
+    service = SimpleService(engine.s)
+    await service.exchange.close()
+    service.store.engine.dispose()
+    service.store, service.engine, service.exchange = store, engine, adapter
+    service.rows, service.selected, service.crisis = {"SOLUSDT": row}, ["SOLUSDT"], False
+    controls = Controls(engine.s, store, service.resume, service.flatten, service.status)
+    update = {
+        "update_id": time.time_ns(),
+        "message": {
+            "from": {"id": 1},
+            "chat": {"id": 2, "type": "private"},
+            "date": time.time(),
+            "text": "/resume",
+        },
+    }
+    lock = {
+        "state": State.DAILY_RISK_LOCK,
+        "until": now / 1000 + 86400,
+        "reason": "profit_giveback",
+    }
+    store.put("risk_lock", lock)
+    store.put("state", lock["state"])
+    store.put("manual_lock", True)
+    store.put("profit_entry_lock", True)
+    store.put("consecutive_losses", 3)
+    store.put("cooldown:SOLUSDT", now / 1000 + 10800)
+    return service, sim, adapter, controls, update
+
+
+@pytest.mark.parametrize(
+    "state,reason",
+    [
+        (State.SOFT_RISK_LOCK, "three_losses"),
+        (State.DAILY_RISK_LOCK, "daily_loss"),
+        (State.DAILY_RISK_LOCK, "profit_giveback"),
+        (State.WEEKLY_RISK_LOCK, "weekly_local_review"),
+        (State.HARD_RISK_LOCK, "high_water"),
+        (State.ERROR_SAFE, "previous execution failure"),
+        (State.DEGRADED, "previous transport failure"),
+        (State.PAUSED, "manual pause"),
+    ],
+)
+async def test_telegram_resume_resets_financial_locks_using_fresh_exchange_equity(
+    settings, store, filters, state, reason
+):
+    service, sim, adapter, controls, update = await telegram_resume_fixture(
+        settings, store, filters
+    )
+    store.put("risk_lock", {"state": state, "until": None, "reason": reason})
+    store.put("state", state)
+    sim.equity = "475"
+    arm_path = directory(service.s) / "live-arm.json"
+    arm_record = arm_path.read_bytes()
+    response = await controls.handle(update)
+    assert "Trading is running" in response[1]
+    assert store.get("state") == State.RUNNING
+    assert store.get("anchors")["day_equity"] == 475
+    assert store.get("anchors")["high_water"] == 475
+    assert not store.get("risk_lock") and not store.get("profit_entry_lock")
+    assert not store.get("manual_lock")
+    assert store.get("consecutive_losses") == 0
+    assert store.get("cooldown:SOLUSDT") == 0
+    assert arm_path.read_bytes() == arm_record
+    # Telegram's durable update deduplication must not rebase equity twice.
+    sim.equity = "470"
+    assert await controls.handle(update) is None
+    assert store.get("anchors")["day_equity"] == 475
+    await service.engine.monitor(service.now_ms(), service.rows)
+    assert store.get("state") == State.RUNNING
+    assert not any(method == "POST" and path.endswith("/order") for method, path in sim.calls)
+    await adapter.close()
+
+
+@pytest.mark.parametrize(
+    "failure", ["arm", "mismatch", "stale", "crisis", "future_candle", "pending_close"]
+)
+async def test_telegram_resume_keeps_financial_locks_when_execution_is_unhealthy(
+    settings, store, filters, failure
+):
+    service, sim, adapter, controls, update = await telegram_resume_fixture(
+        settings, store, filters
+    )
+    if failure == "arm":
+        (directory(service.s) / "live-arm.json").unlink()
+    elif failure == "mismatch":
+        sim.quantity = Decimal("1")
+    elif failure == "stale":
+        service.engine.broker.quotes.clear()
+    elif failure == "crisis":
+        service.crisis = True
+    elif failure == "future_candle":
+        service.rows["SOLUSDT"]["timestamp_ms"] = service.now_ms() + BAR_MS
+    elif failure == "pending_close":
+        store.put("local_flatten_request", "local-emergency")
+    before = {
+        key: store.get(key)
+        for key in (
+            "anchors",
+            "risk_lock",
+            "manual_lock",
+            "profit_entry_lock",
+            "consecutive_losses",
+            "cooldown:SOLUSDT",
+        )
+    }
+    response = await controls.handle(update)
+    assert response[1].startswith("Refused:")
+    assert {key: store.get(key) for key in before} == before
+    assert store.get("state") != State.RUNNING
+    assert not any(row["kind"] == "operator_risk_reset" for row in store.rows("audit"))
+    if failure == "arm":
+        assert not (directory(service.s) / "live-arm.json").exists()
+    await adapter.close()
+
+
+@pytest.mark.parametrize("failure", ["journal", "hosted_stop"])
+async def test_operator_resume_verifies_execution_recovery_before_resetting_locks(
+    settings, store, filters, failure
+):
+    engine, sim, adapter, row, now = await setup_engine(settings, store, filters)
+    if failure == "journal":
+        sim.unknown_order = True
+        with pytest.raises(UnknownOrder):
+            await engine.enter("SOLUSDT", row, now)
+    else:
+        await engine.enter("SOLUSDT", row, now)
+        next(iter(sim.stops.values()))["algoStatus"] = "CANCELED"
+    store.put("risk_lock", {"state": State.HARD_RISK_LOCK, "until": None, "reason": "high_water"})
+    store.put("state", State.HARD_RISK_LOCK)
+    store.put("manual_lock", True)
+    before = {key: store.get(key) for key in ("anchors", "risk_lock", "manual_lock")}
+    with pytest.raises(SafeError):
+        await engine.resume(engine.broker.now_ms(), override_locks=True)
+    assert {key: store.get(key) for key in before} == before
+    assert not any(row["kind"] == "operator_risk_reset" for row in store.rows("audit"))
+    assert store.get("state") != State.RUNNING
     await adapter.close()

@@ -66,12 +66,13 @@ class SimpleService:
                 or not self.selected
                 or self.crisis
                 or any(
-                    now - self.rows.get(symbol, {}).get("timestamp_ms", 0) >= 2 * BAR_MS
+                    not 0 <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0) < BAR_MS
                     for symbol in self.selected
                 )
             ):
                 raise SafeError("fresh scan and non-crisis market required")
-            await self.engine.resume(now)
+            await self.engine.resume(now, override_locks=True)
+            self.auto_start = False
 
     async def flatten(self, operation: str) -> bool:
         async with self.mutex:

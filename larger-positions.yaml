@@ -17,5 +17,9 @@ max_gross_notional: 2.0
 max_net_beta: 2.0
 risk_per_trade: 0.04
 max_open_risk: 0.05
+daily_loss_limit: 0.125
+weekly_loss_limit: 0.35
+high_water_drawdown: 0.60
+profit_guard_scale: 10
 state_dir: state/larger-positions-paper
 health_port: 8082

@@ -61,7 +61,8 @@ class EventNotifications:
             if payload["reason"] == "three_losses":
                 return (
                     "☕ Taking a breather after 3 losses in a row.\n"
-                    f"New entries can resume automatically after {until}, once checks pass."
+                    f"New entries can resume automatically after {until}, once checks pass.\n"
+                    "Use /resume to reset the cooldown now, once execution and health checks pass."
                 )
             reasons = {
                 "daily_loss": "Today's loss limit was reached",
@@ -73,9 +74,13 @@ class EventNotifications:
             followup = (
                 f"I'll recheck after {until}."
                 if until
-                else "A local risk review is needed before resuming."
+                else "Automatic recovery requires an operator risk reset."
             )
-            return f"⏸ {reason}. New entries are paused.\n{followup}"
+            return (
+                f"⏸ {reason}. New entries are paused.\n{followup}\n"
+                "Use /resume to reset financial locks and their equity baselines, "
+                "once execution and health checks pass."
+            )
         if kind == "simple_hosted_stop":
             action = "Bought" if payload["side"] > 0 else "Sold"
             return (

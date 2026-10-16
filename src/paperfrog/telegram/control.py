@@ -93,6 +93,7 @@ class Controls:
         try:
             if command == "/help":
                 response = "paperfrog | " + self.s.trading_mode + "\n" + " ".join(sorted(COMMANDS))
+                response += "\n/resume resets financial locks and cooldowns after execution and health checks."
             elif command in {"/stop", "/pause", "/lock"}:
                 self.store.put("manual_lock", True)
                 if not self.store.get("risk_lock"):
@@ -100,7 +101,7 @@ class Controls:
                 response = "⏸ Entries paused. I'm still watching open positions and exits."
             elif command in {"/resume", "/start_trading"}:
                 await self.resume()
-                response = "🐸 Back on watch! Trading is running."
+                response = "🐸 Financial locks and cooldowns reset. Trading is running."
             elif command == "/flatten":
                 code = secrets.token_hex(4)
                 self.challenges[key] = (hashlib.sha256(code.encode()).hexdigest(), now + 60)

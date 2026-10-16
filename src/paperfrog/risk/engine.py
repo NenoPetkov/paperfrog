@@ -47,7 +47,7 @@ class RiskEngine:
             raise SafeError("scaled profit protection is offline PAPER-only")
         self.s = settings
         self.store = store
-        self.profit_guard_scale = profit_guard_scale
+        self.profit_guard_scale = max(settings.profit_guard_scale, profit_guard_scale)
 
     def anchors(self, equity: float, now: datetime) -> dict[str, object]:
         if not math.isfinite(equity) or equity <= 0 or now.tzinfo is None:
@@ -267,19 +267,84 @@ class RiskEngine:
             conn,
         )
 
-    def resume(self, h: Health, now: datetime, live_armed: bool = False) -> None:
+    def resume(
+        self,
+        h: Health,
+        now: datetime,
+        live_armed: bool = False,
+        *,
+        override_locks: bool = False,
+        equity: float | None = None,
+    ) -> None:
         self.require_health(h)
+        if now.tzinfo is None:
+            raise SafeError("UTC clock required")
+        now = now.astimezone(UTC)
         if self.s.trading_mode == "live" and not live_armed:
             raise SafeError("local live arm missing")
+        if override_locks and (equity is None or not math.isfinite(equity) or equity <= 0):
+            raise SafeError("fresh positive equity required to reset risk locks")
         with self.store.transaction() as conn:
+            if self.store.get("local_flatten_request", None, conn):
+                raise SafeError("emergency close pending; verify closure before resuming")
             lock = self.store.get("risk_lock", None, conn)
-            if lock and (lock["until"] is None or now.timestamp() < lock["until"]):
-                raise SafeError("risk lock cannot be overridden")
-            if self.store.get("profit_entry_lock", False, conn):
-                raise SafeError("profit lock active")
+            if override_locks:
+                previous = self.store.get("anchors", {}, conn)
+                cooldown_keys: list[str] = list(
+                    conn.execute(
+                        text("SELECT key FROM kv WHERE substr(key,1,9)='cooldown:'")
+                    ).scalars()
+                )
+                cooldowns = {key: self.store.get(key, 0, conn) for key in cooldown_keys}
+                anchors = {
+                    **previous,
+                    "day": now.date().isoformat(),
+                    "week": (now.date() - timedelta(days=now.weekday())).isoformat(),
+                    "day_equity": equity,
+                    "week_equity": equity,
+                    "peak": equity,
+                    "high_water": equity,
+                    "equity": equity,
+                }
+                self.store.audit(
+                    "operator_risk_reset",
+                    {
+                        "previous_state": self.store.get("state", None, conn),
+                        "previous_lock": lock,
+                        "previous_anchors": previous,
+                        "previous_profit_entry_lock": self.store.get(
+                            "profit_entry_lock", False, conn
+                        ),
+                        "previous_risk_multiplier": self.store.get("risk_multiplier", 1.0, conn),
+                        "previous_manual_lock": self.store.get("manual_lock", False, conn),
+                        "previous_consecutive_losses": self.store.get(
+                            "consecutive_losses", 0, conn
+                        ),
+                        "previous_cooldowns": cooldowns,
+                        "equity": equity,
+                    },
+                    conn,
+                )
+                self.store.put("anchors", anchors, conn)
+                self.store.put("profit_entry_lock", False, conn)
+                self.store.put("risk_multiplier", 1.0, conn)
+                self.store.put("consecutive_losses", 0, conn)
+                for key in cooldowns:
+                    self.store.put(key, 0, conn)
+            else:
+                if lock and (lock["until"] is None or now.timestamp() < lock["until"]):
+                    raise SafeError("risk lock cannot be overridden automatically; use /resume")
+                if self.store.get("profit_entry_lock", False, conn):
+                    raise SafeError("profit lock active; use /resume")
             self.store.put("risk_lock", None, conn)
             self.store.put("manual_lock", False, conn)
-            self.store.transition(State.RUNNING, "health and execution checks passed", conn)
+            self.store.transition(
+                State.RUNNING,
+                "operator reset risk locks; health and execution checks passed"
+                if override_locks
+                else "health and execution checks passed",
+                conn,
+            )
 
 
 def crisis_score(

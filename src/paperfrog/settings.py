@@ -45,9 +45,10 @@ class Settings(BaseSettings):
     max_target_notional: float = Field(0.08, gt=0, le=1.6)
     max_gross_notional: float = Field(0.5, gt=0, le=2.0)
     max_net_beta: float = Field(0.10, gt=0, le=2.0)
-    daily_loss_limit: float = Field(0.0125, gt=0, le=0.0125)
-    weekly_loss_limit: float = Field(0.035, gt=0, le=0.035)
-    high_water_drawdown: float = Field(0.06, gt=0, le=0.06)
+    daily_loss_limit: float = Field(0.0125, gt=0, le=0.125)
+    weekly_loss_limit: float = Field(0.035, gt=0, le=0.35)
+    high_water_drawdown: float = Field(0.06, gt=0, le=0.60)
+    profit_guard_scale: float = Field(1.0, ge=1, le=10)
     exchange_leverage: Literal[2] = 2
     margin_type: Literal["ISOLATED", "CROSSED"] = "ISOLATED"
     position_mode: Literal["ONE_WAY"] = "ONE_WAY"
@@ -143,6 +144,10 @@ class Settings(BaseSettings):
                     "max_gross_notional",
                     "max_net_beta",
                     "max_concurrent_strategy_trades",
+                    "daily_loss_limit",
+                    "weekly_loss_limit",
+                    "high_water_drawdown",
+                    "profit_guard_scale",
                 },
             )
         )

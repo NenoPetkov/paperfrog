@@ -195,14 +195,26 @@ class Engine:
             else "startup reconciliation complete; waiting for fresh market data",
         )
 
-    async def resume(self, now_ms: int) -> None:
-        if not await self.coordinator.reconcile():
+    async def resume(self, now_ms: int, *, override_locks: bool = False) -> None:
+        if override_locks:
+            # Recover known journaled executions and verify hosted stops before
+            # acknowledging financial locks. Unknown outcomes still fail closed.
+            await self.restore()
+        elif not await self.coordinator.reconcile():
             raise SafeError("simple reconciliation failed")
         await self.require_journal()
         armed = verify_simple_arm(self.s) if self.s.trading_mode == "live" else False
         if isinstance(self.broker, LiveBroker):
+            if override_locks:
+                await self.broker.refresh()
             now_ms = self.broker.now_ms()
-        self.risk.resume(self.health(now_ms), datetime.fromtimestamp(now_ms / 1000, UTC), armed)
+        self.risk.resume(
+            self.health(now_ms),
+            datetime.fromtimestamp(now_ms / 1000, UTC),
+            armed,
+            override_locks=override_locks,
+            equity=float(self.broker.equity()) if override_locks else None,
+        )
 
     async def require_journal(self) -> None:
         if isinstance(self.broker, LiveBroker):

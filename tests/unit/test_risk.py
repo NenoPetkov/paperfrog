@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -152,6 +153,168 @@ def test_profit_entry_lock(settings, store, now):
     risk.anchors(10000, now)
     risk.anchors(10125, now)
     assert store.get("profit_entry_lock")
+
+
+def account_settings(settings):
+    return Settings(
+        _env_file=None,
+        **{
+            **settings.public(),
+            "daily_loss_limit": 0.125,
+            "weekly_loss_limit": 0.35,
+            "high_water_drawdown": 0.60,
+            "profit_guard_scale": 10,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "equity,expected",
+    [
+        (9875, None),
+        (9650, None),
+        (9400, None),
+        (8750.01, None),
+        (8750, State.DAILY_RISK_LOCK),
+        (6500, State.WEEKLY_RISK_LOCK),
+        (4000, State.HARD_RISK_LOCK),
+    ],
+)
+def test_tenfold_account_loss_boundaries(settings, store, now, equity, expected):
+    risk = RiskEngine(account_settings(settings), store)
+    risk.anchors(10000, now)
+    risk.anchors(equity, now)
+    lock = store.get("risk_lock")
+    assert (lock["state"] if lock else None) == expected
+
+
+def test_tenfold_profit_protection_and_exact_giveback(settings, store, now):
+    risk = RiskEngine(account_settings(settings), store)
+    risk.anchors(10000, now)
+    risk.anchors(10125, now)
+    assert not store.get("profit_entry_lock")
+    assert store.get("risk_multiplier") == 1
+    risk.anchors(10750, now)
+    assert store.get("risk_multiplier") == 0.5
+    risk.anchors(10400.01, now)
+    assert store.get("risk_lock") is None
+    risk.anchors(10400, now)
+    assert store.get("risk_lock")["reason"] == "profit_giveback"
+
+
+def test_tenfold_profit_entry_boundary(settings, store, now):
+    risk = RiskEngine(account_settings(settings), store)
+    risk.anchors(10000, now)
+    risk.anchors(11249.99, now)
+    assert not store.get("profit_entry_lock")
+    risk.anchors(11250, now)
+    assert store.get("profit_entry_lock")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("daily_loss_limit", 0.126),
+        ("weekly_loss_limit", 0.351),
+        ("high_water_drawdown", 0.601),
+        ("profit_guard_scale", 10.01),
+        ("profit_guard_scale", 0),
+        ("daily_loss_limit", float("nan")),
+        ("profit_guard_scale", float("inf")),
+    ],
+)
+def test_account_limits_remain_bounded(field, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: value})
+
+
+@pytest.mark.parametrize("state", list(State))
+def test_operator_resume_resets_all_financial_locks_without_losing_history(
+    settings, store, health, now, state
+):
+    risk = RiskEngine(settings, store)
+    risk.reserve(proposal(), health, now)
+    risk.closed("trade", -1, now)
+    risk.anchors(10000, now)
+    risk.anchors(9400, now)
+    lock = {"state": state, "until": None, "reason": "operator_review"}
+    store.put("risk_lock", lock)
+    store.put("state", state)
+    store.put("manual_lock", True)
+    store.put("profit_entry_lock", True)
+    store.put("risk_multiplier", 0.5)
+    store.put("consecutive_losses", 3)
+    entries = store.rows("entries")
+    anchors = store.get("anchors")
+    risk.resume(health, now, override_locks=True, equity=9300)
+    assert store.get("state") == State.RUNNING
+    assert store.get("risk_lock") is None
+    assert not store.get("manual_lock")
+    assert not store.get("profit_entry_lock")
+    assert store.get("risk_multiplier") == 1
+    assert store.get("consecutive_losses") == 0
+    assert store.get("cooldown:SOLUSDT") == 0
+    assert store.rows("entries") == entries
+    # The next tick at the acknowledged equity must not immediately re-lock.
+    risk.anchors(9300, now)
+    assert store.get("risk_lock") is None
+    for key in ("equity", "day_equity", "week_equity", "peak", "high_water"):
+        assert store.get("anchors")[key] == 9300
+    reset = next(row for row in store.rows("audit") if row["kind"] == "operator_risk_reset")
+    previous = json.loads(reset["payload"])
+    assert previous["previous_anchors"] == anchors
+    assert previous["previous_lock"] == lock
+    assert previous["previous_consecutive_losses"] == 3
+    assert previous["previous_cooldowns"]["cooldown:SOLUSDT"] > now.timestamp()
+    risk.reserve(proposal("next", equity=9300), health, now)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"market_age": 61},
+        {"account_age": 61},
+        {"reconciled": False},
+        {"model_valid": False},
+        {"filters_loaded": False},
+        {"crisis_score": 1},
+        {"event_allowed": False},
+    ],
+)
+def test_operator_reset_fails_atomically_on_unhealthy_inputs(settings, store, health, now, changes):
+    risk = RiskEngine(settings, store)
+    risk.anchors(10000, now)
+    risk.anchors(9400, now)
+    before = {key: store.get(key) for key in ("risk_lock", "anchors", "state")}
+    with pytest.raises(SafeError):
+        risk.resume(replace(health, **changes), now, override_locks=True, equity=9400)
+    assert {key: store.get(key) for key in before} == before
+    assert not any(row["kind"] == "operator_risk_reset" for row in store.rows("audit"))
+
+
+@pytest.mark.parametrize("equity", [None, 0, -1, float("nan"), float("inf")])
+def test_operator_reset_requires_valid_fresh_equity(settings, store, health, now, equity):
+    store.put("manual_lock", True)
+    with pytest.raises(SafeError, match="fresh positive equity"):
+        RiskEngine(settings, store).resume(health, now, override_locks=True, equity=equity)
+    assert store.get("manual_lock")
+
+
+def test_operator_resume_does_not_arm_live(settings, store, health, now):
+    s = settings.model_copy(update={"trading_mode": "live"})
+    store.put("manual_lock", True)
+    with pytest.raises(SafeError, match="local live arm missing"):
+        RiskEngine(s, store).resume(health, now, override_locks=True, equity=10000)
+    assert store.get("manual_lock")
+
+
+def test_operator_resume_cannot_cancel_pending_emergency_close(settings, store, health, now):
+    store.put("local_flatten_request", "local-emergency")
+    store.put("manual_lock", True)
+    with pytest.raises(SafeError, match="emergency close pending"):
+        RiskEngine(settings, store).resume(health, now, override_locks=True, equity=10000)
+    assert store.get("local_flatten_request") == "local-emergency"
+    assert store.get("manual_lock")
 
 
 def test_cooldown_and_three_losses(settings, store, health, now):
