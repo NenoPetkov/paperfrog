@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Coroutine
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
@@ -403,6 +403,46 @@ def report_readiness(evidence: Path | None = None) -> None:
     emit({"live_permitted": report["permitted"], "report": str(s.reports_dir / "readiness.md")})
     if not report["permitted"]:
         raise typer.Exit(2)
+
+
+@simple_app.command("analysis")
+def simple_analysis(
+    day: Annotated[
+        str | None, typer.Option(help="UTC close date YYYY-MM-DD; defaults to yesterday")
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option(help="Write JSON and readable TXT reports here")
+    ] = None,
+    json_output: Annotated[bool, typer.Option(help="Print the structured JSON report")] = False,
+) -> None:
+    """Analyze journaled winners, losers and costs without contacting the exchange."""
+    from paperfrog.simple.analysis import daily_report, render_report, write_report
+    from paperfrog.simple.authorization import directory
+
+    now = datetime.now(UTC)
+    try:
+        selected_day = date.fromisoformat(day) if day else now.date() - timedelta(days=1)
+    except ValueError:
+        raise typer.BadParameter("day must be a valid YYYY-MM-DD date") from None
+    if selected_day > now.date():
+        raise typer.BadParameter("day cannot be in the future")
+    s = settings()
+    path = directory(s) / "paperfrog.sqlite"
+    if not path.is_file():
+        raise typer.BadParameter("no journal exists for the configured execution mode")
+    store = Store(path)
+    try:
+        report = daily_report(
+            store.get("simple_closed", []), selected_day, int(now.timestamp() * 1000)
+        )
+    finally:
+        store.engine.dispose()
+    if output is not None:
+        write_report(report, output)
+    if json_output:
+        emit(report)
+    else:
+        typer.echo(render_report(report), nl=False)
 
 
 @simple_app.command("collect")

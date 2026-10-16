@@ -23,6 +23,7 @@ from paperfrog.telegram.events import EventNotifications
 from paperfrog.telegram.formatting import positions_text, status_text
 
 from .adaptive import Advisor, enrich, request_limit
+from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
 from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_reference, pair_features
 from .data import candles, funding, quote_snapshot, scan
@@ -154,6 +155,13 @@ class SimpleService:
                 if self.s.simple_live_research_waiver
                 else "required",
                 "profitability": "unproven",
+                "daily_analysis": {
+                    "directory": str(
+                        self.s.reports_dir / ("simple-" + self.s.trading_mode) / "daily"
+                    ),
+                    "timezone": "UTC",
+                    "status": self.store.get("simple_daily_analysis_status", "pending"),
+                },
                 "adaptive_ai": {
                     "enabled": self.s.simple_ai_enabled,
                     "review_minutes": self.s.simple_ai_review_minutes,
@@ -646,6 +654,23 @@ class SimpleService:
                 await EventNotifications(self.s, self.store, self.telegram).deliver()
             await asyncio.sleep(5)
 
+    async def daily_analysis(self) -> None:
+        folder = self.s.reports_dir / ("simple-" + self.s.trading_mode) / "daily"
+        while True:
+            try:
+                # Analysis runs off the execution loop and writes only local reports.
+                trades = self.store.get("simple_closed", [])
+                await asyncio.to_thread(refresh_reports, trades, folder, self.now_ms())
+                self.store.put("simple_daily_analysis_status", "ready")
+            except Exception as exc:
+                # Optional reporting must not interrupt monitoring or hosted protection.
+                # Exception text can contain private data; retain only its class.
+                self.store.put("simple_daily_analysis_status", "unavailable")
+                self.store.audit(
+                    "simple_daily_analysis_unavailable", {"error_type": type(exc).__name__}
+                )
+            await asyncio.sleep(60)
+
     async def run(self, once: bool = False) -> None:
         with InstanceLock(self.directory):
             tasks: list[asyncio.Task[Any]] = []
@@ -712,6 +737,7 @@ class SimpleService:
                     asyncio.create_task(self.research(), name="market research"),
                     asyncio.create_task(self.monitor(), name="trade monitoring"),
                     asyncio.create_task(self.notifications(), name="Telegram notifications"),
+                    asyncio.create_task(self.daily_analysis(), name="daily trade analysis"),
                     asyncio.create_task(server.serve(sockets=[sock]), name="health server"),
                 ]
                 if self.s.simple_btc_reference_enabled:

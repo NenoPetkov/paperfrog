@@ -214,6 +214,62 @@ rules can lose money; a few trades cannot establish an edge.
 Historical backtests refuse AI-enabled settings without recorded forward decisions;
 the bot does not fabricate historical AI advice or present an empty replay as evidence.
 
+## Trade journal and daily analysis
+
+New simple-profile entries retain a versioned journal with the entry signal reason,
+strategy/rules and configuration hash, closed-candle indicators, quote/spread,
+execution mode and timeframe. Closed records add entry/exit fill prices, holding
+time, gross and net PnL, both fees, signed funding, and observed favorable/adverse
+excursions. Entry context and quote references survive execution recovery. Older
+records remain usable; unavailable historical context is reported as unknown.
+
+The service refreshes local daily reports every minute, including historical days
+with closed trades, yesterday, and the current partial day:
+
+```text
+reports/simple-paper/daily/YYYY-MM-DD.json
+reports/simple-paper/daily/YYYY-MM-DD.txt
+```
+
+The directory uses `simple-live` or `simple-testnet` for those execution modes,
+under the configured `reports_dir`. Days use **UTC exit time**, consistent with the
+bot's ledger. All lifetime costs belong to the day a trade closes; open positions
+are excluded. Reports compare winners, losers and breakeven trades, including
+average entry indicators, holding times, excursions and net returns. Breakdowns
+cover symbol, direction, strategy, exit reason, timeframe, volume ratio, AI rule,
+fee basis and currency. Every metric includes its available sample count.
+`/simple` diagnostics expose the report directory and generation status.
+
+Generate a report locally without exchange access (using the same configuration
+as the intended bot instance):
+
+```bash
+uv run --python 3.12 paperfrog simple analysis
+uv run --python 3.12 paperfrog simple analysis --day 2026-10-15
+uv run --python 3.12 paperfrog simple analysis --day 2026-10-15 --json-output --output reports/trade-review
+```
+
+The default is yesterday UTC. `--output` writes both JSON and readable text;
+without it the command only prints the report. Missing journals and future dates
+are rejected. Automatic reports are local only and do not send Telegram messages,
+alter the AI's inputs, change entry rules, or mutate risk controls. Optional report
+generation failures are recorded by exception class and retried next minute.
+
+Net PnL is fill-price gross PnL minus fees plus signed funding. Spread and slippage
+diagnostics are already embedded in fill prices and **must not be deducted again**.
+Slippage uses the pre-order bid/ask as its reference; a recovered exchange-hosted
+stop has no reliable contemporaneous reference, so its slippage stays unknown.
+Live/testnet fees remain estimates from the configured fee rate, not reconciled
+commissions. Funding includes recorded income; late exchange postings can be
+missing. Excursions use sampled marks and fills, so downtime and between-poll
+extremes are not captured. Monetary comparisons require consistent account units.
+Small samples, feature differences and passing software tests do not establish
+causation, improved prediction or profitability.
+
+Running services need to load the updated code to collect the richer journal.
+Existing source-bound live authorization must be renewed locally after an update;
+the reporting command itself does not authorize trading.
+
 ## Install and verify
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:

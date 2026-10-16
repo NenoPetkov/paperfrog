@@ -23,6 +23,7 @@ from .adaptive import signal as adaptive_signal
 from .authorization import verify_simple_arm
 from .bitcoin import BTC
 from .bitcoin import entry_gate as btc_entry_gate
+from .journal import execution_cost, indicators, observe, reference
 from .live_broker import LiveBroker
 from .minute import MINUTE_MS
 from .minute import direction as minute_direction
@@ -241,10 +242,21 @@ class Engine:
                 raise SafeError("simple execution journal incomplete; entries remain blocked")
 
     def finish(
-        self, symbol: str, fill: Fill, now_ms: int, reason: str, conn: Connection | None = None
+        self,
+        symbol: str,
+        fill: Fill,
+        now_ms: int,
+        reason: str,
+        conn: Connection | None = None,
+        *,
+        exit_reference: dict[str, Any] | None = None,
     ) -> None:
         positions = dict(self.store.get("simple_positions", {}, conn))
         trade = positions[symbol]
+        observe(trade, float(fill.price), now_ms)
+        if exit_reference is None:
+            closing = self.store.get("simple_closing", {}, conn).get(symbol, {})
+            exit_reference = closing.get("quote_reference")
         pnl = (
             (float(fill.price) - trade["entry_price"]) * float(fill.quantity) * trade["side"]
             - float(fill.fee)
@@ -264,6 +276,27 @@ class Engine:
             "turnover": float(fill.quantity * fill.price)
             + float(trade["quantity"]) * trade["entry_price"],
             "ai_rule_id": trade.get("ai_rule_id"),
+            "journal_version": trade.get("journal_version", 0),
+            "trade_id": trade["id"],
+            "entry_context": trade.get("entry_context"),
+            "entry_price": trade["entry_price"],
+            "exit_price": float(fill.price),
+            "quantity": float(fill.quantity),
+            "entry_fee": trade["entry_fee"],
+            "exit_fee": float(fill.fee),
+            "gross_pnl": (float(fill.price) - trade["entry_price"])
+            * float(fill.quantity)
+            * trade["side"],
+            "net_return": pnl / (trade["entry_price"] * float(fill.quantity)),
+            "holding_seconds": (now_ms - trade["opened_ms"]) / 1000,
+            "initial_stop_distance": trade.get("initial_stop_distance"),
+            "final_stop_price": trade.get("stop_price"),
+            "mfe_fraction": trade.get("mfe_fraction"),
+            "mae_fraction": trade.get("mae_fraction"),
+            "last_observed_ms": trade.get("last_observed_ms"),
+            "entry_execution_cost": trade.get("entry_execution_cost"),
+            "exit_execution_cost": execution_cost(fill, exit_reference),
+            "exit_quote_reference": exit_reference,
         }
         records = self.store.get("simple_closed", [], conn)
         records.append(record)
@@ -276,7 +309,9 @@ class Engine:
             conn,
         )
 
-    def record_stop(self, fill: Fill, now_ms: int) -> None:
+    def record_stop(
+        self, fill: Fill, now_ms: int, *, exit_reference: dict[str, Any] | None = None
+    ) -> None:
         if (
             fill.symbol not in self.positions()
             or Decimal(self.positions()[fill.symbol]["quantity"]) != fill.quantity
@@ -296,13 +331,23 @@ class Engine:
                 now_ms,
                 "protective stop or volatility trailing stop reached",
                 conn,
+                exit_reference=exit_reference,
             )
 
     async def quote(self, quote: Quote, now_ms: int) -> None:
         if not 0 <= now_ms - quote.timestamp_ms <= self.s.market_stale_seconds * 1000:
             raise SafeError("simple quote stale or future dated")
+        positions = self.positions()
+        if quote.symbol in positions:
+            observe(positions[quote.symbol], float(quote.mark), quote.timestamp_ms)
+            self.store.put("simple_positions", positions)
         for fill in await self.broker.quote(quote):
-            self.record_stop(fill, now_ms)
+            # Only a simulated stop is known to execute on this exact quote.
+            self.record_stop(
+                fill,
+                now_ms,
+                exit_reference=reference(quote) if isinstance(self.broker, PaperBroker) else None,
+            )
             await self.broker.cancel_protection(fill.symbol)
 
     def funding(self, symbol: str, timestamp_ms: int, rate: Decimal, mark: Decimal) -> None:
@@ -341,6 +386,7 @@ class Engine:
             "order": order.model_dump(mode="json"),
             "timestamp_ms": now_ms,
             "reason": reason,
+            "quote_reference": reference(q),
         }
         self.store.put("simple_closing", closing)
         fill = await self.coordinator.submit_once(order)
@@ -667,6 +713,26 @@ class Engine:
             "entry_timeframe": self.s.simple_entry_timeframe,
             "opened_ms": now_ms,
             "stop_fraction": stop,
+            "journal_version": 1,
+            "entry_context": {
+                "strategy": self.strategy,
+                "config_hash": self.s.config_hash,
+                "rules": self.rules.public(),
+                "mode": self.s.trading_mode,
+                "currency": "BNFCR" if self.s.futures_account_mode == "credits" else "USDT",
+                "entry_mode": self.s.simple_entry_mode,
+                "entry_profile": self.s.simple_entry_profile,
+                "entry_timeframe": self.s.simple_entry_timeframe,
+                "ai_enabled": self.s.simple_ai_enabled,
+                "reason": reason,
+                "indicators": indicators(row),
+                "quote_reference": reference(q),
+                "fee_basis": "simulated" if self.s.trading_mode == "paper" else "estimated",
+                "fee_rate": self.s.fee_rate,
+                "funding_basis": "simulated"
+                if self.s.trading_mode == "paper"
+                else "exchange_income",
+            },
         }
         if self.s.simple_btc_reference_enabled:
             current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
@@ -762,7 +828,13 @@ class Engine:
             "stop_price": float(fill.price) * (1 - direction * stop),
             "initial_stop_distance": float(fill.price) * stop,
             "ai_rule_id": intent.get("ai_rule_id"),
+            "journal_version": intent.get("journal_version", 0),
+            "entry_context": intent.get("entry_context"),
+            "entry_execution_cost": execution_cost(
+                fill, (intent.get("entry_context") or {}).get("quote_reference")
+            ),
         }
+        observe(positions[symbol], float(fill.price), intent["opened_ms"])
         if self.s.simple_entry_mode == "failed_breakout":
             positions[symbol]["rejection_level"] = intent["rejection_level"]
         with self.store.transaction() as conn:
