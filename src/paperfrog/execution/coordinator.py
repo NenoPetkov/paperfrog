@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from paperfrog.domain.types import (
     Broker,
+    EntryVeto,
     Fill,
     Filters,
     Order,
@@ -69,6 +70,42 @@ class Coordinator:
                 if query_only
                 else await self.broker.submit(order)
             )
+        except EntryVeto as failure:
+            # This exception is reserved for a confirmed local veto BEFORE the
+            # broker calls the order endpoint. It must never represent API errors.
+            if query_only or order.reduce_only:
+                self.store.put("reconciled", False)
+                self.store.transition(
+                    State.ERROR_SAFE, "unexpected local veto during reconciliation or exit"
+                )
+                raise UnknownOrder(
+                    "local veto cannot resolve a previous submission or exit"
+                ) from None
+            rejected = Fill(
+                client_id=order.client_id,
+                symbol=order.symbol,
+                side=order.side,
+                quantity=Decimal(0),
+                price=Decimal(0),
+                fee=Decimal(0),
+                status="REJECTED",
+                exchange_id="local-veto-" + order.client_id,
+            )
+            with self.store.transaction() as conn:
+                conn.execute(
+                    text("UPDATE orders SET result=:r,state='REJECTED' WHERE id=:i"),
+                    {"r": rejected.model_dump_json(), "i": order.client_id},
+                )
+                self.store.audit(
+                    "entry_veto",
+                    {
+                        "client_id": order.client_id,
+                        "reason": str(failure),
+                        "submission_attempted": False,
+                    },
+                    conn,
+                )
+            raise
         except SafeError as failure:
             with self.store.transaction() as conn:
                 conn.execute(
@@ -239,6 +276,34 @@ class Coordinator:
                 )
                 return filled
             except (SafeError, TimeoutError) as failure:
+                if isinstance(failure, EntryVeto) and single_exchange and not filled:
+                    # No request/fill occurred. Release only this reservation;
+                    # retain the rejection journal and every existing risk lock,
+                    # loss counter, equity anchor and completed entry count.
+                    with self.store.transaction() as conn:
+                        veto_row = conn.execute(
+                            text("SELECT state,result FROM orders WHERE id=:i"),
+                            {"i": orders[0].client_id},
+                        ).first()
+                        if (
+                            veto_row is None
+                            or veto_row.state != "REJECTED"
+                            or not veto_row.result
+                            or Fill.model_validate_json(veto_row.result).quantity != 0
+                        ):
+                            self.store.put("reconciled", False, conn)
+                            self.store.transition(
+                                State.ERROR_SAFE, "local veto journal is incomplete", conn
+                            )
+                        else:
+                            conn.execute(
+                                text("DELETE FROM entries WHERE id=:i AND closed=0"),
+                                {"i": proposal.trade_id},
+                            )
+                            journal = self.store.get("trade:" + proposal.trade_id, {}, conn)
+                            journal["entry_vetoed_before_submission"] = True
+                            self.store.put("trade:" + proposal.trade_id, journal, conn)
+                    raise
                 if isinstance(failure, TimeoutError):
                     self.store.put("reconciled", False)
                 # Unknown orders require a fresh position reconciliation before any repair.

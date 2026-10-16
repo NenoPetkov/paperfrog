@@ -107,7 +107,8 @@ async def test_wider_stop_reduces_size_without_increasing_planned_cash_risk(
 
 async def test_memory_research_matches_disk_and_archives_same_risk(settings, tmp_path):
     rule = candidates()[0]
-    frames = {"BTCUSDT": indicators(history(), rule)}
+    # BTC remains the market reference; the synthetic alt is the tradable leg.
+    frames = {symbol: indicators(history(), rule) for symbol in ("BTCUSDT", "SOLUSDT")}
     funding = {
         "BTCUSDT": pd.DataFrame(
             {
@@ -117,6 +118,7 @@ async def test_memory_research_matches_disk_and_archives_same_risk(settings, tmp
             }
         )
     }
+    funding["SOLUSDT"] = funding["BTCUSDT"].copy()
     results = []
     for name, memory in (("disk", False), ("memory", True)):
         output = tmp_path / name

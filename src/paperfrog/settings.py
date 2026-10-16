@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     simple_total_margin_cap: float = Field(1.0, gt=0, le=1.0)
     futures_account_mode: Literal["isolated", "credits"] = "isolated"
     simple_live_research_waiver: bool = False
+    simple_ai_enabled: bool = False
+    simple_ai_output_limit: int = Field(4000, ge=512, le=8192)
+    simple_btc_reference_enabled: bool = True
+    simple_btc_direction_policy: Literal["strict", "neutral_allowed"] = "strict"
 
     @model_validator(mode="after")
     def validate_sizing_budget(self) -> Self:
@@ -100,6 +104,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.simple_ai_enabled and (
+            self.strategy_profile != "simple" or self.simple_entry_mode != "trend"
+        ):
+            raise ValueError("adaptive AI requires the simple trend profile")
         if self.simple_entry_profile == "active" and self.simple_entry_mode != "trend":
             raise ValueError("active entry profile requires trend mode")
         if self.futures_account_mode == "credits" and self.strategy_profile != "simple":
@@ -148,6 +156,10 @@ class Settings(BaseSettings):
                     "weekly_loss_limit",
                     "high_water_drawdown",
                     "profit_guard_scale",
+                    "simple_ai_enabled",
+                    "simple_ai_output_limit",
+                    "simple_btc_reference_enabled",
+                    "simple_btc_direction_policy",
                 },
             )
         )

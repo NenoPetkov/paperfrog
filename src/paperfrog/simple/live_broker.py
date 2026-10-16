@@ -11,8 +11,10 @@ from paperfrog.reporting.readiness import credential_binding
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .adaptive import active_plan
 from .authorization import verify_simple_arm
-from .strategy import require_execution
+from .bitcoin import require_order as require_btc_order
+from .strategy import BAR_MS, require_execution
 
 
 class LiveBroker:
@@ -85,6 +87,8 @@ class LiveBroker:
 
     async def submit(self, order: Order) -> Fill:
         if not order.reduce_only:
+            if order.symbol == "BTCUSDT":
+                raise SafeError("BTC is reference-only; new BTC positions are forbidden")
             self.require_authorization()
             await self.refresh()
             if order.quantity * order.limit_price / 2 > self.available:
@@ -105,6 +109,19 @@ class LiveBroker:
                     raise SafeError("total margin cap exceeded")
                 if notional * (Decimal("0.5") + Decimal(str(self.s.fee_rate))) > self.available:
                     raise SafeError("available margin insufficient after estimated entry fee")
+            if self.s.simple_ai_enabled:
+                now_ms = self.now_ms()
+                plan = active_plan(self.s, self.store, now_ms // BAR_MS * BAR_MS, now_ms)
+                permission = self.store.get("simple_ai_order:" + order.client_id, {})
+                if (
+                    plan is None
+                    or plan.action != "trade"
+                    or permission.get("digest") != plan.digest
+                    or permission.get("asof_ms") != plan.asof_ms
+                    or permission.get("order") != order.model_dump(mode="json")
+                ):
+                    raise SafeError("adaptive AI order permission missing or expired")
+            require_btc_order(self.s, self.store, order, self.now_ms())
             self.exchange.entry_authorized = True
         return await self.exchange.submit(order)
 

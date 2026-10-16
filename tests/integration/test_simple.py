@@ -116,7 +116,7 @@ def test_indicators_and_selection_cannot_see_future():
     earlier = indicators(x.iloc[:250])
     selected = choose(
         {"SOLUSDT": earlier.iloc[-1].to_dict()},
-        __import__("paperfrog.settings", fromlist=["Settings"]).Settings(_env_file=None),
+        Settings(_env_file=None, simple_btc_reference_enabled=False),
     )
     x.loc[250:, ["open", "high", "low", "close"]] *= 100
     assert_frame_equal(earlier, indicators(x).iloc[:250])
@@ -193,7 +193,7 @@ def test_selection_is_bounded_and_liquidity_first(settings):
     s = settings.model_copy(update={"simple_scan_limit": 2, "simple_selected_count": 1})
     rows = {"BTCUSDT": row(), "ETHUSDT": row(), "SOLUSDT": row()}
     rows["SOLUSDT"].update(daily_volume=11_000_000, score=100)
-    assert choose(rows, s) == ["BTCUSDT"]
+    assert choose(rows, s) == ["SOLUSDT"]
 
 
 @pytest.mark.parametrize("side", [1, -1])

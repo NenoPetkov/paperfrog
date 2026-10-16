@@ -15,6 +15,9 @@ from paperfrog.storage.database import Store
 def settings(tmp_path):
     return Settings(
         _env_file=None,
+        # Existing mechanics fixtures isolate the pre-reference strategy. BTC
+        # integration tests explicitly enable and exercise the complete new gate.
+        simple_btc_reference_enabled=False,
         state_dir=tmp_path / "state",
         data_dir=tmp_path / "data",
         artifacts_dir=tmp_path / "artifacts",

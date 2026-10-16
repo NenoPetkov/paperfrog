@@ -56,6 +56,101 @@ paperfrog is a Python 3.12 futures research bot. Its default simple profile scan
 
 **Default: PAPER. Trading edge: unproven.** The simple profile supports locally authorized exchange execution with an explicit operator waiver of research approval and waiting periods. Legacy model readiness remains separate. Tests verify software mechanics, not profitability. Read [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for delivered scope and material limitations before operating it.
 
+## BTC reference and altcoin-only selection
+
+The simple profile excludes `BTCUSDT` before filling its pool of up to 100
+altcoins. BTC is still fetched separately, including when it is in the denylist,
+and retained for the existing market-crisis checks. Selection, the entry engine
+and the simple exchange broker all refuse new BTC positions. Existing BTC
+positions can still be protected and reduced.
+
+`SIMPLE_BTC_REFERENCE_ENABLED` defaults to true. The deterministic entry algorithm
+requires agreement between BTC's 15-minute trend/15-minute and one-hour momentum
+and a separately refreshed one-minute BTC reference. The latter reads 120 closed
+one-minute futures candles every minute, compares EMA 5/20, and checks one/five/
+15-minute moves. The default `SIMPLE_BTC_DIRECTION_POLICY=strict` blocks entries
+on neutral, contrary, missing, stale or shock context. The optional
+`SIMPLE_BTC_DIRECTION_POLICY=neutral_allowed` accepts neutral BTC on either or
+both timeframes. An opposing direction on either timeframe still blocks, as do
+missing/stale context and short-term shocks. For a neutral minute reference,
+ordinary one-minute counter-moves do not add a direction veto; shock limits remain.
+Correlation and supported lag checks are unchanged.
+Checks run on the existing monitoring loop and again immediately
+before dispatch. Existing exits, sizing, leverage, risk limits and locks are unchanged.
+
+Each altcoin's contemporaneous correlation and beta to BTC are estimated from 192
+past 15-minute return pairs. A positive correlation of at least 0.25 and beta
+between zero and three are required. Candidate scores additionally weight this
+measured BTC relationship. A separate, fixed one-bar lag model estimates the next
+altcoin 15-minute return from the most recent BTC return. Its first 128 samples
+are checked against the following 64: it needs positive bounded coefficients,
+lag correlation >= 0.10, and at least 1% lower squared error than a historical-mean
+baseline before its estimate can influence ranking or veto an opposing entry.
+Otherwise there is no claimed predictive lag; the mandatory BTC direction checks
+and the altcoin's own entry rules still apply. No search over delays is performed.
+
+This logic has no OpenAI dependency and adds no BTC features to the AI schema or
+prompt. AI-generated entries cannot bypass it. One-minute candles do not establish
+or target a seconds-long lead, and statistical fit is not evidence of profitability.
+`/simple` and `simple status` expose BTC context separately from AI status. Minute
+reference snapshots are audited; closed-bar pair diagnostics are retained locally.
+
+The current historical replay refuses reference-enabled settings because it does
+not reproduce the one-minute context. Explicitly disabling the reference gate can
+evaluate the legacy entry baseline, with BTC still excluded from trading; that
+result is not evidence for this new policy. No historical BTC minute decisions are
+fabricated. Applying the change to LIVE requires a restart and fresh local arming;
+the AI cannot disable this gate or create that authorization.
+
+## Optional adaptive AI entry rules
+
+`SIMPLE_AI_ENABLED=true` enables one OpenAI review per completed 15-minute candle,
+using the configured `OPENAI_PRIMARY_MODEL` and a private local `OPENAI_API_KEY`.
+It defaults to false; PAPER remains the default execution mode. LIVE still requires
+all existing environment conditions and a local arm bound to the account, source
+and configuration. Changing the AI model or enabling AI requires fresh local arming.
+
+Each review receives public market summaries for up to ten selected coins, their
+latest 32 closed candles and eleven numeric indicators, up to eight prior reviews
+with scored forecasts, and up to 50 closed trades expressed as approximate net
+returns. No balances, quantities, private open positions, order IDs or credentials
+are sent. Price history used to calculate indicators remains three days. Forecasts
+are scored only at their next-candle boundary; missing observations are left
+unscored. Close-to-close forecast scores are diagnostics, not executable PnL.
+
+The model can compose new AND/OR entry conditions over trend, flow, volatility,
+one/four/24-hour returns, RSI, volume ratio, breakout distance and range position,
+or pause entries. With `SIMPLE_ENTRY_PROFILE=active`, the review seeks conditional
+setups per coin instead of requiring agreement across the watchlist. Mixed longer
+returns, forecast errors, a small trade sample or lack of proven profitability
+alone are not reasons to pause every coin. The model receives the configured
+trend/volatility entry thresholds and may still pause when no defensible setup
+remains. Standard retains its cautious review policy. Neither profile forces an
+order or substitutes a static signal for an AI pause or failure.
+These are validated data, never Python or shell code. Long/short
+trend alignment, volatility/cost gates, position sizing, stops, trailing, holding
+limit, leverage, liquidity, daily entry caps, cooldowns and loss limits remain
+independent and unchanged. The AI cannot modify risk settings or manage existing
+positions. Its rules can replace the original breakout/flow entry trigger, so the
+adaptive strategy has different, unproven trading behavior even with fixed limits.
+
+Permissions expire at the next candle boundary. Missing, refused, malformed,
+out-of-scope or late output blocks new entries; there is no static-strategy fallback.
+Monitoring and exits run independently while the request is pending. A live order
+also needs permission bound to its exact intent immediately before submission.
+There is at most one request attempt per boundary and 96 attempts per UTC day,
+durable across restarts, with no automatic request retries. Each request has a
+40-second deadline and `SIMPLE_AI_OUTPUT_LIMIT` (default 4000, maximum 8192 tokens).
+These bounds constrain API usage, not a fixed monetary bill.
+
+`/simple` and `simple status` expose AI status and the most recent review. Reviews,
+forecasts and trade-to-rule attribution are journaled. This is persistent feedback
+in the model's context, **not automatic model training**, and neither it nor passing
+software tests establishes improved prediction or profitability. New live entry
+rules can lose money; a few trades cannot establish an edge.
+Historical backtests refuse AI-enabled settings without recorded forward decisions;
+the bot does not fabricate historical AI advice or present an empty replay as evidence.
+
 ## Install and verify
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
@@ -125,8 +220,8 @@ or create that authorization.
 
 Current limits are 12 entries total and two per coin per UTC day, with at most two
 positions. Selection may change during the day. The bot does not force a 5–20-trade
-quota. These are frozen deterministic rules: no automatic ML retraining, no changes
-triggered by individual losses, and no promised profitability.
+quota. With adaptive AI disabled, these are frozen deterministic rules: no automatic
+ML retraining, no changes triggered by individual losses, and no promised profitability.
 
 `SIMPLE_ENTRY_PROFILE=standard` preserves the original three-hour breakout rules.
 The optional `active` profile uses a two-hour closed-candle breakout, minimum EMA

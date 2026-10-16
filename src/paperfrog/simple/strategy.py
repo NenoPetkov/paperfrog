@@ -209,6 +209,8 @@ def indicators(raw: pd.DataFrame, rules: Rules = RULES) -> pd.DataFrame:
 def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -> list[str]:
     candidates = []
     for symbol, row in rows.items():
+        if symbol == "BTCUSDT":
+            continue
         values = [row.get(k, math.nan) for k in ("score", "atr_fraction", "daily_volume")]
         if not all(math.isfinite(float(v)) for v in values):
             continue
@@ -216,12 +218,25 @@ def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -
             continue
         if not rules.min_atr_fraction <= row["atr_fraction"] <= rules.max_atr_fraction:
             continue
+        if s.simple_btc_reference_enabled and row.get("btc_pair_valid") is not True:
+            continue
         candidates.append(symbol)
     # First bound the pool using trailing liquidity, then rank tradeability.
     pool = sorted(candidates, key=lambda k: (-float(rows[k]["daily_volume"]), k))[
         : s.simple_scan_limit
     ]
-    return sorted(pool, key=lambda k: (-float(rows[k]["score"]), k))[: s.simple_selected_count]
+    return sorted(
+        pool,
+        key=lambda k: (
+            -float(rows[k]["score"])
+            * (
+                float(rows[k].get("btc_reference_score", 0))
+                if s.simple_btc_reference_enabled
+                else 1
+            ),
+            k,
+        ),
+    )[: s.simple_selected_count]
 
 
 def entry(

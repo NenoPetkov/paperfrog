@@ -505,6 +505,18 @@ def simple_status() -> None:
             "live_armed": armed,
             "configured_settings": s.simple_parameters(),
             "loaded_settings": store.get("simple_loaded_settings"),
+            "adaptive_ai": {
+                "enabled": s.simple_ai_enabled,
+                "status": store.get("simple_ai_status"),
+                "last_review": store.get("simple_ai_active"),
+            },
+            "btc_reference": {
+                "enabled": s.simple_btc_reference_enabled,
+                "direction_policy": s.simple_btc_direction_policy,
+                "tradable": False,
+                "closed": store.get("simple_btc_closed"),
+                "fast": store.get("simple_btc_fast"),
+            },
             "research_requirements": "waived_by_operator"
             if s.simple_live_research_waiver
             else "required",

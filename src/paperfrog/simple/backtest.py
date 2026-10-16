@@ -88,6 +88,14 @@ async def replay(
     memory_ledger: bool = False,
 ) -> dict[str, Any]:
     require_paper(s)
+    if s.simple_ai_enabled:
+        raise SafeError(
+            "adaptive AI replay requires recorded forward decisions; historical AI is not fabricated"
+        )
+    if s.simple_btc_reference_enabled:
+        raise SafeError(
+            "BTC reference replay needs recorded minute context; legacy replay is not BTC-filter evidence"
+        )
     rules = execution_rules(s) if rules is None else rules
     if output.exists() or cost_multiplier < 1 or delay_bars < 1:
         raise SafeError("use a new immutable replay directory and conservative stresses")
@@ -351,6 +359,10 @@ async def evaluate(
     memory_ledger: bool = False,
 ) -> dict[str, Any]:
     require_paper(s)
+    if s.simple_btc_reference_enabled:
+        raise SafeError(
+            "BTC reference replay needs recorded minute context; legacy replay is not BTC-filter evidence"
+        )
     rules = execution_rules(s) if rules is None else rules
     if output.exists():
         raise SafeError("use a new immutable simple research directory")

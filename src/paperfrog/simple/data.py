@@ -50,6 +50,7 @@ async def scan(adapter: BinanceAdapter, s: Settings) -> dict[str, Any]:
         x["symbol"]: x
         for x in info["symbols"]
         if x["symbol"] in adapter.filters
+        and x["symbol"] != "BTCUSDT"
         and re.fullmatch(r"[A-Z0-9]{2,24}USDT", x["symbol"])
         and x["baseAsset"] not in STABLE
         and x.get("underlyingType", "COIN") == "COIN"

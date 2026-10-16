@@ -16,6 +16,10 @@ class UnknownOrder(SafeError):
     """The exchange may have accepted the request; never resubmit blindly."""
 
 
+class EntryVeto(SafeError):
+    """A local gate refused the entry before any order submission was attempted."""
+
+
 class OrderNotFound(SafeError):
     """A lookup found no order; this never permits submitting it again."""
 

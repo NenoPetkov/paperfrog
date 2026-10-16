@@ -25,7 +25,15 @@ def strategy_hash(s: Settings) -> str:
             sort_keys=True,
         ).encode()
     )
-    for name in ("strategy.py", "engine.py", "live_broker.py", "service.py", "data.py"):
+    for name in (
+        "strategy.py",
+        "engine.py",
+        "live_broker.py",
+        "service.py",
+        "data.py",
+        "adaptive.py",
+        "bitcoin.py",
+    ):
         digest.update(Path(__file__).with_name(name).read_bytes())
     root = Path(__file__).parent.parent
     for name in ("exchange/binance.py", "execution/coordinator.py", "risk/engine.py"):

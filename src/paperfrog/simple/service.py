@@ -22,7 +22,9 @@ from paperfrog.telegram.control import Controls, Telegram
 from paperfrog.telegram.events import EventNotifications
 from paperfrog.telegram.formatting import positions_text, status_text
 
+from .adaptive import Advisor, enrich
 from .authorization import directory, verify_simple_arm
+from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_reference, pair_features
 from .data import candles, funding, scan
 from .engine import Engine
 from .live_broker import LiveBroker
@@ -32,10 +34,13 @@ from .strategy import BAR_MS, choose, execution_rules, indicators, require_execu
 class SimpleService:
     def __init__(self, s: Settings):
         require_execution(s)
+        if s.simple_ai_enabled and not s.openai_api_key.get_secret_value():
+            raise SafeError("adaptive AI requires a locally configured OpenAI API key")
         self.s = s
         self.rules = execution_rules(s)
         self.directory = directory(s)
         self.store = Store(self.directory / "paperfrog.sqlite")
+        self.advisor = Advisor(s, self.store, clock=self.now_ms) if s.simple_ai_enabled else None
         self.lake = Lake(
             s.data_dir / ("simple-testnet" if s.trading_mode == "testnet" else "simple")
         )
@@ -115,7 +120,8 @@ class SimpleService:
             {
                 "mode": self.s.trading_mode,
                 "account_mode": self.s.futures_account_mode,
-                "strategy": strategy_name(self.s.simple_entry_mode, self.rules),
+                "strategy": ("adaptive-ai-v1+" if self.s.simple_ai_enabled else "")
+                + strategy_name(self.s.simple_entry_mode, self.rules),
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
                 "loaded_settings": self.s.simple_parameters(),
@@ -134,6 +140,25 @@ class SimpleService:
                 if self.s.simple_live_research_waiver
                 else "required",
                 "profitability": "unproven",
+                "adaptive_ai": {
+                    "enabled": self.s.simple_ai_enabled,
+                    "model": self.s.openai_primary_model if self.s.simple_ai_enabled else None,
+                    "status": self.store.get("simple_ai_status"),
+                    "last_review": self.store.get("simple_ai_active"),
+                    "learning": "persisted context and scored forecasts; no model retraining",
+                },
+                "btc_reference": {
+                    "enabled": self.s.simple_btc_reference_enabled,
+                    "direction_policy": self.s.simple_btc_direction_policy,
+                    "tradable": False,
+                    "closed": self.store.get("simple_btc_closed"),
+                    "fast": self.store.get("simple_btc_fast"),
+                    "eligible_pairs": sum(
+                        p.get("btc_pair_valid") is True
+                        for p in self.store.get("simple_btc_pairs", {}).values()
+                    ),
+                    "role": "deterministic direction policy, shock checks and measured lag; independent of OpenAI",
+                },
             }
         )
 
@@ -153,7 +178,7 @@ class SimpleService:
 
                 async def one(
                     symbol: str, boundary: int = boundary, semaphore: asyncio.Semaphore = semaphore
-                ) -> tuple[str, dict[str, Any] | None, bool]:
+                ) -> tuple[str, dict[str, Any] | None, bool, Any]:
                     async with semaphore:
                         try:
                             frame = await asyncio.to_thread(
@@ -167,6 +192,8 @@ class SimpleService:
                                 ),
                                 self.rules,
                             )
+                            if self.advisor is not None:
+                                frame = await asyncio.to_thread(enrich, frame)
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
                             blocked = False
                             if symbol == "BTCUSDT":
@@ -174,16 +201,50 @@ class SimpleService:
                                     abs(float(frame.close.pct_change().iloc[-1])) >= 0.04
                                     or abs(float(frame.close.pct_change(4).iloc[-1])) >= 0.07
                                 )
-                            return symbol, row, blocked
+                            return symbol, row, blocked, frame
                         except (SafeError, ValueError, KeyError):
-                            return symbol, None, symbol == "BTCUSDT"
+                            return symbol, None, symbol == "BTCUSDT", None
 
                 observations = await asyncio.gather(*(one(symbol) for symbol in pool))
-                rows = {symbol: row for symbol, row, _ in observations if row is not None}
+                rows = {symbol: row for symbol, row, _, _ in observations if row is not None}
+                reference: dict[str, Any] | None = None
+                pairs: dict[str, dict[str, Any]] = {}
+                if self.s.simple_btc_reference_enabled:
+                    frames = {
+                        symbol: frame for symbol, _, _, frame in observations if frame is not None
+                    }
+
+                    def context(
+                        data: dict[str, Any], asof_ms: int
+                    ) -> tuple[dict[str, Any] | None, dict[str, dict[str, Any]]]:
+                        btc = data.get(BTC)
+                        if btc is None:
+                            return None, {}
+                        return closed_reference(btc, self.rules), {
+                            symbol: pair_features(frame, btc, asof_ms)
+                            for symbol, frame in data.items()
+                            if symbol != BTC
+                        }
+
+                    reference, pairs = await asyncio.to_thread(context, frames, boundary)
+                    for symbol, row in rows.items():
+                        if symbol != BTC:
+                            row.update(pairs.get(symbol, {"btc_pair_valid": False}))
                 async with self.mutex:
+                    if self.s.simple_btc_reference_enabled:
+                        self.store.put(
+                            "simple_btc_closed",
+                            {
+                                **reference,
+                                "config_hash": self.s.config_hash,
+                            }
+                            if reference
+                            else None,
+                        )
+                        self.store.put("simple_btc_pairs", pairs)
                     self.rows = rows
                     self.crisis = "BTCUSDT" not in rows or any(
-                        blocked for _, _, blocked in observations
+                        blocked for _, _, blocked, _ in observations
                     )
                     self.selected = choose(
                         {symbol: rows[symbol] for symbol in snapshot["symbols"] if symbol in rows},
@@ -205,9 +266,52 @@ class SimpleService:
                         },
                     )
                 last_boundary = boundary
+                if self.advisor is not None:
+                    await self.advisor.review(
+                        {
+                            symbol: frame
+                            for symbol, _, _, frame in observations
+                            if frame is not None
+                        },
+                        list(self.selected),
+                        boundary,
+                    )
             except (SafeError, ValueError, OSError, KeyError) as exc:
                 self.store.audit("simple_scan_degraded", {"reason": type(exc).__name__})
                 await asyncio.sleep(10)
+
+    async def bitcoin_reference(self) -> None:
+        """Refresh the independent short-term BTC gate every closed minute."""
+        last_boundary = -1
+        while not self.stop.is_set():
+            boundary = self.now_ms() // MINUTE_MS * MINUTE_MS
+            if boundary == last_boundary:
+                await asyncio.sleep(1)
+                continue
+            try:
+                async with asyncio.timeout(12):
+                    raw = await self.exchange.request(
+                        "GET",
+                        "/fapi/v1/klines",
+                        {
+                            "symbol": BTC,
+                            "interval": "1m",
+                            "limit": MINUTE_BARS,
+                            "startTime": boundary - MINUTE_BARS * MINUTE_MS,
+                            "endTime": boundary - 1,
+                        },
+                    )
+                reference = await asyncio.to_thread(fast_reference, raw, boundary)
+                if not 0 <= self.now_ms() - boundary < 2 * MINUTE_MS:
+                    raise SafeError("BTC minute response expired")
+                reference["config_hash"] = self.s.config_hash
+                self.store.put("simple_btc_fast", reference)
+                self.store.audit("simple_btc_fast", reference)
+                last_boundary = boundary
+            except (SafeError, ValueError, KeyError, TypeError, IndexError, TimeoutError) as exc:
+                self.store.put("simple_btc_fast", None)
+                self.store.audit("simple_btc_unavailable", {"error_type": type(exc).__name__})
+                await asyncio.sleep(5)
 
     async def fetch_quote(self, symbol: str) -> Quote:
         book, premium = await asyncio.gather(
@@ -442,6 +546,10 @@ class SimpleService:
                     asyncio.create_task(self.notifications(), name="Telegram notifications"),
                     asyncio.create_task(server.serve(sockets=[sock]), name="health server"),
                 ]
+                if self.s.simple_btc_reference_enabled:
+                    tasks.append(
+                        asyncio.create_task(self.bitcoin_reference(), name="BTC minute reference")
+                    )
                 if self.telegram:
                     tasks.append(
                         asyncio.create_task(self.telegram.poll(), name="Telegram commands")
@@ -482,6 +590,8 @@ class SimpleService:
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await task
                 await self.exchange.close()
+                if self.advisor is not None:
+                    await self.advisor.close()
                 if self.telegram:
                     if tasks:
                         with contextlib.suppress(SafeError, TimeoutError):

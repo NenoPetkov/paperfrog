@@ -1,5 +1,90 @@
 # paperfrog implementation report
 
+## Neutral BTC and active AI entry review — 2026-10-16
+
+At the operator's request, optional `SIMPLE_BTC_DIRECTION_POLICY=neutral_allowed`
+accepts neutral BTC on either or both reference timeframes. Opposing direction,
+missing/stale context, minute shocks, measured-pair and supported-lag checks still
+block entries. Neutral minute context ignores the ordinary one-minute counter-move
+veto; directional context retains it. Strict alignment remains the default.
+The same policy is checked in the engine and immediately before live submission,
+and the configuration/source binding requires renewed local authorization.
+
+AI reviews now follow `SIMPLE_ENTRY_PROFILE`: active seeks conditional setups per
+coin without demanding watchlist consensus or proof of profitability. Mixed longer
+returns, forecast errors and small samples alone do not mandate a blanket pause.
+The review receives protected trend and volatility thresholds. Explicit pauses and
+unavailable, malformed or expired responses still block new entries; there is no
+forced quota or fallback. Stops, sizing, leverage, account limits, cooldowns and
+live gates are retained. These changes can increase turnover and do not establish
+improved returns or profitability.
+
+Verification: 432 tests passed, one credentialed testnet test skipped. Ruff lint
+and formatting passed; strict mypy passed over 26 source files including risk,
+execution, simple strategy, exchange and CLI. The live service was restarted
+through its existing local preflight/arming path with neutral BTC permitted and
+the existing active profile. Risk baselines, loss locks and cooldown history were
+preserved. Software checks do not establish profitability.
+
+## Deterministic BTC reference — 2026-10-16
+
+The operator requested BTC be excluded from the 100-coin candidate pool and used
+as an independent algorithmic input for altcoin entries. BTC is now reference-only
+through scanner, selector, entry engine and simple live broker; existing reductions
+remain permitted. The default-on BTC gate requires a measured positive relationship,
+15-minute BTC trend/momentum alignment, and separately refreshed closed one-minute
+BTC momentum. Missing, stale, neutral, contrary and short-term shock context blocks
+new entries. Ranking incorporates correlation, and a fixed lag forecast is used only
+when its chronological diagnostic check supports it. The OpenAI implementation,
+schema and prompts are unchanged. Stops, exit management, account risk ceilings,
+leverage, cooldowns and existing risk ceilings are preserved. A typed local
+pre-submission veto is journaled as a zero-fill rejection and releases only its
+unsubmitted reservation; uncertain exchange outcomes retain the existing lock
+and query-only reconciliation behavior.
+
+Public read-only integration verified 100 altcoin candidates excluding BTC and 120
+closed one-minute BTC candles, without account requests or orders. The checked
+watchlist did not support assuming a dependable 15-minute lag. That observation
+does not establish behavior at other horizons or a trading edge. Tests use an
+explicitly synthetic BTC-led fixture to check causality and mechanics, not profit.
+Historical replay rejects this new mode rather than fabricate one-minute context.
+The prepared change requires human-controlled LIVE installation/restart/arming;
+the already running process and its configuration were not changed by this work.
+Verification: 384 tests passed, one credentialed testnet test skipped; Ruff lint
+and formatting passed; strict mypy passed over the ten-file core and sixteen-file
+simple/exchange/CLI scope. These checks establish software mechanics, not profit.
+
+## Adaptive AI entry policy — 2026-10-16
+
+At the operator's explicit request, optional `SIMPLE_AI_ENABLED=true` grants the
+configured OpenAI model authority to compose new bounded entry rules and apply
+them automatically to subsequent LIVE entries. The default remains disabled and
+PAPER remains the default trading mode. Each review covers one 15-minute boundary.
+New conditions are schema-validated and pass immutable trend, volatility/cost,
+liquidity, sizing and risk gates; they are not performance-approved or paper-tested
+before automatic application. They cannot edit source, stop/trailing/holding rules,
+leverage, risk ceilings or locks, and cannot directly place or close orders.
+
+The service sends public candles/indicators, normalized closed-trade diagnostics,
+and bounded persistent review history. Forecasts are scored against the next closed
+candle, with missing results left unscored. No account balances, amounts, private
+positions, order IDs or credentials are sent. Persisted context is not model
+retraining. No improved prediction or profitability is established.
+
+Missing/refused/malformed/expired reviews block entries without a static fallback;
+exit monitoring continues independently. A live order is additionally bound to the
+specific plan and exact order intent before dispatch. Durable attempt tracking limits
+reviews to one per boundary and 96 per UTC day, with a 40-second request deadline,
+no automatic retries and a bounded output size. Historical replay refuses AI mode
+without recorded forward decisions. Local arming binds the adaptive implementation
+and AI settings; Telegram cannot arm it or change risk.
+
+Verification: 350 tests passed, one credentialed testnet test skipped. The configured
+`gpt-6-luna` also produced a valid real API response for ten current symbols in about
+eight seconds in a separate temporary ledger without any order tools or orders.
+That response chose to pause. These checks establish software behavior and API
+connectivity, not a trading edge. Earlier sections describe the original workflows.
+
 ## Active entry profile — 2026-10-14
 
 At the operator's explicit request, `SIMPLE_ENTRY_PROFILE=active` adds a fixed,

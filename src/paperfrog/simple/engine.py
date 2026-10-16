@@ -15,7 +15,11 @@ from paperfrog.risk.engine import Health, Proposal, RiskEngine
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .adaptive import active_plan
+from .adaptive import signal as adaptive_signal
 from .authorization import verify_simple_arm
+from .bitcoin import BTC
+from .bitcoin import entry_gate as btc_entry_gate
 from .live_broker import LiveBroker
 from .strategy import (
     BAR_MS,
@@ -253,6 +257,7 @@ class Engine:
             "funding": trade["funding"],
             "turnover": float(fill.quantity * fill.price)
             + float(trade["quantity"]) * trade["entry_price"],
+            "ai_rule_id": trade.get("ai_rule_id"),
         }
         records = self.store.get("simple_closed", [], conn)
         records.append(record)
@@ -377,6 +382,8 @@ class Engine:
     async def enter(
         self, symbol: str, row: dict[str, Any], now_ms: int, maximum_signal_age_ms: int = BAR_MS
     ) -> None:
+        if symbol == BTC:
+            raise SafeError("BTC is reference-only; new BTC positions are forbidden")
         if symbol in self.positions() or symbol not in self.store.get("simple_selected", []):
             return
         await self.require_journal()
@@ -401,6 +408,19 @@ class Engine:
             self.s.simple_entry_mode,
             self.rules,
         )
+        if self.s.simple_ai_enabled:
+            direction, reason = adaptive_signal(
+                self.s,
+                self.store,
+                row,
+                now_ms,
+                self.rules,
+                self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2,
+            )
+        if direction and self.s.simple_btc_reference_enabled:
+            btc_reason = btc_entry_gate(self.s, self.store, row, direction, now_ms)
+            if btc_reason:
+                direction, reason = 0, btc_reason
         self.store.put(
             "last_signal",
             {"symbol": symbol, "reason": reason, "timestamp_ms": int(row["timestamp_ms"])},
@@ -499,6 +519,34 @@ class Engine:
             "opened_ms": now_ms,
             "stop_fraction": stop,
         }
+        if self.s.simple_btc_reference_enabled:
+            current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
+            btc_reason = btc_entry_gate(self.s, self.store, row, direction, current_ms)
+            if btc_reason:
+                raise SafeError(btc_reason)
+            context = {key: value for key, value in row.items() if key.startswith("btc_")}
+            context["timestamp_ms"] = int(row["timestamp_ms"])
+            self.store.put(
+                "simple_btc_order:" + order.client_id,
+                {
+                    "context": context,
+                    "order": order.model_dump(mode="json"),
+                },
+            )
+        if self.s.simple_ai_enabled:
+            current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
+            plan = active_plan(self.s, self.store, int(row["timestamp_ms"]), current_ms)
+            if plan is None or plan.action != "trade":
+                raise SafeError("adaptive AI permission expired before execution")
+            intent["ai_rule_id"] = plan.digest
+            self.store.put(
+                "simple_ai_order:" + order.client_id,
+                {
+                    "digest": plan.digest,
+                    "asof_ms": plan.asof_ms,
+                    "order": order.model_dump(mode="json"),
+                },
+            )
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
         if isinstance(self.broker, LiveBroker):
@@ -554,6 +602,7 @@ class Engine:
             "opened_ms": intent["opened_ms"],
             "stop_price": float(fill.price) * (1 - direction * stop),
             "initial_stop_distance": float(fill.price) * stop,
+            "ai_rule_id": intent.get("ai_rule_id"),
         }
         if self.s.simple_entry_mode == "failed_breakout":
             positions[symbol]["rejection_level"] = intent["rejection_level"]

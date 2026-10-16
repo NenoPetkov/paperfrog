@@ -253,6 +253,7 @@ def test_local_waiver_is_bound_to_account_config_and_strategy(settings):
         {"binance_api_key": "different"},
         {"simple_entry_mode": "reverse"},
         {"simple_entry_profile": "active"},
+        {"simple_btc_direction_policy": "neutral_allowed"},
     ):
         with pytest.raises(SafeError, match="authorization changed"):
             verify_simple_arm(live_settings(settings, **changes))
