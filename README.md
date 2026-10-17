@@ -494,7 +494,9 @@ before restarting. Telegram cannot switch profiles or create that authorization.
 
 ### Simple exchange execution and BNFCR
 
-The production runtime is hosted at `root@176.31.163.20:/var/www/paperfrog`.
+The prepared deployment target is `root@176.31.163.20:/var/www/paperfrog`.
+Before the initial cutover, permit that IPv4 address on the existing Binance API
+key and verify authenticated reads from the server. Keep its existing permissions.
 After committing changes on local `master`, deploy with:
 
 ```bash
