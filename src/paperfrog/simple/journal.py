@@ -18,6 +18,8 @@ INDICATORS = (
     "return_1m",
     "return_3m",
     "return_5m",
+    "return_15m",
+    "return_25m",
     "return_1h",
     "return_4h",
     "return_24h",

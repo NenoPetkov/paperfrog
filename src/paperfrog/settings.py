@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     simple_scan_limit: int = Field(100, ge=2, le=100)
     simple_selected_count: int = Field(2, ge=1, le=10)
     simple_poll_seconds: int = Field(5, ge=2, le=30)
-    simple_entry_timeframe: Literal["1m", "15m"] = "15m"
+    simple_entry_timeframe: Literal["1m", "5m", "15m"] = "15m"
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active"] = "standard"
     simple_max_hold_hours: int = Field(4, ge=1, le=24)
@@ -110,14 +110,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
-        if self.simple_ai_review_minutes not in {1, 15}:
-            raise ValueError("AI review interval must be 1 or 15 minutes")
+        if self.simple_ai_review_minutes not in {1, 5, 15}:
+            raise ValueError("AI review interval must be 1, 5 or 15 minutes")
         if self.simple_ai_review_minutes == 1 and self.simple_entry_timeframe != "1m":
             raise ValueError("one-minute AI reviews require one-minute entry candles")
-        if self.simple_entry_timeframe == "1m" and (
+        if self.simple_ai_review_minutes == 5 and self.simple_entry_timeframe == "15m":
+            raise ValueError("five-minute AI reviews require one- or five-minute entry candles")
+        if self.simple_entry_timeframe in {"1m", "5m"} and (
             self.strategy_profile != "simple" or self.simple_entry_mode != "trend"
         ):
-            raise ValueError("one-minute entries require the simple trend profile")
+            raise ValueError("short-interval entries require the simple trend profile")
         if self.simple_ai_enabled and (
             self.strategy_profile != "simple" or self.simple_entry_mode != "trend"
         ):
@@ -189,7 +191,7 @@ class Settings(BaseSettings):
 
     @property
     def simple_entry_bar_ms(self) -> int:
-        return 60_000 if self.simple_entry_timeframe == "1m" else 900_000
+        return {"1m": 60_000, "5m": 300_000, "15m": 900_000}[self.simple_entry_timeframe]
 
     @property
     def simple_ai_review_bar_ms(self) -> int:

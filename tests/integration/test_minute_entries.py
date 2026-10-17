@@ -44,18 +44,18 @@ def slow_context(boundary=BOUNDARY, side=1):
     }
 
 
-def raw_minutes(boundary=BOUNDARY, side=1):
+def raw_minutes(boundary=BOUNDARY, side=1, interval_ms=MINUTE_MS):
     closes = 100 * np.exp(side * (np.arange(HISTORY_BARS) - HISTORY_BARS + 1) * 0.0008)
     opens = np.r_[closes[0] / np.exp(side * 0.0008), closes[:-1]]
     return [
         [
-            boundary - (HISTORY_BARS - i) * MINUTE_MS,
+            boundary - (HISTORY_BARS - i) * interval_ms,
             str(op),
             str(max(op, close) * 1.0003),
             str(min(op, close) * 0.9997),
             str(close),
             "100",
-            boundary - (HISTORY_BARS - i - 1) * MINUTE_MS - 1,
+            boundary - (HISTORY_BARS - i - 1) * interval_ms - 1,
             "1000000",
             100,
             "70",
@@ -66,9 +66,15 @@ def raw_minutes(boundary=BOUNDARY, side=1):
     ]
 
 
-def minute_row(boundary=BOUNDARY, side=1):
+def minute_row(boundary=BOUNDARY, side=1, timeframe="1m"):
+    interval_ms = MINUTE_MS if timeframe == "1m" else 5 * MINUTE_MS
     return (
-        frame(raw_minutes(boundary, side), slow_context(boundary, side), boundary)
+        frame(
+            raw_minutes(boundary, side, interval_ms),
+            slow_context(boundary, side),
+            boundary,
+            timeframe,
+        )
         .iloc[-1]
         .to_dict()
     )
@@ -245,18 +251,19 @@ def test_dispatch_independently_requires_order_bound_fresh_minute_slope(settings
         require_order(s, store, order, now, quote(price=price, now_ms=now))
 
 
+@pytest.mark.parametrize("timeframe", ["1m", "5m"])
 async def test_live_minute_entry_rechecks_slope_after_fresh_exchange_quote(
-    settings, store, filters
+    settings, store, filters, timeframe
 ):
     engine, sim, adapter, _, now = await setup_engine(
-        settings, store, filters, simple_entry_timeframe="1m"
+        settings, store, filters, simple_entry_timeframe=timeframe
     )
-    boundary = now // MINUTE_MS * MINUTE_MS
-    obs = minute_row(boundary)
+    boundary = now // engine.s.simple_entry_bar_ms * engine.s.simple_entry_bar_ms
+    obs = minute_row(boundary, timeframe=timeframe)
     store.put("simple_minute:SOLUSDT", obs)
     try:
         await engine.enter("SOLUSDT", obs, now)
-        assert engine.positions()["SOLUSDT"]["entry_timeframe"] == "1m"
+        assert engine.positions()["SOLUSDT"]["entry_timeframe"] == timeframe
         assert sim.stops and sim.quantity > 0
         assert sum(path.endswith("/bookTicker") for _, path in sim.calls) >= 2
     finally:
@@ -348,11 +355,16 @@ async def test_fifteen_minute_replay_cannot_claim_one_minute_evidence(settings, 
     assert not (tmp_path / "no-fabrication").exists()
 
 
-async def test_live_dispatch_blocks_a_turn_after_initial_quote_refresh(settings, store, filters):
+@pytest.mark.parametrize("timeframe", ["1m", "5m"])
+async def test_live_dispatch_blocks_a_turn_after_initial_quote_refresh(
+    settings, store, filters, timeframe
+):
     engine, sim, adapter, _, now = await setup_engine(
-        settings, store, filters, simple_entry_timeframe="1m"
+        settings, store, filters, simple_entry_timeframe=timeframe
     )
-    obs = minute_row(now // MINUTE_MS * MINUTE_MS)
+    obs = minute_row(
+        now // engine.s.simple_entry_bar_ms * engine.s.simple_entry_bar_ms, timeframe=timeframe
+    )
     store.put("simple_minute:SOLUSDT", obs)
     request = adapter.request
     quote_calls = 0
@@ -376,11 +388,16 @@ async def test_live_dispatch_blocks_a_turn_after_initial_quote_refresh(settings,
         await adapter.close()
 
 
-async def test_reduce_only_exit_survives_missing_minute_permission(settings, store, filters):
+@pytest.mark.parametrize("timeframe", ["1m", "5m"])
+async def test_reduce_only_exit_survives_missing_minute_permission(
+    settings, store, filters, timeframe
+):
     engine, sim, adapter, _, now = await setup_engine(
-        settings, store, filters, simple_entry_timeframe="1m"
+        settings, store, filters, simple_entry_timeframe=timeframe
     )
-    obs = minute_row(now // MINUTE_MS * MINUTE_MS)
+    obs = minute_row(
+        now // engine.s.simple_entry_bar_ms * engine.s.simple_entry_bar_ms, timeframe=timeframe
+    )
     store.put("simple_minute:SOLUSDT", obs)
     try:
         await engine.enter("SOLUSDT", obs, now)

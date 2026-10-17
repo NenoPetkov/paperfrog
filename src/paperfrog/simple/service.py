@@ -158,8 +158,8 @@ class SimpleService:
                 "ai_review_minutes": self.s.simple_ai_review_minutes,
                 "risk_context_timeframe": "15m",
                 "loaded_settings": self.s.simple_parameters(),
-                "breakout_minutes": 5
-                if self.s.simple_entry_timeframe == "1m"
+                "breakout_minutes": 5 * self.s.simple_entry_bar_ms // MINUTE_MS
+                if self.s.simple_entry_timeframe in {"1m", "5m"}
                 else self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
@@ -236,7 +236,10 @@ class SimpleService:
                                 ),
                                 self.rules,
                             )
-                            if self.advisor is not None or self.s.simple_entry_timeframe == "1m":
+                            if self.advisor is not None or self.s.simple_entry_timeframe in {
+                                "1m",
+                                "5m",
+                            }:
                                 frame = await asyncio.to_thread(enrich, frame)
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
                             blocked = False
@@ -333,7 +336,8 @@ class SimpleService:
                 await asyncio.sleep(10)
 
     async def refresh_minutes(self, boundary: int) -> None:
-        """Rank the entire liquid pool every minute, independently of slow AI reviews."""
+        """Rank the liquid pool on each configured entry-candle boundary."""
+        interval_ms = self.s.simple_entry_bar_ms
         if not self.context_rows:
             return
         pool = list(
@@ -361,16 +365,18 @@ class SimpleService:
                             "/fapi/v1/klines",
                             {
                                 "symbol": symbol,
-                                "interval": "1m",
+                                "interval": self.s.simple_entry_timeframe,
                                 "limit": HISTORY_BARS,
-                                "startTime": boundary - HISTORY_BARS * MINUTE_MS,
+                                "startTime": boundary - HISTORY_BARS * interval_ms,
                                 "endTime": boundary - 1,
                             },
                         )
-                    data = await asyncio.to_thread(minute_frame, raw, context, boundary)
+                    data = await asyncio.to_thread(
+                        minute_frame, raw, context, boundary, self.s.simple_entry_timeframe
+                    )
                     await asyncio.to_thread(
                         self.lake.append,
-                        "perp_1m",
+                        "perp_" + self.s.simple_entry_timeframe,
                         symbol,
                         data[
                             [
@@ -391,8 +397,8 @@ class SimpleService:
                     return symbol, None
 
         observations = await asyncio.gather(*(one(symbol) for symbol in pool))
-        if not 0 <= self.now_ms() - boundary < MINUTE_MS:
-            raise SafeError("one-minute scan expired; new entries blocked")
+        if not 0 <= self.now_ms() - boundary < interval_ms:
+            raise SafeError("entry-candle scan expired; new entries blocked")
         frames = {symbol: data for symbol, data in observations if data is not None}
         rows = {symbol: data.iloc[-1].to_dict() for symbol, data in frames.items()}
         eligible = {
@@ -410,11 +416,11 @@ class SimpleService:
                 "simple_selection",
                 {
                     "asof_ms": boundary,
-                    "entry_timeframe": "1m",
+                    "entry_timeframe": self.s.simple_entry_timeframe,
                     "pool_size": len(pool),
                     "usable_size": len(rows),
                     "selected": selected,
-                    "selection": "closed one-minute EMA 5/20, aligned 1/3/5-minute slope and flow",
+                    "selection": f"closed {self.s.simple_entry_timeframe} EMA 5/20, aligned 1/3/5-bar slope and flow",
                     "execution_mode": self.s.trading_mode,
                     "signals": {
                         symbol: {
@@ -423,9 +429,10 @@ class SimpleService:
                                 "close",
                                 "trend_atr",
                                 "flow",
-                                "return_1m",
-                                "return_3m",
-                                "return_5m",
+                                *(
+                                    f"return_{bars * interval_ms // MINUTE_MS}m"
+                                    for bars in (1, 3, 5)
+                                ),
                             )
                         }
                         for symbol in selected
@@ -436,8 +443,9 @@ class SimpleService:
 
     async def minute_research(self) -> None:
         last_boundary = -1
+        interval_ms = self.s.simple_entry_bar_ms
         while not self.stop.is_set():
-            boundary = self.now_ms() // MINUTE_MS * MINUTE_MS
+            boundary = self.now_ms() // interval_ms * interval_ms
             if boundary == last_boundary or not self.context_rows:
                 await asyncio.sleep(1)
                 continue
@@ -764,9 +772,9 @@ class SimpleService:
                     tasks.append(
                         asyncio.create_task(self.bitcoin_reference(), name="BTC minute reference")
                     )
-                if self.s.simple_entry_timeframe == "1m":
+                if self.s.simple_entry_timeframe in {"1m", "5m"}:
                     tasks.append(
-                        asyncio.create_task(self.minute_research(), name="one-minute entries")
+                        asyncio.create_task(self.minute_research(), name="short-interval entries")
                     )
                     if self.advisor is not None:
                         tasks.append(

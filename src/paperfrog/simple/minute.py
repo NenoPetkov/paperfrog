@@ -1,4 +1,4 @@
-"""Closed one-minute entry timing; 15-minute risk and BTC context stay independent."""
+"""Closed one- and five-minute entry timing; 15-minute risk and BTC context stay independent."""
 
 from __future__ import annotations
 
@@ -19,19 +19,25 @@ MINUTE_MS = 60_000
 HISTORY_BARS = 120
 
 
-def frame(raw: list[list[Any]], context: dict[str, Any], boundary: int) -> pd.DataFrame:
-    """Use exactly 120 completed consecutive minutes and already closed slow context."""
-    x = normalize(raw, boundary, MINUTE_MS)
+def frame(
+    raw: list[list[Any]], context: dict[str, Any], boundary: int, timeframe: str = "1m"
+) -> pd.DataFrame:
+    """Use 120 completed consecutive entry candles and already closed slow context."""
+    if timeframe not in {"1m", "5m"}:
+        raise SafeError("unsupported short entry timeframe")
+    minutes = 1 if timeframe == "1m" else 5
+    interval_ms = minutes * MINUTE_MS
+    x = normalize(raw, boundary, interval_ms)
     if (
-        boundary % MINUTE_MS
+        boundary % interval_ms
         or len(x) != HISTORY_BARS
-        or int(x.iloc[0].timestamp_ms) != boundary - (HISTORY_BARS - 1) * MINUTE_MS
+        or int(x.iloc[0].timestamp_ms) != boundary - (HISTORY_BARS - 1) * interval_ms
         or int(x.iloc[-1].timestamp_ms) != boundary
         or x.timestamp_ms.duplicated().any()
-        or (x.timestamp_ms.diff().dropna() != MINUTE_MS).any()
+        or (x.timestamp_ms.diff().dropna() != interval_ms).any()
         or not 0 <= boundary - int(context.get("timestamp_ms", 0)) < BAR_MS
     ):
-        raise SafeError("one-minute candles or closed risk context incomplete")
+        raise SafeError("short-interval candles or closed risk context incomplete")
     values = x[["open", "high", "low", "close", "quote_volume", "taker_buy_quote"]].to_numpy(
         dtype=float
     )
@@ -43,14 +49,14 @@ def frame(raw: list[list[Any]], context: dict[str, Any], boundary: int) -> pd.Da
         or (x.low > x[["open", "close", "high"]].min(axis=1)).any()
         or (x.taker_buy_quote > x.quote_volume).any()
     ):
-        raise SafeError("invalid one-minute OHLC or flow")
+        raise SafeError("invalid short-interval OHLC or flow")
     # These values retain their actual 15-minute risk/longer-horizon meaning.
     for key in ("atr", "atr_fraction", "daily_volume", "return_4h", "return_24h"):
         value = float(context.get(key, math.nan))
         if not math.isfinite(value) or (
             key in {"atr", "atr_fraction", "daily_volume"} and value <= 0
         ):
-            raise SafeError("one-minute risk context unavailable")
+            raise SafeError("short-interval risk context unavailable")
         x[key] = value
     for key, value in context.items():
         if key.startswith("btc_"):
@@ -66,9 +72,9 @@ def frame(raw: list[list[Any]], context: dict[str, Any], boundary: int) -> pd.Da
     x["trend_atr"] = (x.fast - x.slow) / x.minute_atr.replace(0, np.nan)
     x["prior_high"] = x.high.shift(1).rolling(5).max()
     x["prior_low"] = x.low.shift(1).rolling(5).min()
-    for minutes in (1, 3, 5):
-        x[f"return_{minutes}m"] = x.close.pct_change(minutes)
-    x["return_1h"] = x.close.pct_change(60)
+    for bars in (1, 3, 5):
+        x[f"return_{bars * minutes}m"] = x.close.pct_change(bars)
+    x["return_1h"] = x.close.pct_change(60 // minutes)
     x["flow"] = 2 * x.taker_buy_quote / x.quote_volume.replace(0, np.nan) - 1
     x["volume_ratio"] = x.quote_volume / x.quote_volume.shift(1).rolling(60).mean().replace(
         0, np.nan
@@ -82,13 +88,18 @@ def frame(raw: list[list[Any]], context: dict[str, Any], boundary: int) -> pd.Da
     low, high = x.low.rolling(24).min(), x.high.rolling(24).max()
     x["range_position"] = (x.close - low) / (high - low).replace(0, np.nan)
     x["score"] = x.trend_atr.abs().clip(upper=5) * np.sqrt(x.daily_volume / 10_000_000)
-    x["entry_timeframe"] = "1m"
+    x["entry_timeframe"] = timeframe
     # Keep a distinct copy for older positions' original trend-reversal exit.
     x.attrs["risk_context"] = context
     return x
 
 
 def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
+    timeframe = row.get("entry_timeframe")
+    if timeframe not in {"1m", "5m"}:
+        return 0, "complete closed entry slope required"
+    minutes = 1 if timeframe == "1m" else 5
+    returns = tuple(f"return_{bars * minutes}m" for bars in (1, 3, 5))
     fields = (
         "close",
         "open",
@@ -98,16 +109,13 @@ def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
         "trend_atr",
         "minute_atr",
         "flow",
-        "return_1m",
-        "return_3m",
-        "return_5m",
+        *returns,
     )
     if (
-        row.get("entry_timeframe") != "1m"
-        or not all(math.isfinite(float(row.get(key, math.nan))) for key in fields)
+        not all(math.isfinite(float(row.get(key, math.nan))) for key in fields)
         or float(row["minute_atr"]) <= 0
     ):
-        return 0, "complete closed one-minute slope required"
+        return 0, "complete closed short-interval slope required"
     side = (
         1
         if float(row["trend_atr"]) >= rules.minimum_trend_atr
@@ -115,24 +123,26 @@ def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
     )
     if (
         not side
-        or any(
-            side * float(row[key]) <= 0
-            for key in ("return_1m", "return_3m", "return_5m", "fast_change")
-        )
+        or any(side * float(row[key]) <= 0 for key in (*returns, "fast_change"))
         or side * (float(row["close"]) - float(row["open"])) <= 0
         or side * (float(row["close"]) - float(row["fast"])) <= 0
         or side * float(row["flow"]) < rules.minimum_flow
     ):
-        return 0, "one-minute slope reversed, flat or unconfirmed by trading flow"
+        return 0, "short-interval slope reversed, flat or unconfirmed by trading flow"
     return (
         side,
-        f"1m {'upward' if side > 0 else 'downward'} slope: EMA 5/20, aligned 1/3/5-minute moves and trading flow",
+        f"{timeframe} {'upward' if side > 0 else 'downward'} slope: EMA 5/20, aligned {minutes}/{3 * minutes}/{5 * minutes}-minute moves and trading flow",
     )
 
 
 def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules) -> str | None:
-    if not 0 <= now_ms - int(row.get("timestamp_ms", 0)) < MINUTE_MS:
-        return "one-minute entry candle missing, future dated or expired"
+    timeframe = row.get("entry_timeframe")
+    if timeframe not in {"1m", "5m"}:
+        return "unsupported entry timeframe"
+    interval_ms = MINUTE_MS if timeframe == "1m" else 5 * MINUTE_MS
+    timestamp_ms = int(row.get("timestamp_ms", 0))
+    if timestamp_ms % interval_ms or not 0 <= now_ms - timestamp_ms < interval_ms:
+        return "short-interval entry candle missing, future dated or expired"
     observed, reason = direction(row, rules)
     if observed != side:
         return reason
@@ -141,12 +151,12 @@ def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules)
         or mark <= 0
         or side * (mark - float(row["close"])) < -0.5 * float(row["minute_atr"])
     ):
-        return "current price rebounded against the closed one-minute slope"
+        return "current price rebounded against the closed short-interval slope"
     return None
 
 
 def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Quote) -> None:
-    if order.reduce_only or s.simple_entry_timeframe != "1m":
+    if order.reduce_only or s.simple_entry_timeframe not in {"1m", "5m"}:
         return
     from .strategy import execution_rules
 
@@ -155,18 +165,18 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Q
         permission.get("order") != order.model_dump(mode="json")
         or permission.get("config_hash") != s.config_hash
     ):
-        raise EntryVeto("one-minute permission is not bound to this order")
+        raise EntryVeto("short-interval permission is not bound to this order")
     row = permission.get("row", {})
-    if not isinstance(row, dict):
-        raise EntryVeto("one-minute entry context unavailable")
+    if not isinstance(row, dict) or row.get("entry_timeframe") != s.simple_entry_timeframe:
+        raise EntryVeto("short-interval entry context unavailable")
     latest = store.get("simple_minute:" + order.symbol, {})
     if latest != row:
-        raise EntryVeto("one-minute slope changed before order dispatch")
+        raise EntryVeto("short-interval slope changed before order dispatch")
     if (
         quote.symbol != order.symbol
         or not 0 <= now_ms - quote.timestamp_ms <= s.market_stale_seconds * 1000
     ):
-        raise EntryVeto("fresh one-minute execution quote required")
+        raise EntryVeto("fresh short-interval execution quote required")
     reason = veto(row, order.side, now_ms, float(quote.mark), execution_rules(s))
     if reason:
         raise EntryVeto(reason)

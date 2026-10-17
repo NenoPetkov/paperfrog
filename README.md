@@ -1,6 +1,19 @@
 # paperfrog
 
-## One-minute slope entries
+## One- and five-minute slope entries
+
+Set `SIMPLE_ENTRY_TIMEFRAME=5m` and `SIMPLE_AI_REVIEW_MINUTES=5` for five-minute
+entry candles and AI reviews. The simple trend profile fetches 120 completed
+five-minute candles and reranks the pool at each five-minute boundary. EMA 5/20
+uses five-minute bars, with aligned 5/15/25-minute returns and trading flow.
+The hourly return uses 12 bars; breakout and range windows cover 25 and 120 minutes.
+Signals expire at the next five-minute boundary, and the execution quote must
+still pass the fresh-price and rebound checks. Fifteen-minute risk context and
+the independent BTC minute gate remain in place.
+
+Five-minute AI reviews allow at most 288 attempts per UTC day and require `1m`
+or `5m` entry candles. Five-minute entries also support 15-minute AI reviews;
+one-minute reviews require `1m` entries. AI reviews run only when AI is enabled.
 
 Set `SIMPLE_ENTRY_TIMEFRAME=1m` for closed one-minute entry signals. The simple
 trend profile reranks the entire liquid altcoin pool every minute, using EMA 5/20,

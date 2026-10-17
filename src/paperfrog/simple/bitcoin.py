@@ -246,7 +246,7 @@ def entry_gate(
     if reason:
         return reason
     expected_pair_asof = int(row["timestamp_ms"])
-    if s.simple_entry_timeframe == "1m":
+    if s.simple_entry_timeframe in {"1m", "5m"}:
         expected_pair_asof = expected_pair_asof // BAR_MS * BAR_MS
     if (
         row.get("btc_pair_valid") is not True

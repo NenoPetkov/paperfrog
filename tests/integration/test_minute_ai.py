@@ -21,11 +21,19 @@ def settings_for_minute_ai(settings, **changes):
     return minute_settings(settings, simple_ai_enabled=True, simple_ai_review_minutes=1, **changes)
 
 
-def market(boundary=BOUNDARY):
-    return {"SOLUSDT": frame(raw_minutes(boundary), slow_context(boundary), boundary)}
+def market(boundary=BOUNDARY, timeframe="1m"):
+    interval_ms = MINUTE_MS if timeframe == "1m" else 5 * MINUTE_MS
+    return {
+        "SOLUSDT": frame(
+            raw_minutes(boundary, interval_ms=interval_ms),
+            slow_context(boundary),
+            boundary,
+            timeframe,
+        )
+    }
 
 
-@pytest.mark.parametrize("minutes", [1, 15])
+@pytest.mark.parametrize("minutes", [1, 5, 15])
 def test_ai_review_interval_loads_from_dotenv(settings, tmp_path, minutes):
     env = tmp_path / "review.env"
     env.write_text(f"SIMPLE_AI_REVIEW_MINUTES={minutes}\n")
@@ -36,7 +44,7 @@ def test_ai_review_interval_loads_from_dotenv(settings, tmp_path, minutes):
     assert loaded.simple_ai_review_bar_ms == minutes * MINUTE_MS
 
 
-@pytest.mark.parametrize("minutes", [0, 2, 5, 14, 16])
+@pytest.mark.parametrize("minutes", [0, 2, 3, 14, 16])
 def test_other_ai_review_intervals_are_rejected(settings, minutes):
     with pytest.raises(ValidationError):
         minute_settings(settings, simple_ai_review_minutes=minutes)
@@ -151,13 +159,23 @@ async def test_fifteen_minute_mode_refuses_a_one_minute_boundary(settings, store
     assert store.get("simple_ai_active") is None
 
 
-async def test_service_reviews_each_minute_without_holding_monitoring_mutex(settings):
-    s = settings_for_minute_ai(settings, openai_api_key="mock-local-api-key")
+@pytest.mark.parametrize("minutes", [1, 5])
+async def test_service_reviews_each_minute_without_holding_monitoring_mutex(settings, minutes):
+    interval_ms = minutes * MINUTE_MS
+    boundary = BOUNDARY // interval_ms * interval_ms
+    timeframe = f"{minutes}m"
+    s = minute_settings(
+        settings,
+        simple_entry_timeframe=timeframe,
+        simple_ai_enabled=True,
+        simple_ai_review_minutes=minutes,
+        openai_api_key="mock-local-api-key",
+    )
     service = SimpleService(s)
-    clock, calls = {"now": BOUNDARY + 1000}, []
+    clock, calls = {"now": boundary + 1000}, []
     started, released, second = asyncio.Event(), asyncio.Event(), asyncio.Event()
     service.now_ms = lambda: clock["now"]
-    service.minute_frames, service.selected = market(), ["SOLUSDT"]
+    service.minute_frames, service.selected = market(boundary, timeframe), ["SOLUSDT"]
 
     async def delayed_review(frames, selected, boundary):
         calls.append(boundary)
@@ -173,12 +191,12 @@ async def test_service_reviews_each_minute_without_holding_monitoring_mutex(sett
         await asyncio.wait_for(started.wait(), timeout=3)
         await asyncio.wait_for(service.mutex.acquire(), timeout=1)
         service.mutex.release()
-        later = BOUNDARY + MINUTE_MS
-        service.minute_frames = market(later)
+        later = boundary + interval_ms
+        service.minute_frames = market(later, timeframe)
         clock["now"] = later + 1000
         released.set()
         await asyncio.wait_for(second.wait(), timeout=3)
-        assert calls[:2] == [BOUNDARY, later]
+        assert calls[:2] == [boundary, later]
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -188,16 +206,20 @@ async def test_service_reviews_each_minute_without_holding_monitoring_mutex(sett
         service.store.engine.dispose()
 
 
-async def test_live_broker_rejects_prior_minute_ai_permission_at_dispatch(settings, store, filters):
+@pytest.mark.parametrize("minutes", [1, 5])
+async def test_live_broker_rejects_prior_minute_ai_permission_at_dispatch(
+    settings, store, filters, minutes
+):
     engine, simulation, adapter, _, now = await setup_engine(
         settings,
         store,
         filters,
-        simple_entry_timeframe="1m",
-        simple_ai_review_minutes=1,
+        simple_entry_timeframe=f"{minutes}m",
+        simple_ai_review_minutes=minutes,
         simple_ai_enabled=True,
     )
-    boundary = now // MINUTE_MS * MINUTE_MS
+    interval_ms = minutes * MINUTE_MS
+    boundary = now // interval_ms * interval_ms
     p = plan(boundary)
     permit(engine.s, store, p)
     order = Order(
@@ -215,7 +237,7 @@ async def test_live_broker_rejects_prior_minute_ai_permission_at_dispatch(settin
             "order": order.model_dump(mode="json"),
         },
     )
-    engine.broker.now_ms = lambda: boundary + MINUTE_MS
+    engine.broker.now_ms = lambda: boundary + interval_ms
     try:
         with pytest.raises(SafeError, match="AI order permission"):
             await engine.broker.submit(order)

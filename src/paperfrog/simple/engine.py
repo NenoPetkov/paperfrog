@@ -229,7 +229,7 @@ class Engine:
         armed = verify_simple_arm(self.s) if self.s.trading_mode == "live" else False
         if isinstance(self.broker, LiveBroker):
             if override_locks:
-                # Recovery can take longer than quote TTL, and the one-minute
+                # Recovery can take longer than quote TTL, and the short-interval
                 # watchlist may include symbols not yet polled by the monitor.
                 # Refresh after recovery, not from the pre-recovery cache.
                 broker = self.broker
@@ -473,7 +473,10 @@ class Engine:
             if not awaiting_initial_scan and (
                 row is None
                 or now_ms - row["timestamp_ms"]
-                >= 2 * (MINUTE_MS if row.get("entry_timeframe") == "1m" else BAR_MS)
+                >= 2
+                * {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "15m": BAR_MS}.get(
+                    row.get("entry_timeframe", "15m"), BAR_MS
+                )
             ):
                 reason = reason or "closed-candle monitoring data unavailable"
             if reason:
@@ -492,7 +495,9 @@ class Engine:
     def entry_signal(self, row: dict[str, Any], now_ms: int, spread: float) -> tuple[int, str]:
         one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
         minute_side, minute_reason = (0, "")
-        if self.s.simple_entry_timeframe == "1m":
+        if self.s.simple_entry_timeframe in {"1m", "5m"}:
+            if row.get("entry_timeframe") != self.s.simple_entry_timeframe:
+                return 0, "entry candle timeframe does not match configuration"
             minute_side, minute_reason = minute_direction(row, self.rules)
             if not minute_side:
                 return 0, minute_reason
@@ -504,13 +509,13 @@ class Engine:
                 one_way_cost,
                 self.s.simple_entry_mode,
                 replace(self.rules, entry_style="trend_follow")
-                if self.s.simple_entry_timeframe == "1m"
+                if self.s.simple_entry_timeframe in {"1m", "5m"}
                 else self.rules,
             )
         )
-        if self.s.simple_entry_timeframe == "1m" and direction:
+        if self.s.simple_entry_timeframe in {"1m", "5m"} and direction:
             if direction != minute_side:
-                return 0, "AI entry direction conflicts with the closed one-minute slope"
+                return 0, "AI entry direction conflicts with the closed short-interval slope"
             reason = minute_reason + "; " + reason
         if direction and self.s.simple_btc_reference_enabled:
             btc_reason = btc_entry_gate(self.s, self.store, row, direction, now_ms)
@@ -531,8 +536,8 @@ class Engine:
         q = self.broker.quotes.get(symbol)
         if not BAR_MS <= maximum_signal_age_ms <= 2 * BAR_MS:
             raise SafeError("invalid experimental signal delay")
-        if self.s.simple_entry_timeframe == "1m":
-            maximum_signal_age_ms = MINUTE_MS
+        if self.s.simple_entry_timeframe in {"1m", "5m"}:
+            maximum_signal_age_ms = self.s.simple_entry_bar_ms
         if (
             row["timestamp_ms"] > now_ms
             or now_ms - row["timestamp_ms"] >= maximum_signal_age_ms
@@ -557,8 +562,8 @@ class Engine:
         if not direction:
             return
         signal_key = f"{self.strategy}:{symbol}:{int(row['timestamp_ms'])}"
-        if self.s.simple_entry_timeframe == "1m":
-            signal_key += ":1m"
+        if self.s.simple_entry_timeframe in {"1m", "5m"}:
+            signal_key += ":" + self.s.simple_entry_timeframe
         trade_id = hashlib.sha256(signal_key.encode()).hexdigest()[:24]
         if self.store.get("simple_signal:" + trade_id):
             return
@@ -593,12 +598,12 @@ class Engine:
                 },
             )
         assert q is not None
-        if self.s.simple_entry_timeframe == "1m":
+        if self.s.simple_entry_timeframe in {"1m", "5m"}:
             reason_veto = minute_veto(row, direction, now_ms, float(q.mark), self.rules)
             if reason_veto:
                 raise SafeError(reason_veto)
             if self.store.get("simple_minute:" + symbol) != row:
-                raise SafeError("one-minute slope changed before entry")
+                raise SafeError("short-interval slope changed before entry")
         self.store.put("simple_signal:" + trade_id, True)
         equity = float(self.broker.equity())
         stop = min(
@@ -803,7 +808,7 @@ class Engine:
             )
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
-        if self.s.simple_entry_timeframe == "1m":
+        if self.s.simple_entry_timeframe in {"1m", "5m"}:
             self.store.put(
                 "simple_minute_order:" + order.client_id,
                 {

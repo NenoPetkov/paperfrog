@@ -227,18 +227,22 @@ def review_prompt(s: Settings) -> str:
         f"and at most {request_limit(s)} attempts per UTC day. Entry permission expires "
         f"at the next {s.simple_ai_review_minutes}-minute boundary.\n"
     )
-    if s.simple_entry_timeframe == "1m":
-        prompt += """
-Entry timing and watchlist ranking use CLOSED ONE-MINUTE candles, refreshed every minute.
+    if s.simple_entry_timeframe in {"1m", "5m"}:
+        minutes = s.simple_entry_bar_ms // 60_000
+        prompt += f"""
+Entry timing and watchlist ranking use CLOSED {s.simple_entry_timeframe} candles,
+refreshed every {minutes} minute(s).
 Your generic entry conditions apply to the dynamically ranked liquid altcoin pool; forecast
 only the supplied sample. expected_return_15m retains a 15-minute diagnostic forecast horizon,
 independent of review cadence and entry-permission expiry. Forecast the close in 15 MINUTES.
-The supplied recent_bars, EMA 5/20 trend_atr, flow, RSI, volume_ratio (past 60 minutes),
-five-minute breakout distances and 24-minute range_position describe one-minute data.
-return_1h uses 60 minute closes. return_4h/24h and atr/atr_fraction for stop sizing retain
-closed 15-minute context; do not interpret atr_fraction as one-minute volatility.
-An independent gate requires aligned 1/3/5-minute moves, the latest candle body, rising/falling
-EMA 5, and confirming flow. You cannot allow an entry against that slope or a fresh rebound.
+The supplied recent_bars, EMA 5/20 trend_atr, flow, RSI, volume_ratio (past {60 * minutes} minutes),
+{5 * minutes}-minute breakout distances and {24 * minutes}-minute range_position describe
+{s.simple_entry_timeframe} data. return_1h uses {60 // minutes} entry candles.
+return_4h/24h and atr/atr_fraction for stop sizing retain closed 15-minute context;
+do not interpret atr_fraction as entry-candle volatility.
+An independent gate requires aligned {minutes}/{3 * minutes}/{5 * minutes}-minute moves,
+the latest candle body, rising/falling EMA 5, and confirming flow.
+You cannot allow an entry against that slope or a fresh rebound.
 A POSITIVE breakout_down_atr means price CLOSED BELOW the previous low; <=0 does not require
 an actual downward breakout. A POSITIVE breakout_up_atr means price closed above the prior high.
 """
@@ -303,7 +307,7 @@ class Advisor:
             if not re.fullmatch(r"[A-Z0-9]{2,24}USDT", symbol):
                 raise SafeError("adaptive AI symbol invalid")
             x = frames[symbol]
-            minimum_rows = 61 if self.s.simple_entry_timeframe == "1m" else 192
+            minimum_rows = 61 if self.s.simple_entry_timeframe in {"1m", "5m"} else 192
             if len(x) < minimum_rows or int(x.iloc[-1].timestamp_ms) != asof_ms:
                 raise SafeError("adaptive AI needs complete closed history")
             features = {name: float(x.iloc[-1][name]) for name in FEATURES}
@@ -316,7 +320,9 @@ class Advisor:
                 {
                     "symbol": symbol,
                     "features": features,
-                    "history_summary" if self.s.simple_entry_timeframe == "1m" else "summary_3d": {
+                    "history_summary"
+                    if self.s.simple_entry_timeframe in {"1m", "5m"}
+                    else "summary_3d": {
                         "duration_minutes": int(
                             (x.iloc[-1].timestamp_ms - x.iloc[0].timestamp_ms) / 60000
                         ),
