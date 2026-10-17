@@ -1,0 +1,11 @@
+[Unit]
+Description=Check whether the Paperfrog daily review is due
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+AccuracySec=1s
+Unit=paperfrog-daily-review.service
+
+[Install]
+WantedBy=timers.target

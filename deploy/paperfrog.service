@@ -1,0 +1,27 @@
+[Unit]
+Description=Paperfrog trading bot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/paperfrog
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=UTC
+UMask=0077
+ExecStart=/var/www/paperfrog/.venv/bin/python /var/www/paperfrog/scripts/server_ops.py run
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

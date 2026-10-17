@@ -494,6 +494,45 @@ before restarting. Telegram cannot switch profiles or create that authorization.
 
 ### Simple exchange execution and BNFCR
 
+The production runtime is hosted at `root@176.31.163.20:/var/www/paperfrog`.
+After committing changes on local `master`, deploy with:
+
+```bash
+./depoy.sh
+./depoy.sh --status
+```
+
+`depoy.sh` pushes committed changes and connects over SSH. It refuses a dirty
+checkout or a still-running local bot/review. On the server it checks the exact
+commit in an isolated worktree (pytest excluding external testnet tests, Ruff,
+strict mypy and systemd units), then stops both runtime writers and verifies a
+private SQLite/state backup under `/var/backups/paperfrog`. Only a fast-forward
+Git update is accepted. Runtime `.env`, databases, market history, reports and
+logs stay on the server and are never uploaded from the stale local copy.
+
+The script preserves the current execution mode. LIVE rearming uses the existing
+CLI account preflight and requires a previously valid arm plus unchanged account
+and configuration. A mode/configuration change requires a separate deliberate
+operator workflow; deployments never clear risk/manual locks or increase limits.
+Systemd restarts do not rearm or clear locks. PAPER remains the application default.
+If a deployment fails after shutdown, it does not restore an old trading ledger
+or automatically undo exchange activity. Its verified backup remains available
+for investigation. Check the service before attempting another start.
+
+```bash
+ssh root@176.31.163.20 'systemctl status paperfrog --no-pager'
+ssh root@176.31.163.20 'journalctl -u paperfrog -n 60 --no-pager'
+```
+
+`paperfrog.service` starts on boot and restarts after process failures. The
+`paperfrog-daily-review.timer` replaces the local cron job, preserving the 10:00
+Europe/Sofia review schedule and its persisted delivery ledger. After migration,
+the original local state stays as an archive; its LIVE arm is removed and
+`state/MIGRATED_TO_OVH` marks it inactive. Do not run a second bot or review against
+the same account/Telegram token. Initial migration retains a full runtime archive;
+routine deploy backups contain state, `.env`, dependency lockfiles and row-count
+verification, while historical data remains in the live runtime directory.
+
 The simple profile can run the same current rules on Binance production or testnet.
 For a Futures Credits account, set `FUTURES_ACCOUNT_MODE=credits` and
 `MARGIN_TYPE=CROSSED`. Binance requires Cross Margin and Multi-Assets Mode for credits.
