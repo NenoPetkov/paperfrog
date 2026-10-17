@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     display_timezone: str = "Europe/Sofia"
     soft_loss_cooldown_minutes: int = Field(720, ge=1, le=720)
     max_strategy_entries_per_day: int = Field(12, ge=0, le=40)
-    max_entries_per_symbol_per_day: int = Field(2, ge=1, le=2)
+    max_entries_per_symbol_per_day: int = Field(2, ge=1, le=4)
     max_concurrent_strategy_trades: int = Field(2, ge=1, le=4)
     risk_per_trade: float = Field(0.002, gt=0, le=0.04)
     max_open_risk: float = Field(0.005, gt=0, le=0.05)

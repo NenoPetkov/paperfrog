@@ -139,15 +139,41 @@ def test_daily_entry_default_and_dotenv_override(tmp_path):
     assert Settings(_env_file=env).max_strategy_entries_per_day == 40
 
 
-def test_forty_daily_entries_preserves_per_symbol_cap(settings, store, health, now):
-    s = Settings(_env_file=None, **{**settings.public(), "max_strategy_entries_per_day": 40})
+@pytest.mark.parametrize("cap", [1, 2, 3, 4])
+def test_forty_daily_entries_preserves_per_symbol_cap(settings, store, health, now, cap):
+    s = Settings(
+        _env_file=None,
+        **{
+            **settings.public(),
+            "max_strategy_entries_per_day": 40,
+            "max_entries_per_symbol_per_day": cap,
+        },
+    )
     risk = RiskEngine(s, store)
-    for i in range(2):
+    for i in range(cap):
         risk.reserve(proposal(str(i)), health, now)
         risk.closed(str(i), 1, now)
         now += timedelta(hours=1)
+    restarted = RiskEngine(s, store)
     with pytest.raises(SafeError, match="frequency"):
-        risk.reserve(proposal("third"), health, now)
+        restarted.reserve(proposal("extra"), health, now)
+    assert len(store.rows("entries")) == cap
+    restarted.reserve(proposal("other-coin", "OTHERUSDT"), health, now)
+    restarted.closed("other-coin", 1, now)
+    restarted.reserve(proposal("next-day"), health, now + timedelta(days=1))
+
+
+@pytest.mark.parametrize("cap", [0, 5])
+def test_per_symbol_daily_cap_bounds(cap):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, max_entries_per_symbol_per_day=cap)
+
+
+def test_per_symbol_daily_default_and_dotenv_override(tmp_path):
+    assert Settings(_env_file=None).max_entries_per_symbol_per_day == 2
+    env = tmp_path / "per-symbol.env"
+    env.write_text("MAX_ENTRIES_PER_SYMBOL_PER_DAY=4\n")
+    assert Settings(_env_file=env).max_entries_per_symbol_per_day == 4
 
 
 @pytest.mark.parametrize("cap", [0, 5])

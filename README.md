@@ -394,8 +394,14 @@ ML retraining, no changes triggered by individual losses, and no promised profit
 
 `MAX_STRATEGY_ENTRIES_PER_DAY` defaults to 12 and accepts 0–40. Set it to 40 for
 up to 40 entries per UTC day across all symbols. Reserved entries count even if
-aborted, and the two-entries-per-symbol limit still applies. Zero blocks all new
+aborted, and the configured per-symbol limit still applies. Zero blocks all new
 entries. Changing this setting requires a restart and renewed local LIVE authorization.
+
+`MAX_ENTRIES_PER_SYMBOL_PER_DAY` defaults to 2 and accepts 1–4. Set it to 4 to
+permit up to four entries per coin per UTC day. Counts survive restarts and reset
+for the next UTC day. The total daily entry cap, concurrent-position cap, cooldowns
+and other risk limits still apply. Changing this setting also requires a restart
+and renewed local LIVE authorization.
 
 `SIMPLE_ENTRY_PROFILE=standard` preserves the original three-hour breakout rules.
 The optional `active` profile uses a two-hour closed-candle breakout, minimum EMA
