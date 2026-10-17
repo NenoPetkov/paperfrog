@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,7 @@ def test_backup_preserves_wal_records_and_financial_locks(tmp_path, monkeypatch)
     root = tmp_path / "runtime"
     folder = root / "state/simple-live"
     folder.mkdir(parents=True)
+    (folder / "environment").symlink_to(tmp_path / "external-venv", target_is_directory=True)
     for name in (".env", "pyproject.toml", "uv.lock"):
         (root / name).write_text("")
     connection = sqlite3.connect(folder / "paperfrog.sqlite")
@@ -41,6 +43,7 @@ def test_backup_preserves_wal_records_and_financial_locks(tmp_path, monkeypatch)
     # Keep the connection open so committed records remain in the WAL during copying.
     target = tmp_path / "backup"
     monkeypatch.setattr(ops.subprocess, "check_output", lambda *a, **kw: "a" * 40)
+    monkeypatch.setattr(ops, "ensure_space", lambda _: None)
     try:
         ops.backup(root, target)
         copied = sqlite3.connect(target / "state/simple-live/paperfrog.sqlite")
@@ -53,6 +56,7 @@ def test_backup_preserves_wal_records_and_financial_locks(tmp_path, monkeypatch)
             copied.close()
         assert target.stat().st_mode & 0o077 == 0
         assert (target / ".env").stat().st_mode & 0o077 == 0
+        assert (target / "state/simple-live/environment").is_symlink()
         assert json.loads((target / "manifest.json").read_text())["databases"] == {
             "simple-live/paperfrog.sqlite": {"kv": 2}
         }
@@ -60,14 +64,22 @@ def test_backup_preserves_wal_records_and_financial_locks(tmp_path, monkeypatch)
         connection.close()
 
 
-def test_invalid_database_aborts_backup_before_copy(tmp_path):
+def test_invalid_database_aborts_backup_before_copy(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
     (state / "paperfrog.sqlite").write_bytes(b"invalid sqlite")
     target = tmp_path / "backup"
+    monkeypatch.setattr(ops, "ensure_space", lambda _: None)
     with pytest.raises(sqlite3.DatabaseError):
         ops.backup(tmp_path, target)
     assert not target.exists()
+
+
+def test_insufficient_space_blocks_deployment(tmp_path, monkeypatch):
+    (tmp_path / "state").mkdir()
+    monkeypatch.setattr(ops.shutil, "disk_usage", lambda _: SimpleNamespace(free=1024))
+    with pytest.raises(ops.DeploymentError, match="Insufficient free space"):
+        ops.ensure_space(tmp_path)
 
 
 def test_deployment_rejects_changed_risk_or_mode(tmp_path):
