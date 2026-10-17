@@ -123,8 +123,11 @@ def read_status(s: Settings) -> dict[str, Any]:
     base = f"http://127.0.0.1:{s.health_port}"
     with urllib.request.urlopen(base + "/health", timeout=5) as response:
         health = json.load(response)
+    heartbeat_at = time.time() - health["heartbeat_age"]
     with urllib.request.urlopen(base + "/simple", timeout=5) as response:
         status = json.load(response)
+    process = json.loads((directory(s) / "process.json").read_text())
+    started_at = datetime.fromisoformat(process["started_at"]).timestamp()
     conn = sqlite3.connect(
         (directory(s) / "paperfrog.sqlite").resolve().as_uri() + "?mode=ro", uri=True
     )
@@ -136,19 +139,33 @@ def read_status(s: Settings) -> dict[str, Any]:
                 "('reconciled','market_healthy_at','simple_scan_at_ms','manual_lock','risk_lock')"
             )
         }
+        monitor_errors = conn.execute(
+            "SELECT count(*) FROM audit WHERE ts >= ? AND kind IN "
+            "('simple_monitor_degraded', 'simple_critical_task_stopped')",
+            (int(started_at * 1000),),
+        ).fetchone()[0]
     finally:
         conn.close()
-    process = json.loads((directory(s) / "process.json").read_text())
-    started_at = datetime.fromisoformat(process["started_at"]).timestamp()
     market_at = float(runtime.get("market_healthy_at", 0))
+    scan_at = runtime.get("simple_scan_at_ms", 0) / 1000
     return {
         "mode": status.get("mode"),
         "state": status.get("state"),
         "heartbeat_age_seconds": round(health["heartbeat_age"], 2),
         "reconciled": runtime.get("reconciled") is True,
-        "heartbeat_after_start": time.time() - health["heartbeat_age"] >= started_at,
+        "heartbeat_after_start": heartbeat_at >= started_at,
         "market_healthy_after_start": market_at >= started_at and 0 <= time.time() - market_at < 60,
-        "scan_after_start": runtime.get("simple_scan_at_ms", 0) / 1000 >= started_at,
+        # An empty selection has no quotes to fetch. Require a completed new scan,
+        # a subsequent monitor heartbeat and no monitor failures in this process.
+        # Risk locks can mask DEGRADED state, so state/heartbeat alone cannot suffice.
+        "idle_monitor_healthy_after_start": (
+            status.get("selected") == []
+            and status.get("open_positions") == []
+            and market_at == 0
+            and started_at <= scan_at <= heartbeat_at
+            and monitor_errors == 0
+        ),
+        "scan_after_start": scan_at >= started_at,
         "manual_lock": bool(runtime.get("manual_lock")),
         "risk_locked": bool(runtime.get("risk_lock")),
         "open_positions": status.get("open_positions", []),
@@ -169,7 +186,10 @@ def wait_online(s: Settings, timeout: int) -> None:
                 and status["settings_match"]
                 and status["reconciled"]
                 and status["heartbeat_after_start"]
-                and status["market_healthy_after_start"]
+                and (
+                    status["market_healthy_after_start"]
+                    or status.get("idle_monitor_healthy_after_start", False)
+                )
                 and status["scan_after_start"]
                 and 0 <= status["heartbeat_age_seconds"] < 30
                 and status["state"] not in {"BOOTING", "ERROR_SAFE", "DEGRADED"}

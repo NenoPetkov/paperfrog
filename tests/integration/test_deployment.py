@@ -1,7 +1,9 @@
 import fcntl
 import importlib.util
+import io
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -152,3 +154,70 @@ def test_startup_rejects_degraded_or_previous_process_health(monkeypatch, change
     monkeypatch.setattr(ops, "read_status", lambda _: status)
     with pytest.raises(ops.DeploymentError, match="not confirmed"):
         ops.wait_online(settings, 1)
+
+
+@pytest.mark.parametrize(
+    ("selected", "positions", "scan_at", "error_kind", "expected"),
+    [
+        ([], [], 998_000, None, True),
+        (["ETHUSDT"], [], 998_000, None, False),
+        ([], ["ETHUSDT"], 998_000, None, False),
+        (None, [], 998_000, None, False),
+        ([], [], 980_000, None, False),
+        ([], [], 999_500, None, False),
+        ([], [], 998_000, "simple_monitor_degraded", False),
+        ([], [], 998_000, "simple_critical_task_stopped", False),
+    ],
+)
+def test_idle_startup_requires_new_scan_and_successful_monitor(
+    tmp_path, monkeypatch, selected, positions, scan_at, error_kind, expected
+):
+    settings = Settings(_env_file=None).model_copy(update={"state_dir": tmp_path})
+    folder = ops.directory(settings)
+    folder.mkdir()
+    (folder / "process.json").write_text(
+        json.dumps({"started_at": datetime.fromtimestamp(990, UTC).isoformat()})
+    )
+    with sqlite3.connect(folder / "paperfrog.sqlite") as conn:
+        conn.execute("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("CREATE TABLE audit (ts INTEGER, kind TEXT)")
+        conn.executemany(
+            "INSERT INTO kv VALUES (?, ?)",
+            [
+                ("reconciled", "true"),
+                ("market_healthy_at", "0"),
+                ("simple_scan_at_ms", str(scan_at)),
+                ("risk_lock", '{"state":"DAILY_RISK_LOCK"}'),
+            ],
+        )
+        # Failures from a previous process must not disqualify a healthy restart.
+        conn.execute("INSERT INTO audit VALUES (980000, 'simple_monitor_degraded')")
+        if error_kind:
+            conn.execute("INSERT INTO audit VALUES (995000, ?)", (error_kind,))
+    status = {
+        "mode": "paper",
+        "state": "DAILY_RISK_LOCK",
+        "selected": selected,
+        "open_positions": positions,
+        "loaded_settings": settings.simple_parameters(),
+    }
+    monkeypatch.setattr(ops.time, "time", lambda: 1000)
+    monkeypatch.setattr(
+        ops.urllib.request,
+        "urlopen",
+        lambda url, **kw: io.StringIO(
+            json.dumps({"heartbeat_age": 1} if url.endswith("/health") else status)
+        ),
+    )
+    observed = ops.read_status(settings)
+    assert observed["idle_monitor_healthy_after_start"] is expected
+    assert observed["market_healthy_after_start"] is False
+    assert observed["risk_locked"] is True
+    if expected:
+        ops.wait_online(settings, 1)
+    else:
+        clock = iter([0, 0, 2])
+        monkeypatch.setattr(ops.time, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(ops.time, "sleep", lambda _: None)
+        with pytest.raises(ops.DeploymentError, match="not confirmed"):
+            ops.wait_online(settings, 1)

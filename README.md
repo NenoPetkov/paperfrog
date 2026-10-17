@@ -494,9 +494,10 @@ before restarting. Telegram cannot switch profiles or create that authorization.
 
 ### Simple exchange execution and BNFCR
 
-The prepared deployment target is `root@176.31.163.20:/var/www/paperfrog`.
-Before the initial cutover, permit that IPv4 address on the existing Binance API
-key and verify authenticated reads from the server. Keep its existing permissions.
+The deployment target is `root@176.31.163.20:/var/www/paperfrog`.
+Keep that IPv4 address permitted on the existing Binance API key, retaining its
+existing permissions. Migration was completed on 18 October 2026; this server
+owns the current runtime data and the local bot/review remain stopped.
 After committing changes on local `master`, deploy with:
 
 ```bash
@@ -518,7 +519,9 @@ and configuration. A mode/configuration change requires a separate deliberate
 operator workflow; deployments never clear risk/manual locks or increase limits.
 Systemd restarts do not rearm or clear locks. PAPER remains the application default.
 Startup verification requires a new heartbeat, a completed scan and healthy market
-data from the current process. A stale heartbeat or DEGRADED runtime cannot pass.
+data from the current process. With no positions or selected symbols, a heartbeat
+after the new scan and no monitor failures since startup verify normal idle operation.
+A stale heartbeat or DEGRADED runtime cannot pass, and risk pauses remain in effect.
 If a deployment fails after shutdown, it does not restore an old trading ledger
 or automatically undo exchange activity. Its verified backup remains available
 for investigation. Check the service before attempting another start.
