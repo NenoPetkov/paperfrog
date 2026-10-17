@@ -129,15 +129,28 @@ def read_status(s: Settings) -> dict[str, Any]:
         (directory(s) / "paperfrog.sqlite").resolve().as_uri() + "?mode=ro", uri=True
     )
     try:
-        row = conn.execute("SELECT value FROM kv WHERE key='reconciled'").fetchone()
-        reconciled = bool(row and json.loads(row[0]) is True)
+        runtime = {
+            key: json.loads(value)
+            for key, value in conn.execute(
+                "SELECT key,value FROM kv WHERE key IN "
+                "('reconciled','market_healthy_at','simple_scan_at_ms','manual_lock','risk_lock')"
+            )
+        }
     finally:
         conn.close()
+    process = json.loads((directory(s) / "process.json").read_text())
+    started_at = datetime.fromisoformat(process["started_at"]).timestamp()
+    market_at = float(runtime.get("market_healthy_at", 0))
     return {
         "mode": status.get("mode"),
         "state": status.get("state"),
         "heartbeat_age_seconds": round(health["heartbeat_age"], 2),
-        "reconciled": reconciled,
+        "reconciled": runtime.get("reconciled") is True,
+        "heartbeat_after_start": time.time() - health["heartbeat_age"] >= started_at,
+        "market_healthy_after_start": market_at >= started_at and 0 <= time.time() - market_at < 60,
+        "scan_after_start": runtime.get("simple_scan_at_ms", 0) / 1000 >= started_at,
+        "manual_lock": bool(runtime.get("manual_lock")),
+        "risk_locked": bool(runtime.get("risk_lock")),
         "open_positions": status.get("open_positions", []),
         "entry_timeframe": status.get("entry_timeframe"),
         "scan_pool_count": status.get("scan_pool_count"),
@@ -155,8 +168,11 @@ def wait_online(s: Settings, timeout: int) -> None:
                 status["mode"] == s.trading_mode
                 and status["settings_match"]
                 and status["reconciled"]
+                and status["heartbeat_after_start"]
+                and status["market_healthy_after_start"]
+                and status["scan_after_start"]
                 and 0 <= status["heartbeat_age_seconds"] < 30
-                and status["state"] not in {"BOOTING", "ERROR_SAFE"}
+                and status["state"] not in {"BOOTING", "ERROR_SAFE", "DEGRADED"}
             ):
                 # PAUSED/cooldown is valid: a deployment must never clear a risk/manual lock.
                 print(json.dumps(status))

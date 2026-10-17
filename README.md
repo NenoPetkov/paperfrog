@@ -515,6 +515,8 @@ CLI account preflight and requires a previously valid arm plus unchanged account
 and configuration. A mode/configuration change requires a separate deliberate
 operator workflow; deployments never clear risk/manual locks or increase limits.
 Systemd restarts do not rearm or clear locks. PAPER remains the application default.
+Startup verification requires a new heartbeat, a completed scan and healthy market
+data from the current process. A stale heartbeat or DEGRADED runtime cannot pass.
 If a deployment fails after shutdown, it does not restore an old trading ledger
 or automatically undo exchange activity. Its verified backup remains available
 for investigation. Check the service before attempting another start.

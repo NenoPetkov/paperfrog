@@ -99,6 +99,9 @@ def test_startup_wait_accepts_preserved_cooldown_without_reset(monkeypatch, caps
         "mode": "paper",
         "settings_match": True,
         "reconciled": True,
+        "heartbeat_after_start": True,
+        "market_healthy_after_start": True,
+        "scan_after_start": True,
         "heartbeat_age_seconds": 1,
         "state": "COOLDOWN",
     }
@@ -117,5 +120,35 @@ def test_startup_rejects_unreconciled_runtime(monkeypatch):
         "read_status",
         lambda _: {"mode": "paper", "settings_match": True, "reconciled": False},
     )
+    with pytest.raises(ops.DeploymentError, match="not confirmed"):
+        ops.wait_online(settings, 1)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"state": "DEGRADED"},
+        {"heartbeat_after_start": False},
+        {"market_healthy_after_start": False},
+        {"scan_after_start": False},
+    ],
+)
+def test_startup_rejects_degraded_or_previous_process_health(monkeypatch, change):
+    settings = Settings(_env_file=None)
+    status = {
+        "mode": "paper",
+        "settings_match": True,
+        "reconciled": True,
+        "heartbeat_after_start": True,
+        "market_healthy_after_start": True,
+        "scan_after_start": True,
+        "heartbeat_age_seconds": 1,
+        "state": "RUNNING",
+        **change,
+    }
+    clock = iter([0, 0, 2])
+    monkeypatch.setattr(ops.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(ops.time, "sleep", lambda _: None)
+    monkeypatch.setattr(ops, "read_status", lambda _: status)
     with pytest.raises(ops.DeploymentError, match="not confirmed"):
         ops.wait_online(settings, 1)
