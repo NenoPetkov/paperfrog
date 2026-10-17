@@ -97,7 +97,7 @@ across open trades. It also opts into 10x account thresholds: 12.5% daily loss,
 These are much larger loss allowances; they do not guarantee a maximum realized
 loss or prevent liquidation. Default account limits remain 1.25%, 3.5% and 6%.
 
-The existing two-position limit and LONG/SHORT signals remain. The combined preset
+The default two-position limit and LONG/SHORT signals remain. The combined preset
 sets an eight-hour maximum hold; `SIMPLE_MAX_HOLD_HOURS` defaults to four hours and
 accepts 1–24. Stops, trend reversal and risk exits can close positions earlier.
 The default sizing mode and default limits remain unchanged. No existing
@@ -387,26 +387,33 @@ gain, the minimum giveback is 3.5% of starting equity and the profit entry cap i
 a restart and renewed local LIVE authorization. Telegram cannot change thresholds
 or create that authorization.
 
-Current limits are 12 entries total and two per coin per UTC day, with at most two
-positions. Selection may change during the day. The bot does not force a 5–20-trade
+Default limits are 12 entries total and two per coin per UTC day, with at most two
+concurrent positions (configurable up to four). Selection may change during the day. The bot does not force a 5–20-trade
 quota. With adaptive AI disabled, these are frozen deterministic rules: no automatic
 ML retraining, no changes triggered by individual losses, and no promised profitability.
+
+`MAX_STRATEGY_ENTRIES_PER_DAY` defaults to 12 and accepts 0–40. Set it to 40 for
+up to 40 entries per UTC day across all symbols. Reserved entries count even if
+aborted, and the two-entries-per-symbol limit still applies. Zero blocks all new
+entries. Changing this setting requires a restart and renewed local LIVE authorization.
 
 `SIMPLE_ENTRY_PROFILE=standard` preserves the original three-hour breakout rules.
 The optional `active` profile uses a two-hour closed-candle breakout, minimum EMA
 separation of 0.4 ATR (standard: 0.5), and minimum directional flow of 0.03
 (standard: 0.05). It requires `SIMPLE_ENTRY_MODE=trend`. Both profiles use the same
-15-minute signals, five-second monitoring, configurable watchlist, two-position ceiling,
+15-minute signals, five-second monitoring, configurable watchlist and position limit,
 position sizing, 2x leverage, stops, exposure caps, entry caps and loss locks.
 Active can produce more eligible setups; additional trades and profitability are
 not guaranteed. Higher turnover can increase fees and losses.
 
 `SIMPLE_SELECTED_COUNT` controls the watchlist independently of the position limit.
 It defaults to 2 and accepts 1–10. Set it to 10 to evaluate up to ten eligible coins
-from the scanned pool each cycle. Fewer may qualify for the watchlist. The maximum
-remains two concurrent positions, subject to the same sizing, exposure, cooldown,
-entry-count and loss limits. A running process keeps its loaded settings; changing
-this value requires a restart and, for LIVE, renewed local authorization.
+from the scanned pool each cycle. Fewer may qualify for the watchlist.
+`MAX_CONCURRENT_STRATEGY_TRADES` defaults to 2 and accepts 1–4. Set it to 4 to
+permit up to four simultaneous positions, subject to the same sizing, total open
+risk, exposure, cooldown, entry-count and loss limits. A running process keeps its
+loaded settings; changing either value requires a restart and, for LIVE, renewed
+local authorization.
 
 The profile is shown by `/simple` and `simple status`, and PAPER backtests
 use its matching indicator and execution rules. Switch only while flat: changing

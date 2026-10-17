@@ -9,11 +9,11 @@ from paperfrog.risk.engine import Proposal, RiskEngine
 from paperfrog.settings import Settings
 
 
-@given(st.integers(min_value=0, max_value=16))
+@given(st.integers(min_value=0, max_value=40))
 def test_configuration_cap_bounded(cap):
     assert (
         Settings(_env_file=None, max_strategy_entries_per_day=cap).max_strategy_entries_per_day
-        <= 16
+        == cap
     )
 
 

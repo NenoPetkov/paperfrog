@@ -16,7 +16,7 @@ def proposal(i="trade", symbol="SOLUSDT", **kwargs):
     return replace(Proposal(i, symbol, 10000, 500, 1000, 13, 0, 0.01, 0.3, 0.001), **kwargs)
 
 
-@pytest.mark.parametrize("cap", [-1, 17, 100])
+@pytest.mark.parametrize("cap", [-1, 41, 100])
 def test_cap_validation(cap):
     with pytest.raises(ValidationError):
         Settings(_env_file=None, max_strategy_entries_per_day=cap)
@@ -117,13 +117,81 @@ def test_proposal_caps(settings, store, health, now, changes):
         RiskEngine(settings, store).reserve(proposal(**changes), health, now)
 
 
-def test_daily_count_includes_aborted_entries(settings, store, health, now):
-    risk = RiskEngine(settings, store)
-    for i in range(12):
+@pytest.mark.parametrize("cap", [0, 12, 40])
+def test_daily_count_includes_aborted_entries(settings, store, health, now, cap):
+    s = Settings(_env_file=None, **{**settings.public(), "max_strategy_entries_per_day": cap})
+    risk = RiskEngine(s, store)
+    for i in range(cap):
         risk.reserve(proposal(str(i), f"ALT{i}USDT"), health, now)
         risk.closed(str(i), 1, now)
+    restarted = RiskEngine(s, store)
     with pytest.raises(SafeError, match="frequency"):
-        risk.reserve(proposal("13", "NEWUSDT"), health, now)
+        restarted.reserve(proposal("extra", "NEWUSDT"), health, now)
+    assert len(store.rows("entries")) == cap
+    if cap:
+        restarted.reserve(proposal("next-day", "NEWUSDT"), health, now + timedelta(days=1))
+
+
+def test_daily_entry_default_and_dotenv_override(tmp_path):
+    assert Settings(_env_file=None).max_strategy_entries_per_day == 12
+    env = tmp_path / "daily.env"
+    env.write_text("MAX_STRATEGY_ENTRIES_PER_DAY=40\n")
+    assert Settings(_env_file=env).max_strategy_entries_per_day == 40
+
+
+def test_forty_daily_entries_preserves_per_symbol_cap(settings, store, health, now):
+    s = Settings(_env_file=None, **{**settings.public(), "max_strategy_entries_per_day": 40})
+    risk = RiskEngine(s, store)
+    for i in range(2):
+        risk.reserve(proposal(str(i)), health, now)
+        risk.closed(str(i), 1, now)
+        now += timedelta(hours=1)
+    with pytest.raises(SafeError, match="frequency"):
+        risk.reserve(proposal("third"), health, now)
+
+
+@pytest.mark.parametrize("cap", [0, 5])
+def test_concurrent_trade_cap_bounds(cap):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, max_concurrent_strategy_trades=cap)
+
+
+def test_concurrent_trade_default_and_dotenv_override(tmp_path):
+    assert Settings(_env_file=None).max_concurrent_strategy_trades == 2
+    env = tmp_path / "positions.env"
+    env.write_text("MAX_CONCURRENT_STRATEGY_TRADES=4\n")
+    assert Settings(_env_file=env).max_concurrent_strategy_trades == 4
+
+
+@pytest.mark.parametrize("cap", [1, 2, 3, 4])
+def test_concurrent_trade_cap_enforced_after_restart(settings, store, health, now, cap):
+    s = Settings(_env_file=None, **{**settings.public(), "max_concurrent_strategy_trades": cap})
+    risk = RiskEngine(s, store)
+    for i in range(cap):
+        risk.reserve(proposal(str(i), f"ALT{i}USDT", risk=10), health, now)
+    restarted = RiskEngine(s, store)
+    with pytest.raises(SafeError, match="concurrent trade cap"):
+        restarted.reserve(proposal("extra", "EXTRAUSDT", risk=10), health, now)
+    assert len(store.rows("entries")) == cap
+    restarted.closed("0", 1, now)
+    restarted.reserve(proposal("replacement", "REPLACEUSDT", risk=10), health, now)
+    assert sum(not row["closed"] for row in store.rows("entries")) == cap
+
+
+@pytest.mark.parametrize(
+    "changes,reason",
+    [({"risk": 13}, "open risk cap"), ({"risk": 10, "gross": 1400}, "gross exposure cap")],
+)
+def test_four_position_limit_preserves_aggregate_caps(
+    settings, store, health, now, changes, reason
+):
+    s = Settings(_env_file=None, **{**settings.public(), "max_concurrent_strategy_trades": 4})
+    risk = RiskEngine(s, store)
+    for i in range(3):
+        risk.reserve(proposal(str(i), f"ALT{i}USDT", **changes), health, now)
+    with pytest.raises(SafeError, match=reason):
+        risk.reserve(proposal("fourth", "FOURTHUSDT", **changes), health, now)
+    assert len(store.rows("entries")) == 3
 
 
 @pytest.mark.parametrize(
