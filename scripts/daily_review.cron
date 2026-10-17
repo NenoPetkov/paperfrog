@@ -1,0 +1,4 @@
+# Local timezone and first delivery are checked by Python, independent of host timezone.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+* * * * * root cd /var/www/paperfrog && /usr/local/bin/uv run --no-sync python -m paperfrog.simple.daily_review --hour 10 --timezone Europe/Sofia --first-delivery 2026-10-18 >> /var/www/paperfrog/logs/daily-review.log 2>&1

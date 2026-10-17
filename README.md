@@ -185,12 +185,16 @@ all existing environment conditions and a local arm bound to the account, source
 and configuration. Changing the AI model or enabling AI requires fresh local arming.
 
 Each review receives public market summaries for up to ten selected coins, their
-latest 32 closed candles and eleven numeric indicators, up to eight prior reviews
+latest 32 closed candles and eleven numeric indicators, up to two prior reviews
 with scored forecasts, and up to 50 closed trades expressed as approximate net
 returns. No balances, quantities, private open positions, order IDs or credentials
 are sent. Price history used to calculate indicators remains three days. Forecasts
 are scored only at their specified 15-minute target; missing observations are left
 unscored. Close-to-close forecast scores are diagnostics, not executable PnL.
+Matured scores from up to 128 stored reviews also supply mean absolute error
+against a no-price-change baseline, with an explicit warning about overlapping
+forecasts and small samples. The prompt asks for current conflicting evidence,
+invalidation conditions and concise explanations; it discourages needless rule changes.
 
 The model can compose new AND/OR entry conditions over trend, flow, volatility,
 one/four/24-hour returns, RSI, volume ratio, breakout distance and range position,
@@ -218,6 +222,28 @@ durable across restarts, with no automatic request retries. Each request has a
 deadline of 40 seconds or the remaining permission window, whichever is shorter,
 and `SIMPLE_AI_OUTPUT_LIMIT` (default 4000, maximum 8192 tokens).
 These bounds constrain API usage, not a fixed monetary bill.
+
+Reviews skip API calls when a manual/risk lock is present or all configured
+position slots are occupied. A skipped boundary clears prior entry permission,
+uses no API request budget and waits for the next boundary before reconsidering;
+exits continue independently. Freeing a slot does not revive an expired review.
+GPT-6 requests use explicit-only caching at the stable instruction boundary,
+avoiding cache writes for the changing market snapshot. Other models retain
+their existing cache behavior. Input JSON is compact; candle values use eight
+significant digits for presentation while execution indicators retain full precision.
+
+The `simple_ai_usage` audit event and `/simple` diagnostics `adaptive_ai.last_usage`
+record numeric input, cache-read, cache-write, output and reasoning token usage
+when returned by the SDK, plus request character count. Missing usage stays missing;
+SDK errors before a parsed response may still incur charges that are not captured.
+Reasoning tokens are part of output usage, and cached/written tokens are subsets
+of input usage; do not add them again. These counters are not a billing estimate.
+Actual savings and any change in decision quality require forward measurement.
+
+During restart, trend exits use only candles matching the position's original
+entry timeframe. A completed 15-minute risk scan cannot substitute for missing
+one- or five-minute trend data. Existing startup grace and unavailable-data exits
+still apply, and stops, holding limits, portfolio limits and crisis exits remain active.
 
 `/simple` and `simple status` expose AI status and the most recent review. Reviews,
 forecasts and trade-to-rule attribution are journaled. This is persistent feedback
@@ -278,6 +304,45 @@ missing. Excursions use sampled marks and fills, so downtime and between-poll
 extremes are not captured. Monetary comparisons require consistent account units.
 Small samples, feature differences and passing software tests do not establish
 causation, improved prediction or profitability.
+
+### Scheduled AI review and actionable proposals
+
+The separate daily reviewer sends Telegram around **10:00 Europe/Sofia**, starting
+18 October 2026 on this host. It reviews the previous complete local calendar day
+and compares it with the seven days preceding that day. Daylight-saving changes
+are handled by the timezone. Only closed trades are included. This schedule is
+independent of the entry-review interval and the UTC reports above.
+
+`scripts/daily_review.cron` is installed as `/etc/cron.d/paperfrog-daily-review`.
+Cron checks every minute; Python gates the local delivery time and persists report
+and delivery state. It makes at most one AI attempt per report day, with a 4,000
+output-token ceiling, and skips AI on days with no closed trades. Normalized
+metrics go to the model; exact monetary totals are calculated locally. An AI
+failure produces a deterministic summary without proposals. A restart catches up
+the latest due day without sending a backlog of historical reports.
+
+Reports and up to two evidence-backed proposals are saved under
+`reports/simple-<mode>/daily-ai/`, with proposals in `proposals/DR-YYYYMMDD-NN.json`.
+Each proposal contains the observed pattern, evidence references, an exact change
+specification, target files and source/configuration hashes, acceptance criteria,
+validation steps and rollback. Ask the coding assistant **Apply DR-YYYYMMDD-NN**
+to inspect and implement a saved proposal. This is not a Telegram trading command;
+proposals never execute automatically. Current code and evidence must be reviewed
+before implementation, with existing PAPER defaults, risk limits and live gates
+preserved. Small samples can justify collecting evidence rather than changing rules.
+
+```bash
+uv run --no-sync python -m paperfrog.simple.daily_review --show-proposal DR-20261017-01
+uv run --no-sync python -m paperfrog.simple.daily_review --preview-day 2026-10-16 --timezone Europe/Sofia
+```
+
+Preview mode writes to a separate `daily-ai-preview` folder and never sends Telegram.
+The worker opens the trading ledger read-only and keeps its own state in
+`state/simple-<mode>/daily-review/reviews.sqlite` (`state/simple/` for PAPER).
+Telegram delivery uses the configured allowed chats, retains per-message
+acknowledgements, and retries failed parts at most three times, five minutes apart.
+An acknowledgement lost after Telegram accepts a message can cause a duplicate.
+Local reports remain available if delivery fails. Logs are in `logs/daily-review.log`.
 
 Running services need to load the updated code to collect the richer journal.
 Existing source-bound live authorization must be renewed locally after an update;

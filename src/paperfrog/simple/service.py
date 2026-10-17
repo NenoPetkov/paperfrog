@@ -189,6 +189,7 @@ class SimpleService:
                     "model": self.s.openai_primary_model if self.s.simple_ai_enabled else None,
                     "status": self.store.get("simple_ai_status"),
                     "last_review": self.store.get("simple_ai_active"),
+                    "last_usage": self.store.get("simple_ai_last_usage"),
                     "learning": "persisted context and scored forecasts; no model retraining",
                 },
                 "btc_reference": {

@@ -207,7 +207,7 @@ async def test_review_uses_selected_entry_profile_and_keeps_explicit_pause(
     snapshot = json.loads(messages[1]["content"])
     assert snapshot["entry_policy"]["profile"] == profile
     assert snapshot["entry_policy"]["minimum_trend_atr"] == execution_rules(s).minimum_trend_atr
-    assert ("ACTIVE entry profile" in messages[0]["content"]) == (profile == "active")
+    assert ("ACTIVE entry profile" in messages[0]["content"][0]["text"]) == (profile == "active")
     assert signal(s, store, observation(), p.asof_ms, execution_rules(s), 0.001)[0] == 0
     assert store.get("simple_ai_status") == "pause"
 

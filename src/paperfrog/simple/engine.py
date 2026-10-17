@@ -463,6 +463,12 @@ class Engine:
                 and isinstance(row.get("risk_context"), dict)
             ):
                 row = row["risk_context"]
+            # During restart the slow risk scan can finish before entry candles.
+            # Never interpret another timeframe's trend as this trade's reversal.
+            if row is not None and row.get("entry_timeframe", "15m") != trade.get(
+                "entry_timeframe", "15m"
+            ):
+                row = None
             reason = (
                 "portfolio loss/risk limit reached"
                 if self.store.get("risk_lock")

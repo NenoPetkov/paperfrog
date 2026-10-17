@@ -53,6 +53,44 @@ MAX_REQUESTS_PER_UTC_DAY = 96
 MAX_HISTORY = 128
 
 
+def forecast_feedback(history: list[dict[str, Any]], asof_ms: int) -> dict[str, Any]:
+    """Compare only matured observations with a no-price-change baseline."""
+    results = [
+        result
+        for record in history[-MAX_HISTORY:]
+        if record["plan"]["asof_ms"] + BAR_MS <= asof_ms
+        for result in (record.get("forecast_results") or [])
+        if all(math.isfinite(float(result[key])) for key in ("expected", "actual"))
+    ]
+    count = len(results)
+    return {
+        "observations": count,
+        "mean_absolute_error": sum(abs(r["expected"] - r["actual"]) for r in results) / count
+        if count
+        else None,
+        "no_change_mean_absolute_error": sum(abs(r["actual"]) for r in results) / count
+        if count
+        else None,
+        "caution": "Overlapping forecasts, changing symbols, small samples; not trading PnL.",
+    }
+
+
+def token_usage(response: Any) -> dict[str, int]:
+    """Only numeric SDK usage fields may enter the local accounting journal."""
+    usage = getattr(response, "usage", None)
+    details = getattr(usage, "input_tokens_details", None)
+    output = getattr(usage, "output_tokens_details", None)
+    values = {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "cached_tokens": getattr(details, "cached_tokens", None),
+        "cache_write_tokens": getattr(details, "cache_write_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "reasoning_tokens": getattr(output, "reasoning_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+    return {k: v for k, v in values.items() if type(v) is int and v >= 0}
+
+
 def request_limit(s: Settings) -> int:
     """One attempt per configured boundary: 96/day or explicitly selected 1440/day."""
     return MAX_REQUESTS_PER_UTC_DAY * (15 // s.simple_ai_review_minutes)
@@ -218,6 +256,11 @@ Always forecast the 15-MINUTE close-to-close fractional return for EVERY selecte
 These forecasts are for scoring, not calibrated probabilities or executable trade returns.
 Copy asof_ms exactly. Rules expire at permission_expires_ms. You may retain the previous
 conditions if still appropriate; reviewing does not require changing them. Explain briefly in Bulgarian.
+Focus on the current setup, its conflicting evidence and what would invalidate it. Do not
+rewrite thresholds merely because a new review is due. Use forecast_feedback to check whether
+past forecasts beat a no-price-change baseline; this is diagnostic, not evidence of profit.
+Keep explanation to two short sentences (at most 350 characters). Return at most two short
+lessons, only when new evidence supports them; an empty lessons list is fine.
 """
 
 
@@ -332,7 +375,10 @@ class Advisor:
                         "quote_volume_24h": float(x.iloc[-1].daily_volume),
                     },
                     "recent_columns": list(recent.columns),
-                    "recent_bars": recent.to_numpy().tolist(),
+                    "recent_bars": [
+                        [int(values[0]), *(float(f"{v:.8g}") for v in values[1:])]
+                        for values in recent.to_numpy()
+                    ],
                 }
             )
         history = self.store.get("simple_ai_history", [])
@@ -382,7 +428,7 @@ class Advisor:
             if t["timestamp_ms"] <= asof_ms
         ]
         memory = [
-            {"plan": r["plan"], "forecast_results": r.get("forecast_results")} for r in history[-8:]
+            {"plan": r["plan"], "forecast_results": r.get("forecast_results")} for r in history[-2:]
         ]
         rules = execution_rules(self.s)
         return {
@@ -402,6 +448,7 @@ class Advisor:
             },
             "markets": markets,
             "prior_reviews": memory,
+            "forecast_feedback": forecast_feedback(history, asof_ms),
             "closed_trades": trades,
             "evidence_warning": "Memory/context, not model retraining. No proven trading edge.",
         }
@@ -427,6 +474,22 @@ class Advisor:
                 self.store.put("simple_ai_status", "waiting_next_review", conn)
                 return
             self.store.put("simple_ai_attempted_ms", asof_ms, conn)
+            # These are local entry blockers, not instructions for the model. A
+            # skipped boundary grants no permission and consumes no API budget.
+            skip = (
+                "manual_lock"
+                if self.store.get("manual_lock", False, conn)
+                else "risk_lock"
+                if self.store.get("risk_lock", None, conn)
+                else "position_capacity"
+                if len(self.store.get("simple_positions", {}, conn))
+                >= self.s.max_concurrent_strategy_trades
+                else None
+            )
+            if skip:
+                self.store.put("simple_ai_status", "skipped_" + skip, conn)
+                self.store.audit("simple_ai_skipped", {"asof_ms": asof_ms, "reason": skip}, conn)
+                return
             day = asof_ms // 86_400_000
             budget = self.store.get("simple_ai_budget", {}, conn)
             count = budget.get("count", 0) if budget.get("day") == day else 0
@@ -441,9 +504,24 @@ class Advisor:
                 raise SafeError("adaptive AI clock or API unavailable")
             deadline = time.monotonic() + min(40, (asof_ms + review_ms - started_ms) / 1000)
             snapshot = await asyncio.to_thread(self.snapshot, frames, selected, asof_ms)
-            request_text = json.dumps(snapshot, allow_nan=False, ensure_ascii=False)
+            request_text = json.dumps(
+                snapshot, allow_nan=False, ensure_ascii=False, separators=(",", ":")
+            )
             if len(request_text) > 180_000:
                 raise SafeError("adaptive AI input budget exceeded")
+            # GPT-6 supports explicit-only caching. Cache reusable instructions,
+            # never the changing market suffix. Other models retain their API contract.
+            cache_options: dict[str, Any] = {}
+            instructions: Any = review_prompt(self.s)
+            if self.s.openai_primary_model.startswith("gpt-6"):
+                cache_options["prompt_cache_options"] = {"mode": "explicit"}
+                instructions = [
+                    {
+                        "type": "input_text",
+                        "text": instructions,
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    }
+                ]
             async with asyncio.timeout_at(deadline):
                 response = await self.client.responses.parse(
                     model=self.s.openai_primary_model,
@@ -451,10 +529,19 @@ class Advisor:
                     text_format=AdaptivePlan,
                     max_output_tokens=self.s.simple_ai_output_limit,
                     input=[
-                        {"role": "system", "content": review_prompt(self.s)},
+                        {"role": "developer", "content": instructions},
                         {"role": "user", "content": request_text},
                     ],
+                    **cache_options,
                 )
+            usage_record = {
+                "asof_ms": asof_ms,
+                "model": self.clean(self.s.openai_primary_model),
+                "request_characters": len(request_text),
+                "usage": token_usage(response),
+            }
+            self.store.put("simple_ai_last_usage", usage_record)
+            self.store.audit("simple_ai_usage", usage_record)
             parsed = response.output_parsed
             if not isinstance(parsed, AdaptivePlan):
                 raise SafeError("adaptive AI refused or incomplete")
