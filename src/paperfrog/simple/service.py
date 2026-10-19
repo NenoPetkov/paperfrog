@@ -458,7 +458,13 @@ class SimpleService:
             )
         )
         contexts = self.context_rows
-        if int(contexts.get(BTC, {}).get("timestamp_ms", 0)) != boundary // BAR_MS * BAR_MS:
+        context_at = int(contexts.get(BTC, {}).get("timestamp_ms", 0))
+        if self.s.simple_entry_timeframe == "8m" and boundary < context_at <= self.now_ms():
+            # On a late start, the newest completed 15m context can be newer
+            # than the last 8m bar. Wait for the next bar without using future
+            # context or reporting ordinary readiness as an operational error.
+            return
+        if context_at != boundary // BAR_MS * BAR_MS:
             raise SafeError("waiting for current closed 15-minute risk context")
         semaphore = asyncio.Semaphore(5)
 

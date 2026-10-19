@@ -347,3 +347,28 @@ async def test_eight_minute_permission_is_rechecked_immediately_before_live_subm
         assert not any(method == "POST" and path.endswith("/order") for method, path in sim.calls)
     finally:
         await adapter.close()
+
+
+async def test_late_start_waits_for_next_eight_minute_bar_without_using_newer_context(settings):
+    service = SimpleService(eight_settings(settings))
+    next_boundary = BOUNDARY + INTERVAL
+    service.context_rows = {
+        symbol: slow_context(next_boundary) for symbol in ["BTCUSDT", "SOLUSDT"]
+    }
+    service.store.put("simple_pool", ["SOLUSDT"])
+    context_at = service.context_rows["BTCUSDT"]["timestamp_ms"]
+    assert BOUNDARY < context_at < next_boundary
+    service.now_ms = lambda: context_at + 1000
+    service.exchange.request = AsyncMock(return_value=source(next_boundary))
+    try:
+        await service.refresh_minutes(BOUNDARY)
+        service.exchange.request.assert_not_awaited()
+        assert service.rows == {} and service.selected == []
+        assert service.store.get("simple_selected", []) == []
+        service.now_ms = lambda: next_boundary + 1000
+        await service.refresh_minutes(next_boundary)
+        assert service.rows["SOLUSDT"]["timestamp_ms"] == next_boundary
+        assert service.rows["SOLUSDT"]["entry_timeframe"] == "8m"
+    finally:
+        await service.exchange.close()
+        service.store.engine.dispose()
