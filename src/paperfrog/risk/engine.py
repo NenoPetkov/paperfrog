@@ -258,13 +258,22 @@ class RiskEngine:
             0 if pnl > 0 else self.store.get("consecutive_losses", 0, conn) + (1 if pnl < 0 else 0)
         )
         self.store.put("consecutive_losses", losses, conn)
+        if pnl > 0:
+            self.store.put("loss_cooldown_step", 0, conn)
         if losses >= 3 and not self.store.get("risk_lock", None, conn):
+            # Expiry preserves the losing streak. Repeated losses therefore need
+            # longer recovery pauses, rather than another immediate trading cycle.
+            # Persist the step atomically with the exit and never shorten an active lock.
+            step = min(10, max(0, int(self.store.get("loss_cooldown_step", 0, conn))))
+            minutes = min(720, self.s.soft_loss_cooldown_minutes * 2**step)
+            self.store.put("loss_cooldown_step", min(10, step + 1), conn)
             self.store.put(
                 "risk_lock",
                 {
                     "state": State.SOFT_RISK_LOCK,
-                    "until": now.timestamp() + self.s.soft_loss_cooldown_minutes * 60,
+                    "until": now.timestamp() + minutes * 60,
                     "reason": "three_losses",
+                    "cooldown_minutes": minutes,
                 },
                 conn,
             )
@@ -334,6 +343,9 @@ class RiskEngine:
                         "previous_consecutive_losses": self.store.get(
                             "consecutive_losses", 0, conn
                         ),
+                        "previous_loss_cooldown_step": self.store.get(
+                            "loss_cooldown_step", 0, conn
+                        ),
                         "previous_cooldowns": cooldowns,
                         "equity": equity,
                         "resume_market_checks_overridden": override_resume_market_checks,
@@ -344,6 +356,7 @@ class RiskEngine:
                 self.store.put("profit_entry_lock", False, conn)
                 self.store.put("risk_multiplier", 1.0, conn)
                 self.store.put("consecutive_losses", 0, conn)
+                self.store.put("loss_cooldown_step", 0, conn)
                 for key in cooldowns:
                     self.store.put(key, 0, conn)
             else:

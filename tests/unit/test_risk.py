@@ -28,7 +28,9 @@ def test_loss_cooldown_cannot_be_disabled_or_invalid(minutes):
         Settings(_env_file=None, soft_loss_cooldown_minutes=minutes)
 
 
-def test_five_minute_loss_lock_expires_but_preserves_loss_history(settings, store, health, now):
+def test_loss_lock_escalates_after_expiry_without_erasing_loss_history(
+    settings, store, health, now
+):
     s = Settings(_env_file=None, **{**settings.public(), "soft_loss_cooldown_minutes": 5})
     risk = RiskEngine(s, store)
     for i in range(3):
@@ -43,7 +45,7 @@ def test_five_minute_loss_lock_expires_but_preserves_loss_history(settings, stor
     later = now + timedelta(minutes=6)
     risk.reserve(proposal("fourth", "OTHERUSDT"), health, later)
     risk.closed("fourth", -1, later)
-    assert store.get("risk_lock")["until"] == later.timestamp() + 300
+    assert store.get("risk_lock")["until"] == later.timestamp() + 600
     assert store.get("consecutive_losses") == 4
 
 

@@ -1,0 +1,4 @@
+# Conservative recovery preset: the pause doubles if the losing spell continues,
+# up to 12 hours. Existing locks keep their expiry and positions keep their exits.
+soft_loss_cooldown_minutes: 30
+max_concurrent_strategy_trades: 2

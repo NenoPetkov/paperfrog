@@ -103,9 +103,23 @@ accepts 1–24. Stops, trend reversal and risk exits can close positions earlier
 The default sizing mode and default limits remain unchanged. No existing
 live environment configuration or authorization is updated by this preset.
 
-`soft_loss_cooldown_minutes` controls future consecutive-loss locks. The default
-is 720 minutes; both `five-minute-cooldown.yaml` and the combined preset select five minutes. Existing lock
-expiry timestamps and loss history are preserved until an explicit `/resume` reset.
+`soft_loss_cooldown_minutes` sets the starting pause after three consecutive
+losses. The default is 720 minutes; `five-minute-cooldown.yaml` and the combined
+preset select five minutes. Each further loss-triggered pause during the same
+losing spell doubles that starting duration, up to 720 minutes. The escalation
+step survives automatic recovery and restarts. A profitable close or explicit
+operator risk reset returns future pauses to the starting duration. Existing
+locks retain their recorded expiry.
+
+`config/loss-protection.yaml` provides a recovery preset with a **30-minute**
+starting pause and **two concurrent positions**. Successive loss-triggered pauses
+are 30/60/120/240/480/720 minutes until a profitable close or operator reset.
+For an existing server using `.env`, select the same values with
+`SOFT_LOSS_COOLDOWN_MINUTES=30` and `MAX_CONCURRENT_STRATEGY_TRADES=2` during the
+normal stopped-service configuration/authorization workflow. Existing positions
+keep their normal exits; the lower cap prevents adding positions while at or
+above the limit. This reduces repeated exposure during a losing spell and can
+miss subsequent winners; it does not prove improved returns.
 
 No build is required. A running Python process keeps its loaded code and settings.
 `simple status` reports `configured_settings` and `loaded_settings` separately;
@@ -418,7 +432,7 @@ positions restores protection and stays paused until explicit `/resume`.
 
 `/resume` (also `/start_trading`) explicitly resets financial locks, daily and weekly
 equity baselines, the high-water mark, profit protection, consecutive-loss counts,
-symbol cooldowns and manual pauses using fresh current equity. Previous baselines,
+the cooldown escalation step, symbol cooldowns and manual pauses using fresh current equity. Previous baselines,
 locks and counters are retained in an audit record; trade and order history remains
 intact. This permits further losses after a reset. Automatic recovery does not reset
 these baselines or override an unexpired lock. Reconciliation, protective stops,
