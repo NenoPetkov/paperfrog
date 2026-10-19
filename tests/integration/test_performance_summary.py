@@ -245,6 +245,8 @@ async def test_poll_sends_every_part_before_advancing_offset(settings, ledger):
     calls = []
 
     async def call(method, payload):
+        if method == "setMyCommands":
+            return True
         if method == "getUpdates":
             if calls:
                 raise asyncio.CancelledError()

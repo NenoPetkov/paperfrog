@@ -155,7 +155,7 @@ class LiveBroker:
                 ):
                     raise SafeError("adaptive AI order permission missing or expired")
             require_btc_order(self.s, self.store, order, self.now_ms())
-            if self.s.simple_entry_timeframe in {"1m", "5m"}:
+            if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
                 quote = await self.refresh_quote(order.symbol)
                 require_minute_order(self.s, self.store, order, self.now_ms(), quote)
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:

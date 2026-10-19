@@ -26,7 +26,7 @@ from .adaptive import Advisor, enrich, request_limit
 from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
 from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_reference, pair_features
-from .data import candles, funding, quote_snapshot, scan
+from .data import candles, funding, normalize, quote_snapshot, scan
 from .engine import Engine
 from .live_broker import LiveBroker
 from .minute import HISTORY_BARS
@@ -51,6 +51,7 @@ class SimpleService:
         self.exchange = BinanceAdapter(s)
         self.engine: Engine | None = None
         self.rows: dict[str, dict[str, Any]] = {}
+        self.held_rows: dict[str, dict[str, Any]] = {}
         self.context_rows: dict[str, dict[str, Any]] = {}
         self.minute_frames: dict[str, Any] = {}
         self.selected: list[str] = []
@@ -159,7 +160,7 @@ class SimpleService:
                 "risk_context_timeframe": "15m",
                 "loaded_settings": self.s.simple_parameters(),
                 "breakout_minutes": 5 * self.s.simple_entry_bar_ms // MINUTE_MS
-                if self.s.simple_entry_timeframe in {"1m", "5m"}
+                if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
                 else self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
@@ -240,6 +241,7 @@ class SimpleService:
                             if self.advisor is not None or self.s.simple_entry_timeframe in {
                                 "1m",
                                 "5m",
+                                "8m",
                             }:
                                 frame = await asyncio.to_thread(enrich, frame)
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
@@ -336,6 +338,112 @@ class SimpleService:
                 self.store.audit("simple_scan_degraded", {"reason": type(exc).__name__})
                 await asyncio.sleep(10)
 
+    async def entry_frame(
+        self, symbol: str, timeframe: str, boundary: int, context: dict[str, Any]
+    ) -> Any:
+        interval_ms = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS}[timeframe]
+        async with asyncio.timeout(12):
+            raw = await self.exchange.request(
+                "GET",
+                "/fapi/v1/klines",
+                {
+                    "symbol": symbol,
+                    "interval": "1m" if timeframe == "8m" else timeframe,
+                    "limit": HISTORY_BARS * 8 if timeframe == "8m" else HISTORY_BARS,
+                    "startTime": boundary - HISTORY_BARS * interval_ms,
+                    "endTime": boundary - 1,
+                },
+            )
+        data = await asyncio.to_thread(minute_frame, raw, context, boundary, timeframe)
+        columns = [
+            "timestamp_ms",
+            "open_ms",
+            "open",
+            "high",
+            "low",
+            "close",
+            "quote_volume",
+            "taker_buy_quote",
+        ]
+        if timeframe == "8m":
+            # Archive the exact minute evidence, appending only newly available rows.
+            source = normalize(raw, boundary, MINUTE_MS)
+            key = "simple_8m_source_saved:" + symbol
+            source = source[source.timestamp_ms > self.store.get(key, 0)]
+            await asyncio.to_thread(
+                self.lake.append, "perp_1m", symbol, source, "binance_simple_closed_minute_klines"
+            )
+            self.store.put(key, boundary)
+        archived = data[columns].copy()
+        archived.attrs = {}
+        await asyncio.to_thread(
+            self.lake.append,
+            "perp_" + timeframe,
+            symbol,
+            archived,
+            "binance_simple_aggregated_1m_klines"
+            if timeframe == "8m"
+            else "binance_simple_closed_minute_klines",
+        )
+        return data
+
+    async def refresh_held_minutes(self) -> None:
+        """Keep existing positions on their recorded candle timeframe after a switch."""
+        positions = self.engine.positions() if self.engine else {}
+        held = {
+            symbol: trade
+            for symbol, trade in positions.items()
+            if trade.get("entry_timeframe") in {"1m", "5m", "8m"}
+            and trade["entry_timeframe"] != self.s.simple_entry_timeframe
+        }
+        self.held_rows = {symbol: row for symbol, row in self.held_rows.items() if symbol in held}
+
+        async def one(symbol: str, trade: dict[str, Any]) -> None:
+            timeframe = trade["entry_timeframe"]
+            interval = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS}[timeframe]
+            boundary = self.now_ms() // interval * interval
+            if self.held_rows.get(symbol, {}).get("timestamp_ms") == boundary:
+                return
+            context = self.context_rows.get(symbol)
+            if context is None or not 0 <= boundary - int(context.get("timestamp_ms", 0)) < BAR_MS:
+                return
+            try:
+                data = await self.entry_frame(symbol, timeframe, boundary, context)
+                if not 0 <= self.now_ms() - boundary < interval:
+                    raise SafeError("original-timeframe monitoring scan expired")
+                self.held_rows[symbol] = data.iloc[-1].to_dict()
+            except (
+                SafeError,
+                ValueError,
+                OSError,
+                KeyError,
+                TypeError,
+                IndexError,
+                TimeoutError,
+            ) as exc:
+                self.store.audit(
+                    "simple_held_data_degraded",
+                    {"symbol": symbol, "error_type": type(exc).__name__},
+                )
+
+        await asyncio.gather(*(one(symbol, trade) for symbol, trade in held.items()))
+
+    async def held_research(self) -> None:
+        while not self.stop.is_set():
+            try:
+                await self.refresh_held_minutes()
+            except (
+                SafeError,
+                ValueError,
+                OSError,
+                KeyError,
+                TypeError,
+                IndexError,
+                TimeoutError,
+            ) as exc:
+                self.store.audit("simple_held_data_degraded", {"error_type": type(exc).__name__})
+            await asyncio.sleep(1)
+
     async def refresh_minutes(self, boundary: int) -> None:
         """Rank the liquid pool on each configured entry-candle boundary."""
         interval_ms = self.s.simple_entry_bar_ms
@@ -360,38 +468,8 @@ class SimpleService:
                 return symbol, None
             async with semaphore:
                 try:
-                    async with asyncio.timeout(12):
-                        raw = await self.exchange.request(
-                            "GET",
-                            "/fapi/v1/klines",
-                            {
-                                "symbol": symbol,
-                                "interval": self.s.simple_entry_timeframe,
-                                "limit": HISTORY_BARS,
-                                "startTime": boundary - HISTORY_BARS * interval_ms,
-                                "endTime": boundary - 1,
-                            },
-                        )
-                    data = await asyncio.to_thread(
-                        minute_frame, raw, context, boundary, self.s.simple_entry_timeframe
-                    )
-                    await asyncio.to_thread(
-                        self.lake.append,
-                        "perp_" + self.s.simple_entry_timeframe,
-                        symbol,
-                        data[
-                            [
-                                "timestamp_ms",
-                                "open_ms",
-                                "open",
-                                "high",
-                                "low",
-                                "close",
-                                "quote_volume",
-                                "taker_buy_quote",
-                            ]
-                        ],
-                        "binance_simple_closed_minute_klines",
+                    data = await self.entry_frame(
+                        symbol, self.s.simple_entry_timeframe, boundary, context
                     )
                     return symbol, data
                 except (SafeError, ValueError, TypeError, KeyError, IndexError, TimeoutError):
@@ -583,10 +661,19 @@ class SimpleService:
                             self.store.put("local_flatten_request", None)
                             self.store.audit("simple_flatten_verified", {"operation": operation})
                     if engine.positions() or self.selected:
-                        observed_scan = self.scan_complete or bool(self.rows)
-                        awaiting_initial_scan = (
-                            not observed_scan and time.monotonic() < self.initial_scan_deadline
+                        observed_scan = (
+                            self.scan_complete or bool(self.rows) or bool(self.held_rows)
                         )
+                        pending_original = any(
+                            trade.get("entry_timeframe") in {"1m", "5m", "8m"}
+                            and trade["entry_timeframe"] != self.s.simple_entry_timeframe
+                            and self.held_rows.get(symbol, {}).get("entry_timeframe")
+                            != trade["entry_timeframe"]
+                            for symbol, trade in engine.positions().items()
+                        )
+                        awaiting_initial_scan = (
+                            not observed_scan or pending_original
+                        ) and time.monotonic() < self.initial_scan_deadline
                         await engine.monitor(
                             self.now_ms(),
                             {
@@ -594,6 +681,12 @@ class SimpleService:
                                 **{
                                     symbol: {**row, "risk_context": self.context_rows.get(symbol)}
                                     for symbol, row in self.rows.items()
+                                },
+                                **{
+                                    symbol: row
+                                    for symbol, row in self.held_rows.items()
+                                    if engine.positions().get(symbol, {}).get("entry_timeframe")
+                                    == row.get("entry_timeframe")
                                 },
                             },
                             self.crisis if observed_scan else False,
@@ -773,7 +866,7 @@ class SimpleService:
                     tasks.append(
                         asyncio.create_task(self.bitcoin_reference(), name="BTC minute reference")
                     )
-                if self.s.simple_entry_timeframe in {"1m", "5m"}:
+                if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
                     tasks.append(
                         asyncio.create_task(self.minute_research(), name="short-interval entries")
                     )
@@ -781,6 +874,16 @@ class SimpleService:
                         tasks.append(
                             asyncio.create_task(self.minute_ai_reviews(), name="AI entry policy")
                         )
+                if any(
+                    trade.get("entry_timeframe") in {"1m", "5m", "8m"}
+                    and trade["entry_timeframe"] != self.s.simple_entry_timeframe
+                    for trade in self.engine.positions().values()
+                ):
+                    tasks.append(
+                        asyncio.create_task(
+                            self.held_research(), name="original-timeframe monitoring"
+                        )
+                    )
                 if self.telegram:
                     tasks.append(
                         asyncio.create_task(self.telegram.poll(), name="Telegram commands")

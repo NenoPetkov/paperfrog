@@ -92,8 +92,8 @@ def token_usage(response: Any) -> dict[str, int]:
 
 
 def request_limit(s: Settings) -> int:
-    """One attempt per configured boundary: 96/day or explicitly selected 1440/day."""
-    return MAX_REQUESTS_PER_UTC_DAY * (15 // s.simple_ai_review_minutes)
+    """One attempt per configured boundary, including 180/day for eight minutes."""
+    return 24 * 60 // s.simple_ai_review_minutes
 
 
 class Condition(BaseModel):
@@ -270,8 +270,13 @@ def review_prompt(s: Settings) -> str:
         f"and at most {request_limit(s)} attempts per UTC day. Entry permission expires "
         f"at the next {s.simple_ai_review_minutes}-minute boundary.\n"
     )
-    if s.simple_entry_timeframe in {"1m", "5m"}:
+    if s.simple_entry_timeframe in {"1m", "5m", "8m"}:
         minutes = s.simple_entry_bar_ms // 60_000
+        hour_source = (
+            "exact minute closes 60 minutes apart"
+            if minutes == 8
+            else f"{60 // minutes} entry candles"
+        )
         prompt += f"""
 Entry timing and watchlist ranking use CLOSED {s.simple_entry_timeframe} candles,
 refreshed every {minutes} minute(s).
@@ -280,7 +285,7 @@ only the supplied sample. expected_return_15m retains a 15-minute diagnostic for
 independent of review cadence and entry-permission expiry. Forecast the close in 15 MINUTES.
 The supplied recent_bars, EMA 5/20 trend_atr, flow, RSI, volume_ratio (past {60 * minutes} minutes),
 {5 * minutes}-minute breakout distances and {24 * minutes}-minute range_position describe
-{s.simple_entry_timeframe} data. return_1h uses {60 // minutes} entry candles.
+{s.simple_entry_timeframe} data. return_1h uses {hour_source}.
 return_4h/24h and atr/atr_fraction for stop sizing retain closed 15-minute context;
 do not interpret atr_fraction as entry-candle volatility.
 An independent gate requires aligned {minutes}/{3 * minutes}/{5 * minutes}-minute moves,
@@ -289,6 +294,8 @@ You cannot allow an entry against that slope or a fresh rebound.
 A POSITIVE breakout_down_atr means price CLOSED BELOW the previous low; <=0 does not require
 an actual downward breakout. A POSITIVE breakout_up_atr means price closed above the prior high.
 """
+    if s.simple_entry_timeframe == "8m":
+        prompt += "\nEight-minute candles aggregate eight completed consecutive one-minute candles, aligned to UTC midnight.\n"
     if s.simple_entry_profile == "active":
         return (
             prompt
@@ -350,7 +357,7 @@ class Advisor:
             if not re.fullmatch(r"[A-Z0-9]{2,24}USDT", symbol):
                 raise SafeError("adaptive AI symbol invalid")
             x = frames[symbol]
-            minimum_rows = 61 if self.s.simple_entry_timeframe in {"1m", "5m"} else 192
+            minimum_rows = 61 if self.s.simple_entry_timeframe in {"1m", "5m", "8m"} else 192
             if len(x) < minimum_rows or int(x.iloc[-1].timestamp_ms) != asof_ms:
                 raise SafeError("adaptive AI needs complete closed history")
             features = {name: float(x.iloc[-1][name]) for name in FEATURES}
@@ -364,7 +371,7 @@ class Advisor:
                     "symbol": symbol,
                     "features": features,
                     "history_summary"
-                    if self.s.simple_entry_timeframe in {"1m", "5m"}
+                    if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
                     else "summary_3d": {
                         "duration_minutes": int(
                             (x.iloc[-1].timestamp_ms - x.iloc[0].timestamp_ms) / 60000
@@ -397,9 +404,14 @@ class Advisor:
                 if frame is None:
                     continue
                 at_target = frame[frame.timestamp_ms == target]
-                if at_target.empty:
+                target_close = (
+                    frame.attrs.get("minute_closes", {}).get(target)
+                    if self.s.simple_entry_timeframe == "8m"
+                    else (float(at_target.iloc[-1].close) if not at_target.empty else None)
+                )
+                if target_close is None or not math.isfinite(float(target_close)):
                     continue
-                actual = float(at_target.iloc[-1].close) / record["reference_closes"][symbol] - 1
+                actual = float(target_close) / record["reference_closes"][symbol] - 1
                 expected = prediction["expected_return_15m"]
                 results.append(
                     {

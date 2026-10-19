@@ -1,4 +1,4 @@
-"""Closed one- and five-minute entry timing; 15-minute risk and BTC context stay independent."""
+"""Closed one-, five- and eight-minute entry timing; 15-minute risk and BTC context stay independent."""
 
 from __future__ import annotations
 
@@ -19,25 +19,19 @@ MINUTE_MS = 60_000
 HISTORY_BARS = 120
 
 
-def frame(
-    raw: list[list[Any]], context: dict[str, Any], boundary: int, timeframe: str = "1m"
-) -> pd.DataFrame:
-    """Use 120 completed consecutive entry candles and already closed slow context."""
-    if timeframe not in {"1m", "5m"}:
-        raise SafeError("unsupported short entry timeframe")
-    minutes = 1 if timeframe == "1m" else 5
-    interval_ms = minutes * MINUTE_MS
-    x = normalize(raw, boundary, interval_ms)
+def validate_history(x: pd.DataFrame, boundary: int, interval_ms: int, bars: int) -> None:
     if (
         boundary % interval_ms
-        or len(x) != HISTORY_BARS
-        or int(x.iloc[0].timestamp_ms) != boundary - (HISTORY_BARS - 1) * interval_ms
+        or len(x) != bars
+        or int(x.iloc[0].timestamp_ms) != boundary - (bars - 1) * interval_ms
         or int(x.iloc[-1].timestamp_ms) != boundary
         or x.timestamp_ms.duplicated().any()
         or (x.timestamp_ms.diff().dropna() != interval_ms).any()
-        or not 0 <= boundary - int(context.get("timestamp_ms", 0)) < BAR_MS
     ):
-        raise SafeError("short-interval candles or closed risk context incomplete")
+        raise SafeError("short-interval candles incomplete or nonconsecutive")
+
+
+def validate_ohlc(x: pd.DataFrame) -> None:
     values = x[["open", "high", "low", "close", "quote_volume", "taker_buy_quote"]].to_numpy(
         dtype=float
     )
@@ -50,6 +44,44 @@ def frame(
         or (x.taker_buy_quote > x.quote_volume).any()
     ):
         raise SafeError("invalid short-interval OHLC or flow")
+
+
+def frame(
+    raw: list[list[Any]], context: dict[str, Any], boundary: int, timeframe: str = "1m"
+) -> pd.DataFrame:
+    """Use 120 completed consecutive entry candles and already closed slow context."""
+    if timeframe not in {"1m", "5m", "8m"}:
+        raise SafeError("unsupported short entry timeframe")
+    minutes = {"1m": 1, "5m": 5, "8m": 8}[timeframe]
+    interval_ms = minutes * MINUTE_MS
+    minute_closes: dict[int, float] = {}
+    if timeframe == "8m":
+        source = normalize(raw, boundary, MINUTE_MS)
+        validate_history(source, boundary, MINUTE_MS, HISTORY_BARS * 8)
+        validate_ohlc(source)
+        minute_closes = dict(
+            zip(source.timestamp_ms.astype(int), source.close.astype(float), strict=True)
+        )
+        x = (
+            source.groupby(np.arange(len(source)) // 8)
+            .agg(
+                timestamp_ms=("timestamp_ms", "last"),
+                open_ms=("open_ms", "first"),
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                quote_volume=("quote_volume", "sum"),
+                taker_buy_quote=("taker_buy_quote", "sum"),
+            )
+            .reset_index(drop=True)
+        )
+    else:
+        x = normalize(raw, boundary, interval_ms)
+    validate_history(x, boundary, interval_ms, HISTORY_BARS)
+    if not 0 <= boundary - int(context.get("timestamp_ms", 0)) < BAR_MS:
+        raise SafeError("short-interval closed risk context incomplete")
+    validate_ohlc(x)
     # These values retain their actual 15-minute risk/longer-horizon meaning.
     for key in ("atr", "atr_fraction", "daily_volume", "return_4h", "return_24h"):
         value = float(context.get(key, math.nan))
@@ -74,7 +106,17 @@ def frame(
     x["prior_low"] = x.low.shift(1).rolling(5).min()
     for bars in (1, 3, 5):
         x[f"return_{bars * minutes}m"] = x.close.pct_change(bars)
-    x["return_1h"] = x.close.pct_change(60 // minutes)
+    if timeframe == "8m":
+        # Sixty minutes is 7.5 eight-minute bars. Use exact closed minute prices.
+        x["return_1h"] = [
+            close / minute_closes[int(ts) - 60 * MINUTE_MS] - 1
+            if int(ts) - 60 * MINUTE_MS in minute_closes
+            else math.nan
+            for ts, close in zip(x.timestamp_ms, x.close, strict=True)
+        ]
+        x.attrs["minute_closes"] = minute_closes
+    else:
+        x["return_1h"] = x.close.pct_change(60 // minutes)
     x["flow"] = 2 * x.taker_buy_quote / x.quote_volume.replace(0, np.nan) - 1
     x["volume_ratio"] = x.quote_volume / x.quote_volume.shift(1).rolling(60).mean().replace(
         0, np.nan
@@ -96,9 +138,9 @@ def frame(
 
 def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
     timeframe = row.get("entry_timeframe")
-    if timeframe not in {"1m", "5m"}:
+    if timeframe not in {"1m", "5m", "8m"}:
         return 0, "complete closed entry slope required"
-    minutes = 1 if timeframe == "1m" else 5
+    minutes = {"1m": 1, "5m": 5, "8m": 8}[timeframe]
     returns = tuple(f"return_{bars * minutes}m" for bars in (1, 3, 5))
     fields = (
         "close",
@@ -137,9 +179,9 @@ def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
 
 def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules) -> str | None:
     timeframe = row.get("entry_timeframe")
-    if timeframe not in {"1m", "5m"}:
+    if timeframe not in {"1m", "5m", "8m"}:
         return "unsupported entry timeframe"
-    interval_ms = MINUTE_MS if timeframe == "1m" else 5 * MINUTE_MS
+    interval_ms = {"1m": 1, "5m": 5, "8m": 8}[timeframe] * MINUTE_MS
     timestamp_ms = int(row.get("timestamp_ms", 0))
     if timestamp_ms % interval_ms or not 0 <= now_ms - timestamp_ms < interval_ms:
         return "short-interval entry candle missing, future dated or expired"
@@ -156,7 +198,7 @@ def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules)
 
 
 def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Quote) -> None:
-    if order.reduce_only or s.simple_entry_timeframe not in {"1m", "5m"}:
+    if order.reduce_only or s.simple_entry_timeframe not in {"1m", "5m", "8m"}:
         return
     from .strategy import execution_rules
 

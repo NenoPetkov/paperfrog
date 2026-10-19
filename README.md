@@ -1,5 +1,43 @@
 # paperfrog
 
+## Eight-minute candles and AI reviews
+
+Set `SIMPLE_ENTRY_TIMEFRAME=8m` and `SIMPLE_AI_REVIEW_MINUTES=8` together.
+Binance does not offer native eight-minute candles, so the service fetches 960
+completed one-minute candles and combines each consecutive group of eight into
+120 closed eight-minute bars. Open/close use the first/last source values,
+high/low use their extrema, and quote volume and taker-buy flow are summed.
+Every source minute is checked for gaps, duplicates, invalid prices and flow
+before aggregation. Incomplete or unclosed data cannot authorize an entry.
+
+Boundaries are fixed multiples of eight minutes from UTC midnight, continuing
+across hour boundaries (00:56, 01:04, 01:12, ...). EMA 5/20, RSI, volume and
+range features use these bars; the directional gate checks aligned 8/24/40-minute
+returns. `return_1h` uses minute closes exactly 60 minutes apart, rather than
+rounding to seven eight-minute bars. The 15-minute forecast is scored against its
+exact minute close even when that timestamp is inside an eight-minute bar.
+The 15-minute ATR/risk context and independent BTC minute checks continue.
+
+The AI review loop uses the same eight-minute boundaries, with at most **180**
+attempts per UTC day and no duplicate attempt after restart. Existing risk-lock,
+manual-pause and full-position-capacity checks can skip a call. A decision expires
+at the next eight-minute boundary. An older/unfinished risk scan blocks new
+permission until current closed context is available. Actual one-minute evidence
+is archived incrementally alongside aggregated `perp_8m` candles.
+
+Positions already open retain their recorded entry timeframe and original exits.
+A separate monitor refreshes their original candles during the transition, with
+the existing bounded startup grace and missing-data exits. The source/configuration
+change requires a stopped-service update and renewed local LIVE authorization.
+The ordinary fifteen-minute replay refuses this mode without genuine minute
+history; changing cadence does not establish improved performance.
+
+The Telegram Menu contains all supported commands, with descriptions shared by
+the authenticated dispatcher. The list is registered on startup. A menu-registration
+failure is recorded and command polling continues. `/confirm_flatten` from the
+menu explains how to provide the one-time code returned by `/flatten`; clicking
+it alone cannot close positions. Existing user/chat allowlists still apply.
+
 ## One- and five-minute slope entries
 
 Set `SIMPLE_ENTRY_TIMEFRAME=5m` and `SIMPLE_AI_REVIEW_MINUTES=5` for five-minute

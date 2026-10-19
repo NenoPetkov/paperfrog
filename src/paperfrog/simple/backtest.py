@@ -88,7 +88,7 @@ async def replay(
     memory_ledger: bool = False,
 ) -> dict[str, Any]:
     require_paper(s)
-    if s.simple_entry_timeframe in {"1m", "5m"}:
+    if s.simple_entry_timeframe in {"1m", "5m", "8m"}:
         raise SafeError(
             "short-interval entry replay needs recorded minute signals at the configured interval and 15-minute risk context"
         )

@@ -13,26 +13,7 @@ from paperfrog.domain.types import SafeError, State
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
-COMMANDS = {
-    "/help",
-    "/status",
-    "/start_trading",
-    "/resume",
-    "/refuse_force",
-    "/stop",
-    "/pause",
-    "/positions",
-    "/orders",
-    "/risk",
-    "/last_signal",
-    "/lock",
-    "/flatten",
-    "/confirm_flatten",
-    "/daily",
-    "/summary",
-    "/health",
-    "/version",
-}
+from .commands import COMMANDS, menu_commands
 
 
 class Controls:
@@ -88,6 +69,11 @@ class Controls:
         self.rate[key].append(now)
         words = message.get("text", "").split()
         command = words[0] if words else ""
+        if command == "/confirm_flatten" and len(words) == 1:
+            return (
+                cid,
+                "Use /flatten first, then send /confirm_flatten CODE using its one-time confirmation code.",
+            )
         if command not in COMMANDS or len(words) != (2 if command == "/confirm_flatten" else 1):
             return cid, "Unknown command. Use /help."
         event_key = "telegram-update:" + str(update["update_id"])
@@ -181,7 +167,14 @@ class Telegram:
         except (httpx.HTTPError, ValueError):
             raise SafeError("Telegram transport or response invalid") from None
 
+    async def register_commands(self) -> None:
+        await self.call("setMyCommands", {"commands": menu_commands()})
+
     async def poll(self) -> None:
+        try:
+            await self.register_commands()
+        except SafeError:
+            self.store.audit("telegram_menu_degraded", {"reason": "command menu unavailable"})
         while True:
             try:
                 updates = await self.call(
