@@ -18,6 +18,9 @@ def settings(tmp_path):
         # Existing mechanics fixtures isolate the pre-reference strategy. BTC
         # integration tests explicitly enable and exercise the complete new gate.
         simple_btc_reference_enabled=False,
+        # Mechanics tests isolate the old entry rules; dedicated market-trend
+        # tests enable and exercise the complete day/breadth/dispatch veto.
+        simple_market_trend_enabled=False,
         state_dir=tmp_path / "state",
         data_dir=tmp_path / "data",
         artifacts_dir=tmp_path / "artifacts",

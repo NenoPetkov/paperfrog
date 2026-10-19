@@ -26,6 +26,7 @@ from .bitcoin import BTC
 from .bitcoin import entry_gate as btc_entry_gate
 from .journal import execution_cost, indicators, observe, reference
 from .live_broker import LiveBroker
+from .market_trend import entry_gate as market_entry_gate
 from .minute import MINUTE_MS
 from .minute import direction as minute_direction
 from .minute import veto as minute_veto
@@ -527,6 +528,10 @@ class Engine:
             btc_reason = btc_entry_gate(self.s, self.store, row, direction, now_ms)
             if btc_reason:
                 return 0, btc_reason
+        if direction:
+            market_reason = market_entry_gate(self.s, self.store, row, direction, now_ms)
+            if market_reason:
+                return 0, market_reason
         return direction, reason
 
     async def enter(
@@ -776,6 +781,9 @@ class Engine:
                 "ai_enabled": self.s.simple_ai_enabled,
                 "reason": reason,
                 "indicators": indicators(row),
+                "market_trend": self.store.get("simple_market_trend")
+                if self.s.simple_market_trend_enabled
+                else None,
                 "quote_reference": reference(q),
                 "fee_basis": "simulated" if self.s.trading_mode == "paper" else "estimated",
                 "fee_rate": self.s.fee_rate,
@@ -784,6 +792,20 @@ class Engine:
                 else "exchange_income",
             },
         }
+        if self.s.simple_market_trend_enabled:
+            current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
+            market_reason = market_entry_gate(self.s, self.store, row, direction, current_ms)
+            if market_reason:
+                raise SafeError(market_reason)
+            self.store.put(
+                "simple_market_order:" + order.client_id,
+                {
+                    "config_hash": self.s.config_hash,
+                    "row": {key: value for key, value in row.items() if key.startswith("day_")}
+                    | {"timestamp_ms": int(row["timestamp_ms"])},
+                    "order": order.model_dump(mode="json"),
+                },
+            )
         if self.s.simple_btc_reference_enabled:
             current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
             btc_reason = btc_entry_gate(self.s, self.store, row, direction, current_ms)

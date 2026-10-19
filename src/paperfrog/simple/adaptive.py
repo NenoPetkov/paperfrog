@@ -20,6 +20,7 @@ from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .market_trend import DAY_FIELDS
 from .strategy import BAR_MS, Rules, execution_rules
 
 Feature = Literal[
@@ -296,13 +297,27 @@ an actual downward breakout. A POSITIVE breakout_up_atr means price closed above
 """
     if s.simple_entry_timeframe == "8m":
         prompt += "\nEight-minute candles aggregate eight completed consecutive one-minute candles, aligned to UTC midnight.\n"
+    if s.simple_market_trend_enabled:
+        prompt += """
+An immutable day/market gate vetoes every new entry independently of your rules.
+LONG requires the coin's 24h return, 24h regression slope, price versus its 24h
+mean, and 4h return ALL positive. SHORT requires all negative. A brief rebound
+inside a falling day does not qualify as a LONG; the symmetric rule applies to SHORT.
+market_trend.bull_index is the percent of the liquid scan pool up over 24h,
+calculated BEFORE directional selection; it is breadth, not a sentiment forecast.
+LONG requires BULL: an advancing majority, positive median 24h return and positive
+BTC and ETH 24h returns. SHORT requires the symmetric BEAR regime. MIXED or
+missing/stale context permits neither side. These gates cannot be overridden.
+Use each market's day_trend and the broad market_trend alongside recent bars.
+"""
     if s.simple_entry_profile == "active":
         return (
             prompt
             + """
 The operator selected the ACTIVE entry profile. Seek selective, conditional setups per coin.
 Assess every selected coin independently: agreement across all coins is not required.
-Mixed one/four/24-hour returns are context, not an automatic veto of a clear current setup.
+Respect all independent day and market vetoes. Short-term strength alone does not
+justify a LONG against a falling day or a bearish market, or the symmetric SHORT.
 Use the supplied entry_policy thresholds for the protected trend and volatility gates.
 When at least one coin has a plausible setup within those gates, prefer action=trade with
 specific conditions over a blanket pause. Conditions may wait for confirmation; permission
@@ -352,6 +367,14 @@ class Advisor:
     ) -> dict[str, Any]:
         if not selected or len(selected) > 10 or len(set(selected)) != len(selected):
             raise SafeError("adaptive AI needs a valid selected universe")
+        broad_market = self.store.get("simple_market_trend")
+        if self.s.simple_market_trend_enabled and (
+            not isinstance(broad_market, dict)
+            or broad_market.get("config_hash") != self.s.config_hash
+            or broad_market.get("timestamp_ms") != asof_ms // BAR_MS * BAR_MS
+            or broad_market.get("regime") not in {"BULL", "BEAR"}
+        ):
+            raise SafeError("adaptive AI needs current aligned broad-market context")
         markets = []
         for symbol in selected:
             if not re.fullmatch(r"[A-Z0-9]{2,24}USDT", symbol):
@@ -366,28 +389,36 @@ class Advisor:
             recent = x.tail(32)[
                 ["timestamp_ms", "open", "high", "low", "close", "quote_volume", "taker_buy_quote"]
             ]
-            markets.append(
-                {
-                    "symbol": symbol,
-                    "features": features,
-                    "history_summary"
-                    if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
-                    else "summary_3d": {
-                        "duration_minutes": int(
-                            (x.iloc[-1].timestamp_ms - x.iloc[0].timestamp_ms) / 60000
-                        ),
-                        "return": float(x.close.iloc[-1] / x.close.iloc[0] - 1),
-                        "high": float(x.high.max()),
-                        "low": float(x.low.min()),
-                        "quote_volume_24h": float(x.iloc[-1].daily_volume),
-                    },
-                    "recent_columns": list(recent.columns),
-                    "recent_bars": [
-                        [int(values[0]), *(float(f"{v:.8g}") for v in values[1:])]
-                        for values in recent.to_numpy()
-                    ],
-                }
-            )
+            market: dict[str, Any] = {
+                "symbol": symbol,
+                "features": features,
+                "history_summary"
+                if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
+                else "summary_3d": {
+                    "duration_minutes": int(
+                        (x.iloc[-1].timestamp_ms - x.iloc[0].timestamp_ms) / 60000
+                    ),
+                    "return": float(x.close.iloc[-1] / x.close.iloc[0] - 1),
+                    "high": float(x.high.max()),
+                    "low": float(x.low.min()),
+                    "quote_volume_24h": float(x.iloc[-1].daily_volume),
+                },
+                "recent_columns": list(recent.columns),
+                "recent_bars": [
+                    [int(values[0]), *(float(f"{v:.8g}") for v in values[1:])]
+                    for values in recent.to_numpy()
+                ],
+            }
+            if self.s.simple_market_trend_enabled:
+                day = {key: float(x.iloc[-1].get(key, math.nan)) for key in DAY_FIELDS}
+                context_at = int(x.iloc[-1].get("day_context_ms", 0))
+                if (
+                    not all(math.isfinite(value) for value in day.values())
+                    or not 0 <= asof_ms - context_at < BAR_MS
+                ):
+                    raise SafeError("adaptive AI needs complete closed-day trend context")
+                market["day_trend"] = {"timestamp_ms": context_at, **day}
+            markets.append(market)
         history = self.store.get("simple_ai_history", [])
         # Resolve forecasts ONLY at their specified next-candle boundary, never from
         # a later price after a restart or gap. This is analysis, not simulated PnL.
@@ -457,7 +488,13 @@ class Advisor:
                 "minimum_trend_atr": rules.minimum_trend_atr,
                 "minimum_atr_fraction": rules.min_atr_fraction,
                 "maximum_atr_fraction": rules.max_atr_fraction,
+                "day_market_trend_required": self.s.simple_market_trend_enabled,
             },
+            "market_trend": {
+                key: value for key, value in (broad_market or {}).items() if key != "config_hash"
+            }
+            if self.s.simple_market_trend_enabled
+            else None,
             "markets": markets,
             "prior_reviews": memory,
             "forecast_feedback": forecast_feedback(history, asof_ms),

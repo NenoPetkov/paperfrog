@@ -100,6 +100,8 @@ async def replay(
         raise SafeError(
             "BTC reference replay needs recorded minute context; legacy replay is not BTC-filter evidence"
         )
+    if s.simple_market_trend_enabled:
+        raise SafeError("day/market trend replay requires recorded broad-universe closed-day context")
     rules = execution_rules(s) if rules is None else rules
     if output.exists() or cost_multiplier < 1 or delay_bars < 1:
         raise SafeError("use a new immutable replay directory and conservative stresses")

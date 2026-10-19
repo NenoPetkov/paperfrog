@@ -29,6 +29,8 @@ from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_referen
 from .data import candles, funding, normalize, quote_snapshot, scan
 from .engine import Engine
 from .live_broker import LiveBroker
+from .market_trend import day_context, market_context
+from .market_trend import entry_gate as market_entry_gate
 from .minute import HISTORY_BARS
 from .minute import direction as minute_direction
 from .minute import frame as minute_frame
@@ -176,6 +178,11 @@ class SimpleService:
                 if self.s.simple_live_research_waiver
                 else "required",
                 "profitability": "unproven",
+                "market_trend": {
+                    "enabled": self.s.simple_market_trend_enabled,
+                    "context": self.store.get("simple_market_trend"),
+                    "policy": "24h return, regression, mean and 4h trend must align; market breadth, BTC and ETH must agree",
+                },
                 "daily_analysis": {
                     "directory": str(
                         self.s.reports_dir / ("simple-" + self.s.trading_mode) / "daily"
@@ -220,7 +227,7 @@ class SimpleService:
                 snapshot = await scan(self.exchange, self.s)
                 semaphore = asyncio.Semaphore(3)
                 held = list(self.engine.positions()) if self.engine else []
-                pool = list(dict.fromkeys([*snapshot["symbols"], *held, "BTCUSDT"]))
+                pool = list(dict.fromkeys([*snapshot["symbols"], *held, "BTCUSDT", "ETHUSDT"]))
 
                 async def one(
                     symbol: str, boundary: int = boundary, semaphore: asyncio.Semaphore = semaphore
@@ -245,6 +252,11 @@ class SimpleService:
                             }:
                                 frame = await asyncio.to_thread(enrich, frame)
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
+                            if self.s.simple_market_trend_enabled:
+                                row.update(await asyncio.to_thread(day_context, frame, boundary))
+                                for key, value in row.items():
+                                    if key.startswith("day_"):
+                                        frame.loc[frame.index[-1], key] = value
                             blocked = False
                             if symbol == "BTCUSDT":
                                 blocked = (
@@ -257,6 +269,14 @@ class SimpleService:
 
                 observations = await asyncio.gather(*(one(symbol) for symbol in pool))
                 rows = {symbol: row for symbol, row, _, _ in observations if row is not None}
+                market = None
+                if self.s.simple_market_trend_enabled:
+                    try:
+                        market = market_context(rows, snapshot["symbols"], boundary)
+                        market["config_hash"] = self.s.config_hash
+                    except SafeError:
+                        # Publish unavailability rather than retaining an old permission.
+                        market = None
                 reference: dict[str, Any] | None = None
                 pairs: dict[str, dict[str, Any]] = {}
                 if self.s.simple_btc_reference_enabled:
@@ -281,6 +301,12 @@ class SimpleService:
                         if symbol != BTC:
                             row.update(pairs.get(symbol, {"btc_pair_valid": False}))
                 async with self.mutex:
+                    if self.s.simple_market_trend_enabled:
+                        self.store.put("simple_market_trend", market)
+                        self.store.audit(
+                            "simple_market_trend",
+                            market or {"status": "unavailable", "asof_ms": boundary},
+                        )
                     if self.s.simple_btc_reference_enabled:
                         self.store.put(
                             "simple_btc_closed",
@@ -299,7 +325,21 @@ class SimpleService:
                         blocked for _, _, blocked, _ in observations
                     )
                     context_selected = choose(
-                        {symbol: rows[symbol] for symbol in snapshot["symbols"] if symbol in rows},
+                        {
+                            symbol: rows[symbol]
+                            for symbol in snapshot["symbols"]
+                            if symbol in rows
+                            and (
+                                not self.s.simple_market_trend_enabled
+                                or any(
+                                    market_entry_gate(
+                                        self.s, self.store, rows[symbol], side, self.now_ms()
+                                    )
+                                    is None
+                                    for side in (-1, 1)
+                                )
+                            )
+                        },
                         self.s,
                         self.rules,
                     )
@@ -486,9 +526,17 @@ class SimpleService:
             raise SafeError("entry-candle scan expired; new entries blocked")
         frames = {symbol: data for symbol, data in observations if data is not None}
         rows = {symbol: data.iloc[-1].to_dict() for symbol, data in frames.items()}
-        eligible = {
-            symbol: row for symbol, row in rows.items() if minute_direction(row, self.rules)[0]
-        }
+        eligible = {}
+        trend_blocks = {}
+        for symbol, row in rows.items():
+            side, _ = minute_direction(row, self.rules)
+            if not side:
+                continue
+            reason = market_entry_gate(self.s, self.store, row, side, self.now_ms())
+            if reason:
+                trend_blocks[symbol] = reason
+            else:
+                eligible[symbol] = row
         selected = choose(eligible, self.s, self.rules)
         async with self.mutex:
             self.rows, self.minute_frames, self.selected = rows, frames, selected
@@ -507,6 +555,10 @@ class SimpleService:
                     "selected": selected,
                     "selection": f"closed {self.s.simple_entry_timeframe} EMA 5/20, aligned 1/3/5-bar slope and flow",
                     "execution_mode": self.s.trading_mode,
+                    "market_trend": self.store.get("simple_market_trend")
+                    if self.s.simple_market_trend_enabled
+                    else None,
+                    "day_trend_blocks": trend_blocks,
                     "signals": {
                         symbol: {
                             key: rows[symbol][key]

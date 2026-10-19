@@ -1,5 +1,36 @@
 # paperfrog
 
+## Closed-day trend and market breadth
+
+`SIMPLE_MARKET_TREND_ENABLED=true` is the default for the simple strategy. Every
+new LONG must have positive 24-hour return, positive least-squares price slope
+over that day, a close above its 24-hour mean, and positive four-hour return.
+SHORT requires all four negative. These checks use 97 consecutive completed
+15-minute prices, ending at the risk-context boundary, for an exact 24-hour
+close-to-close window. The mean uses the 96 closes within that window. An
+eight-minute bounce cannot bypass a falling day. Missing, gapped, nonfinite,
+future or stale observations cannot authorize an entry.
+
+The market **bull index** is the equal-weight percentage of covered coins in the
+liquid scan pool with positive 24-hour returns, calculated before trend filtering
+or watchlist ranking. It requires at least 20 coins, at least 80% pool coverage,
+and separate BTC/ETH day context. **BULL** requires an index above 50, positive
+median day return, and positive BTC and ETH day returns. **BEAR** is symmetric;
+conflicting or exactly flat evidence is **MIXED**. LONG needs BULL and SHORT needs
+BEAR. This is a transparent breadth measure, not an external sentiment index or
+calibrated prediction. A MIXED market can legitimately produce no entries.
+
+The independent veto runs during candidate selection, signal evaluation and
+immediately before live submission, using current context and order-bound
+permissions. It applies with or without AI and cannot be overridden by AI rules
+or the neutral-allowed BTC policy. AI receives both coin day features and market
+context. Existing holdings retain their normal protective stops and exits;
+reduce-only closes never require this entry permission. `/risk`, `/health` and
+the local `/simple` diagnostics expose the index, coverage and regime. Selection
+audits record blocked coins and reasons; new trade journals retain the day and
+market observations used at entry. The ordinary replay refuses to fabricate
+broad-market history. Tests verify behavior, not improved profitability.
+
 ## Eight-minute candles and AI reviews
 
 Set `SIMPLE_ENTRY_TIMEFRAME=8m` and `SIMPLE_AI_REVIEW_MINUTES=8` together.

@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     simple_ai_output_limit: int = Field(4000, ge=512, le=8192)
     simple_btc_reference_enabled: bool = True
     simple_btc_direction_policy: Literal["strict", "neutral_allowed"] = "strict"
+    simple_market_trend_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_sizing_budget(self) -> Self:
@@ -180,6 +181,7 @@ class Settings(BaseSettings):
                     "simple_ai_output_limit",
                     "simple_btc_reference_enabled",
                     "simple_btc_direction_policy",
+                    "simple_market_trend_enabled",
                 },
             )
         )

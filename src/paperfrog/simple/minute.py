@@ -91,7 +91,7 @@ def frame(
             raise SafeError("short-interval risk context unavailable")
         x[key] = value
     for key, value in context.items():
-        if key.startswith("btc_"):
+        if key.startswith(("btc_", "day_")):
             x[key] = value
     previous = x.close.shift(1)
     tr = pd.concat(
