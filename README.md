@@ -15,7 +15,8 @@ The market **bull index** is the equal-weight percentage of covered coins in the
 liquid scan pool with positive 24-hour returns, calculated before trend filtering
 or watchlist ranking. It requires at least 20 coins, at least 80% pool coverage,
 and separate BTC/ETH day context. **BULL** requires an index above 50, positive
-median day return, and positive BTC and ETH day returns. **BEAR** is symmetric;
+median returns over both 24h and 4h, and positive BTC and ETH returns over both
+horizons. **BEAR** is symmetric;
 conflicting or exactly flat evidence is **MIXED**. LONG needs BULL and SHORT needs
 BEAR. This is a transparent breadth measure, not an external sentiment index or
 calibrated prediction. A MIXED market can legitimately produce no entries.

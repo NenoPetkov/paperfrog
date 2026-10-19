@@ -96,6 +96,18 @@ def test_breadth_uses_full_liquidity_pool_and_benchmarks_not_selected_gainers():
         market_context(rows, [POOL[0]], at)
 
 
+@pytest.mark.parametrize("side", [1, -1])
+@pytest.mark.parametrize("component", ["breadth", "btc", "eth"])
+def test_positive_day_with_falling_four_hour_market_is_mixed_in_both_directions(side, component):
+    at = BOUNDARY // BAR_MS * BAR_MS
+    rows = {symbol: day(BOUNDARY, side) for symbol in [*POOL, "BTCUSDT", "ETHUSDT"]}
+    assert market_context(rows, POOL, at)["regime"] == ("BULL" if side > 0 else "BEAR")
+    changed = POOL if component == "breadth" else [component.upper() + "USDT"]
+    for symbol in changed:
+        rows[symbol]["day_return_4h"] *= -1
+    assert market_context(rows, POOL, at)["regime"] == "MIXED"
+
+
 @pytest.mark.parametrize("damage", ["coverage", "btc", "eth", "stale", "nan"])
 def test_missing_market_evidence_cannot_reuse_previous_permission(damage):
     at = BOUNDARY // BAR_MS * BAR_MS

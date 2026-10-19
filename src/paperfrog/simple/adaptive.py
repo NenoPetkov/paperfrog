@@ -305,8 +305,9 @@ mean, and 4h return ALL positive. SHORT requires all negative. A brief rebound
 inside a falling day does not qualify as a LONG; the symmetric rule applies to SHORT.
 market_trend.bull_index is the percent of the liquid scan pool up over 24h,
 calculated BEFORE directional selection; it is breadth, not a sentiment forecast.
-LONG requires BULL: an advancing majority, positive median 24h return and positive
-BTC and ETH 24h returns. SHORT requires the symmetric BEAR regime. MIXED or
+LONG requires BULL: an advancing 24h majority, positive median returns over BOTH
+24h and 4h, and positive BTC and ETH returns over BOTH 24h and 4h.
+SHORT requires the symmetric BEAR regime. MIXED or
 missing/stale context permits neither side. These gates cannot be overridden.
 Use each market's day_trend and the broad market_trend alongside recent bars.
 """

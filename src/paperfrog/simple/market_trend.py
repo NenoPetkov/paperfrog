@@ -27,10 +27,18 @@ def finite(row: dict[str, Any], keys: tuple[str, ...]) -> bool:
         return False
 
 
-def regime(index: float, median: float, btc: float, eth: float) -> str:
-    if index > 50 and min(median, btc, eth) > 0:
+def regime(
+    index: float,
+    median: float,
+    btc: float,
+    eth: float,
+    median_4h: float,
+    btc_4h: float,
+    eth_4h: float,
+) -> str:
+    if index > 50 and min(median, btc, eth, median_4h, btc_4h, eth_4h) > 0:
         return "BULL"
-    if index < 50 and max(median, btc, eth) < 0:
+    if index < 50 and max(median, btc, eth, median_4h, btc_4h, eth_4h) < 0:
         return "BEAR"
     return "MIXED"
 
@@ -66,8 +74,8 @@ def market_context(
     """Equal-weight breadth over the liquidity pool BEFORE directional selection.
 
     Bull index = percent of covered pool coins up over 24h. BULL requires an
-    advancing majority, positive median return and positive BTC and ETH returns.
-    BEAR is symmetric. Conflicting evidence is MIXED and permits neither side.
+    advancing majority, positive median/BTC/ETH returns over BOTH 24h and 4h.
+    BEAR is symmetric. Conflicting horizons are MIXED and permit neither side.
     """
     members = list(dict.fromkeys(pool))
 
@@ -86,14 +94,18 @@ def market_context(
     bull_index = 100 * sum(value > 0 for value in returns) / len(returns)
     median = float(np.median(returns))
     btc, eth = (float(rows[symbol]["day_return_24h"]) for symbol in ("BTCUSDT", "ETHUSDT"))
+    median_4h = float(np.median([row["day_return_4h"] for row in usable]))
+    btc_4h, eth_4h = (float(rows[symbol]["day_return_4h"]) for symbol in ("BTCUSDT", "ETHUSDT"))
     return {
         "timestamp_ms": boundary,
-        "regime": regime(bull_index, median, btc, eth),
+        "regime": regime(bull_index, median, btc, eth, median_4h, btc_4h, eth_4h),
         "bull_index": bull_index,
         "median_return_24h": median,
-        "median_return_4h": float(np.median([row["day_return_4h"] for row in usable])),
+        "median_return_4h": median_4h,
         "btc_return_24h": btc,
         "eth_return_24h": eth,
+        "btc_return_4h": btc_4h,
+        "eth_return_4h": eth_4h,
         "covered_coins": len(usable),
         "pool_coins": len(members),
     }
@@ -136,6 +148,9 @@ def entry_gate(
         "median_return_24h",
         "btc_return_24h",
         "eth_return_24h",
+        "median_return_4h",
+        "btc_return_4h",
+        "eth_return_4h",
         "covered_coins",
         "pool_coins",
     )
@@ -145,11 +160,11 @@ def entry_gate(
         not 0 <= float(market["bull_index"]) <= 100
         or not MIN_MARKETS <= market["covered_coins"] <= market["pool_coins"]
         or market["covered_coins"] < MIN_COVERAGE * market["pool_coins"]
-        or market.get("regime") != regime(*(float(market[key]) for key in fields[:4]))
+        or market.get("regime") != regime(*(float(market[key]) for key in fields[:7]))
     ):
         return "broad market trend invalid; new entries blocked"
     if market.get("regime") != ("BULL" if side > 0 else "BEAR"):
-        return f"market {market.get('regime', 'UNKNOWN')}; {label} requires aligned market breadth, BTC and ETH"
+        return f"market {market.get('regime', 'UNKNOWN')}; {label} requires aligned breadth and BTC/ETH over 24h and 4h"
     return None
 
 
