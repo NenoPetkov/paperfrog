@@ -16,6 +16,7 @@ from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings
 from paperfrog.simple.adaptive import (
     MAX_REQUESTS_PER_UTC_DAY,
+    SCHEMA_VERSION,
     AdaptivePlan,
     Advisor,
     Condition,
@@ -56,7 +57,12 @@ def plan(asof_ms=200 * BAR_MS, action="trade", **changes):
 def permit(s, store, p):
     store.put(
         "simple_ai_active",
-        {"config_hash": s.config_hash, "digest": p.digest, "plan": p.model_dump(mode="json")},
+        {
+            "schema_version": SCHEMA_VERSION,
+            "config_hash": s.config_hash,
+            "digest": p.digest,
+            "plan": p.model_dump(mode="json"),
+        },
     )
 
 
@@ -64,8 +70,8 @@ def observation(now_ms=200 * BAR_MS):
     return {
         **row(now_ms),
         "return_1h": 0.01,
-        "return_4h": 0.02,
-        "return_24h": 0.03,
+        "return_2h": 0.02,
+        "return_12h": 0.03,
         "rsi_14": 65,
         "volume_ratio": 1.2,
         "breakout_up_atr": 1,

@@ -83,7 +83,7 @@ def frame(
         raise SafeError("short-interval closed risk context incomplete")
     validate_ohlc(x)
     # These values retain their actual 15-minute risk/longer-horizon meaning.
-    for key in ("atr", "atr_fraction", "daily_volume", "return_4h", "return_24h"):
+    for key in ("atr", "atr_fraction", "daily_volume", "return_2h", "return_12h"):
         value = float(context.get(key, math.nan))
         if not math.isfinite(value) or (
             key in {"atr", "atr_fraction", "daily_volume"} and value <= 0

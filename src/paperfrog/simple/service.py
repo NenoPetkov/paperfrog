@@ -26,6 +26,7 @@ from .adaptive import Advisor, enrich, request_limit
 from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
 from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_reference, pair_features
+from .blockers import explain
 from .data import candles, funding, normalize, quote_snapshot, scan
 from .engine import Engine
 from .live_broker import LiveBroker
@@ -138,6 +139,10 @@ class SimpleService:
         if self.s.trading_mode == "live":
             with contextlib.suppress(SafeError):
                 armed = verify_simple_arm(self.s)
+        if command == "/why":
+            return await asyncio.to_thread(
+                explain, self.s, self.store, self.now_ms(), self.crisis, armed
+            )
         if command == "/positions":
             return json.dumps(self.engine.positions() if self.engine else {})
         if command == "/last_signal":
@@ -181,7 +186,7 @@ class SimpleService:
                 "market_trend": {
                     "enabled": self.s.simple_market_trend_enabled,
                     "context": self.store.get("simple_market_trend"),
-                    "policy": "24h return, regression, mean and 4h trend must align; market breadth, BTC and ETH must agree",
+                    "policy": "12h return, regression, mean and 2h trend must align; market breadth, BTC and ETH must agree over 12h and 2h",
                 },
                 "daily_analysis": {
                     "directory": str(
@@ -354,6 +359,9 @@ class SimpleService:
                         else "simple_risk_context",
                         {
                             "asof_ms": boundary,
+                            "entry_timeframe": "15m",
+                            "trend_hours": 12,
+                            "confirmation_hours": 2,
                             "pool_size": len(snapshot["symbols"]),
                             "usable_size": len(rows),
                             "selected": context_selected,
@@ -550,6 +558,8 @@ class SimpleService:
                 {
                     "asof_ms": boundary,
                     "entry_timeframe": self.s.simple_entry_timeframe,
+                    "trend_hours": 12,
+                    "confirmation_hours": 2,
                     "pool_size": len(pool),
                     "usable_size": len(rows),
                     "selected": selected,

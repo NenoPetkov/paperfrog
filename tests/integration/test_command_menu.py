@@ -11,7 +11,7 @@ from paperfrog.telegram.control import Controls, Telegram
 def test_menu_covers_all_commands_with_descriptions():
     menu = menu_commands()
     assert {"/" + item["command"] for item in menu} == COMMANDS
-    assert len(menu) == len(COMMANDS) == 18
+    assert len(menu) == len(COMMANDS) == 19
     assert all(1 <= len(item["description"]) <= 256 for item in menu)
 
 

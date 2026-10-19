@@ -1,21 +1,21 @@
 # paperfrog
 
-## Closed-day trend and market breadth
+## Twelve-hour trend, two-hour confirmation and market breadth
 
 `SIMPLE_MARKET_TREND_ENABLED=true` is the default for the simple strategy. Every
-new LONG must have positive 24-hour return, positive least-squares price slope
-over that day, a close above its 24-hour mean, and positive four-hour return.
-SHORT requires all four negative. These checks use 97 consecutive completed
-15-minute prices, ending at the risk-context boundary, for an exact 24-hour
-close-to-close window. The mean uses the 96 closes within that window. An
-eight-minute bounce cannot bypass a falling day. Missing, gapped, nonfinite,
+new LONG must have positive 12-hour return, positive least-squares price slope
+over those twelve hours, a close above its 12-hour mean, and positive two-hour return.
+SHORT requires all four negative. These checks use 49 consecutive completed
+15-minute prices, ending at the risk-context boundary, for an exact 12-hour
+close-to-close window. The mean uses the 48 closes within that window. An
+eight-minute bounce cannot bypass a falling twelve-hour trend. Missing, gapped, nonfinite,
 future or stale observations cannot authorize an entry.
 
 The market **bull index** is the equal-weight percentage of covered coins in the
-liquid scan pool with positive 24-hour returns, calculated before trend filtering
+liquid scan pool with positive 12-hour returns, calculated before trend filtering
 or watchlist ranking. It requires at least 20 coins, at least 80% pool coverage,
-and separate BTC/ETH day context. **BULL** requires an index above 50, positive
-median returns over both 24h and 4h, and positive BTC and ETH returns over both
+and separate BTC/ETH context. **BULL** requires an index above 50, positive
+median returns over both 12h and 2h, and positive BTC and ETH returns over both
 horizons. **BEAR** is symmetric;
 conflicting or exactly flat evidence is **MIXED**. LONG needs BULL and SHORT needs
 BEAR. This is a transparent breadth measure, not an external sentiment index or
@@ -24,13 +24,27 @@ calibrated prediction. A MIXED market can legitimately produce no entries.
 The independent veto runs during candidate selection, signal evaluation and
 immediately before live submission, using current context and order-bound
 permissions. It applies with or without AI and cannot be overridden by AI rules
-or the neutral-allowed BTC policy. AI receives both coin day features and market
+or the neutral-allowed BTC policy. AI receives both coin 12h/2h features and market
 context. Existing holdings retain their normal protective stops and exits;
-reduce-only closes never require this entry permission. `/risk`, `/health` and
+reduce-only closes never require this entry permission. `/why` is the read-only,
+human-readable Telegram view of current entry blockers, market regime, exact
+failed LONG/SHORT market requirements, timestamps, coverage, coin rejections,
+cooldowns and current AI permission. It is also registered in the Telegram Menu.
+Expired cooldown records are distinguished from active locks; older scans or
+old 24h/4h snapshots are identified as unavailable, never relabelled as 12h/2h.
+`/risk`, `/health` and
 the local `/simple` diagnostics expose the index, coverage and regime. Selection
 audits record blocked coins and reasons; new trade journals retain the day and
 market observations used at entry. The ordinary replay refuses to fabricate
 broad-market history. Tests verify behavior, not improved profitability.
+
+Market context still refreshes on completed 15-minute boundaries; the live entry
+and AI schedule remains eight minutes. The trailing 24-hour liquidity window and
+the previous-24-hour performance `/summary` are independent of these trend windows.
+AI rule features use `return_2h` and `return_12h`; old-schema AI permissions are
+invalidated and await a fresh scheduled review. Historical journals retain their
+original field names and horizons. The trend gate source participates in local
+live authorization binding.
 
 ## Eight-minute candles and AI reviews
 
@@ -281,11 +295,11 @@ forecasts and small samples. The prompt asks for current conflicting evidence,
 invalidation conditions and concise explanations; it discourages needless rule changes.
 
 The model can compose new AND/OR entry conditions over trend, flow, volatility,
-one/four/24-hour returns, RSI, volume ratio, breakout distance and range position,
+one/two/twelve-hour returns, RSI, volume ratio, breakout distance and range position,
 or pause entries. With `SIMPLE_ENTRY_PROFILE=active`, the review seeks conditional
-setups per coin instead of requiring agreement across the watchlist. Mixed longer
-returns, forecast errors, a small trade sample or lack of proven profitability
-alone are not reasons to pause every coin. The model receives the configured
+setups per coin within the immutable 12h/2h coin and market vetoes. Forecast errors,
+a small trade sample or lack of proven profitability alone are not reasons to
+pause every otherwise eligible coin. The model receives the configured
 trend/volatility entry thresholds and may still pause when no defensible setup
 remains. Standard retains its cautious review policy. Neither profile forces an
 order or substitutes a static signal for an AI pause or failure.

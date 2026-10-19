@@ -28,8 +28,8 @@ Feature = Literal[
     "flow",
     "atr_fraction",
     "return_1h",
-    "return_4h",
-    "return_24h",
+    "return_2h",
+    "return_12h",
     "rsi_14",
     "volume_ratio",
     "breakout_up_atr",
@@ -41,15 +41,15 @@ FEATURES = (
     "flow",
     "atr_fraction",
     "return_1h",
-    "return_4h",
-    "return_24h",
+    "return_2h",
+    "return_12h",
     "rsi_14",
     "volume_ratio",
     "breakout_up_atr",
     "breakout_down_atr",
     "range_position",
 )
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_REQUESTS_PER_UTC_DAY = 96
 MAX_HISTORY = 128
 
@@ -152,7 +152,7 @@ class AdaptivePlan(BaseModel):
 def enrich(frame: pd.DataFrame) -> pd.DataFrame:
     """Causal, closed-bar observations; no extra exchange calls or future rows."""
     x = frame.copy()
-    for name, bars in (("return_1h", 4), ("return_4h", 16), ("return_24h", 96)):
+    for name, bars in (("return_1h", 4), ("return_2h", 8), ("return_12h", 48)):
         x[name] = x.close.pct_change(bars)
     delta = x.close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
@@ -194,6 +194,7 @@ def active_plan(s: Settings, store: Store, asof_ms: int, now_ms: int) -> Adaptiv
     if (
         not isinstance(record, dict)
         or not record
+        or record.get("schema_version") != SCHEMA_VERSION
         or record.get("config_hash") != s.config_hash
         or not 0 <= now_ms - asof_ms < review_ms
         or not 0 <= now_ms - policy_asof_ms < review_ms
@@ -287,7 +288,7 @@ independent of review cadence and entry-permission expiry. Forecast the close in
 The supplied recent_bars, EMA 5/20 trend_atr, flow, RSI, volume_ratio (past {60 * minutes} minutes),
 {5 * minutes}-minute breakout distances and {24 * minutes}-minute range_position describe
 {s.simple_entry_timeframe} data. return_1h uses {hour_source}.
-return_4h/24h and atr/atr_fraction for stop sizing retain closed 15-minute context;
+return_2h/12h and atr/atr_fraction for stop sizing retain closed 15-minute context;
 do not interpret atr_fraction as entry-candle volatility.
 An independent gate requires aligned {minutes}/{3 * minutes}/{5 * minutes}-minute moves,
 the latest candle body, rising/falling EMA 5, and confirming flow.
@@ -300,13 +301,13 @@ an actual downward breakout. A POSITIVE breakout_up_atr means price closed above
     if s.simple_market_trend_enabled:
         prompt += """
 An immutable day/market gate vetoes every new entry independently of your rules.
-LONG requires the coin's 24h return, 24h regression slope, price versus its 24h
-mean, and 4h return ALL positive. SHORT requires all negative. A brief rebound
+LONG requires the coin's 12h return, 12h regression slope, price versus its 12h
+mean, and 2h return ALL positive. SHORT requires all negative. A brief rebound
 inside a falling day does not qualify as a LONG; the symmetric rule applies to SHORT.
-market_trend.bull_index is the percent of the liquid scan pool up over 24h,
+market_trend.bull_index is the percent of the liquid scan pool up over 12h,
 calculated BEFORE directional selection; it is breadth, not a sentiment forecast.
-LONG requires BULL: an advancing 24h majority, positive median returns over BOTH
-24h and 4h, and positive BTC and ETH returns over BOTH 24h and 4h.
+LONG requires BULL: an advancing 12h majority, positive median returns over BOTH
+12h and 2h, and positive BTC and ETH returns over BOTH 12h and 2h.
 SHORT requires the symmetric BEAR regime. MIXED or
 missing/stale context permits neither side. These gates cannot be overridden.
 Use each market's day_trend and the broad market_trend alongside recent bars.
@@ -603,6 +604,7 @@ class Advisor:
             if not 0 <= completed_ms - asof_ms < review_ms:
                 raise SafeError("adaptive AI response expired")
             record = {
+                "schema_version": SCHEMA_VERSION,
                 "config_hash": self.s.config_hash,
                 "digest": plan.digest,
                 "plan": plan.model_dump(mode="json"),

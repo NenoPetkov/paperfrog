@@ -87,6 +87,7 @@ class Controls:
                 response += (
                     "\n/summary shows the previous 24h: wins, losses, PnL, errors and locks."
                 )
+                response += "\n/why explains entry blockers and the 12h/2h market readings."
                 response += "\n/resume resets financial locks and cooldowns after execution and health checks."
                 response += "\n/refuse_force resets the same locks despite resume-time scan/crisis checks. Local authorization, reconciliation and order-execution gates still apply."
             elif command == "/summary":

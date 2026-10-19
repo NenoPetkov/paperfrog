@@ -39,8 +39,8 @@ def minute_settings(settings, **changes):
 def slow_context(boundary=BOUNDARY, side=1):
     return {
         **row(boundary // BAR_MS * BAR_MS, side),
-        "return_4h": 0.02 * side,
-        "return_24h": 0.03 * side,
+        "return_2h": 0.02 * side,
+        "return_12h": 0.03 * side,
     }
 
 
