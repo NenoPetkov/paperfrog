@@ -305,48 +305,49 @@ extremes are not captured. Monetary comparisons require consistent account units
 Small samples, feature differences and passing software tests do not establish
 causation, improved prediction or profitability.
 
-### Scheduled AI review and actionable proposals
+### Scheduled 24-hour performance summary
 
-The separate daily reviewer sends Telegram around **10:00 Europe/Sofia**, starting
-18 October 2026 on this host. It reviews the previous complete local calendar day
-and compares it with the seven days preceding that day. Daylight-saving changes
-are handled by the timezone. Only closed trades are included. This schedule is
-independent of the entry-review interval and the UTC reports above.
+A deterministic summary replaces the daily AI improvement review. The existing
+`paperfrog-daily-review.timer` checks every minute and delivers at **10:00
+Europe/Sofia**, covering the exact preceding 24 hours ending at the scheduled
+10:00 instant. The window always spans 24 elapsed hours, including daylight-saving
+changes. Delayed delivery retains that scheduled window. It catches up only the
+latest due report after downtime, without a backlog. There are no AI calls or
+improvement proposals in this report; the bot's trading-time AI is independent.
 
-`scripts/daily_review.cron` is installed as `/etc/cron.d/paperfrog-daily-review`.
-Cron checks every minute; Python gates the local delivery time and persists report
-and delivery state. It makes at most one AI attempt per report day, with a 4,000
-output-token ceiling, and skips AI on days with no closed trades. Normalized
-metrics go to the model; exact monetary totals are calculated locally. An AI
-failure produces a deterministic summary without proposals. A restart catches up
-the latest due day without sending a backlog of historical reports.
+Send **`/summary`** to the bot in Telegram for the preceding 24 hours ending now.
+It uses the existing user/chat allowlists and command rate limit. Long reports
+are delivered in multiple messages without cutting off errors or lock details.
+Both scheduled and on-demand reports show:
 
-Reports and up to two evidence-backed proposals are saved under
-`reports/simple-<mode>/daily-ai/`, with proposals in `proposals/DR-YYYYMMDD-NN.json`.
-Each proposal contains the observed pattern, evidence references, an exact change
-specification, target files and source/configuration hashes, acceptance criteria,
-validation steps and rollback. Ask the coding assistant **Apply DR-YYYYMMDD-NN**
-to inspect and implement a saved proposal. This is not a Telegram trading command;
-proposals never execute automatically. Current code and evidence must be reviewed
-before implementation, with existing PAPER defaults, risk limits and live gates
-preserved. Small samples can justify collecting evidence rather than changing rules.
+- Closed trades: wins, losses, breakeven, and missing PnL counts.
+- Total won, lost, and net result separately for each recorded currency, plus
+  fees/funding coverage. Fees are estimates; open positions are excluded.
+- Recorded errors and operational failures grouped by event and cause, with
+  occurrence counts and the last occurrence time. Repeated events can describe
+  the same incident; these counts are not unique outages.
+- Risk-lock activations, time in recorded blocked states (including locks
+  spanning the window boundary), manual pause requests, operator resets,
+  symbol cooldown activations, and entry blocks grouped by reason.
+- Current manual, risk, profit-entry and symbol cooldown locks, pending emergency
+  closure, and current state/reason at the snapshot time. Historical profit-lock
+  changes are not separately journaled; missing history stays unknown.
+
+Reports are frozen before delivery in
+`reports/simple-<mode>/daily-summary/YYYY-MM-DD.json`. The worker opens the
+trading ledger read-only and keeps delivery acknowledgements separately in
+`state/simple-<mode>/daily-summary/deliveries.sqlite` (`state/simple/` for PAPER).
+It retries failed parts at most three times, five minutes apart, and skips parts
+already acknowledged by Telegram. A lost acknowledgement can cause a duplicate.
+The old `daily-ai/` reports and proposals remain available as historical files.
 
 ```bash
-uv run --no-sync python -m paperfrog.simple.daily_review --show-proposal DR-20261017-01
-uv run --no-sync python -m paperfrog.simple.daily_review --preview-day 2026-10-16 --timezone Europe/Sofia
+uv run --no-sync python -m paperfrog.simple.daily_summary --preview
+journalctl -u paperfrog-daily-review.service --no-pager
 ```
 
-Preview mode writes to a separate `daily-ai-preview` folder and never sends Telegram.
-The worker opens the trading ledger read-only and keeps its own state in
-`state/simple-<mode>/daily-review/reviews.sqlite` (`state/simple/` for PAPER).
-Telegram delivery uses the configured allowed chats, retains per-message
-acknowledgements, and retries failed parts at most three times, five minutes apart.
-An acknowledgement lost after Telegram accepts a message can cause a duplicate.
-Local reports remain available if delivery fails. Logs are in `logs/daily-review.log`.
-
-Running services need to load the updated code to collect the richer journal.
-Existing source-bound live authorization must be renewed locally after an update;
-the reporting command itself does not authorize trading.
+Preview prints a rolling 24-hour report without sending or saving anything.
+The cron template is retained for hosts without systemd; use only one scheduler.
 
 ## Install and verify
 
@@ -533,7 +534,7 @@ ssh root@176.31.163.20 'journalctl -u paperfrog -n 60 --no-pager'
 
 `paperfrog.service` starts on boot and restarts after process failures. The
 `paperfrog-daily-review.timer` replaces the local cron job, preserving the 10:00
-Europe/Sofia review schedule and its persisted delivery ledger. After migration,
+Europe/Sofia schedule for the previous-24-hour performance summary. After migration,
 the original local state stays as an archive; its LIVE arm is removed and
 `state/MIGRATED_TO_OVH` marks it inactive. Do not run a second bot or review against
 the same account/Telegram token. Initial migration retains a full runtime archive;

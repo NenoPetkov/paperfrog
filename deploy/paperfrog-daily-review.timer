@@ -1,5 +1,5 @@
 [Unit]
-Description=Check whether the Paperfrog daily review is due
+Description=Check whether the Paperfrog 24-hour summary is due
 
 [Timer]
 OnCalendar=*-*-* *:*:00

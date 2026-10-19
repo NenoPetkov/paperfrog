@@ -29,6 +29,7 @@ COMMANDS = {
     "/flatten",
     "/confirm_flatten",
     "/daily",
+    "/summary",
     "/health",
     "/version",
 }
@@ -97,8 +98,17 @@ class Controls:
         try:
             if command == "/help":
                 response = "paperfrog | " + self.s.trading_mode + "\n" + " ".join(sorted(COMMANDS))
+                response += (
+                    "\n/summary shows the previous 24h: wins, losses, PnL, errors and locks."
+                )
                 response += "\n/resume resets financial locks and cooldowns after execution and health checks."
                 response += "\n/refuse_force resets the same locks despite resume-time scan/crisis checks. Local authorization, reconciliation and order-execution gates still apply."
+            elif command == "/summary":
+                if self.s.strategy_profile != "simple":
+                    raise SafeError("24h summary is only supported by the simple profile")
+                from paperfrog.simple.performance import summary_text
+
+                response = await asyncio.to_thread(summary_text, self.s)
             elif command in {"/stop", "/pause", "/lock"}:
                 self.store.put("manual_lock", True)
                 if not self.store.get("risk_lock"):
@@ -185,9 +195,10 @@ class Telegram:
                 for update in updates:
                     reply = await self.controls.handle(update)
                     if reply:
-                        await self.call(
-                            "sendMessage", {"chat_id": reply[0], "text": reply[1][:4000]}
-                        )
+                        from paperfrog.simple.performance import messages
+
+                        for part in messages(reply[1]):
+                            await self.call("sendMessage", {"chat_id": reply[0], "text": part})
                     self.store.put("telegram_offset", int(update["update_id"]) + 1)
                 self.store.put("telegram_healthy_at", time.time())
             except SafeError:

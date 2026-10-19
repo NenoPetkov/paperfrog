@@ -1,5 +1,5 @@
 [Unit]
-Description=Paperfrog daily review (existing Sofia schedule)
+Description=Paperfrog previous-24-hour performance summary (10:00 Sofia)
 Wants=network-online.target
 After=network-online.target paperfrog.service
 
@@ -10,7 +10,7 @@ WorkingDirectory=/var/www/paperfrog
 Environment=PYTHONUNBUFFERED=1
 Environment=TZ=UTC
 UMask=0077
-ExecStart=/var/www/paperfrog/.venv/bin/python -m paperfrog.simple.daily_review --hour 10 --timezone Europe/Sofia --first-delivery 2026-10-18
+ExecStart=/var/www/paperfrog/.venv/bin/python -m paperfrog.simple.daily_summary --hour 10 --timezone Europe/Sofia --first-delivery 2026-10-18
 TimeoutStartSec=180
 NoNewPrivileges=true
 PrivateTmp=true
