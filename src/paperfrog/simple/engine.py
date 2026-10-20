@@ -583,7 +583,7 @@ class Engine:
             return
         selected_strategy = rotation.selection(self.store)
         strategy_label = self.strategy + (
-            "+dip-peak-v1" if selected_strategy["active"] == "dip_peak" else ""
+            rotation.VERSION if selected_strategy["active"] == "dip_peak" else ""
         )
         signal_key = f"{strategy_label}:{symbol}:{int(row['timestamp_ms'])}"
         if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:

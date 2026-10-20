@@ -214,6 +214,13 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
             lines.extend(
                 f"• {symbol}: {str(reason)[:220]}" for symbol, reason in list(rejected.items())[:5]
             )
+        strategy_rejected = selection.get("strategy_blocks") or {}
+        if strategy_rejected:
+            lines.append(f"Dip/peak rejections: {len(strategy_rejected)}. Examples:")
+            lines.extend(
+                f"• {symbol}: {str(reason)[:220]}"
+                for symbol, reason in list(strategy_rejected.items())[:5]
+            )
     for symbol in selected:
         if counts.get(symbol, 0) >= s.max_entries_per_symbol_per_day:
             blockers.append(f"{symbol}: daily per-coin entry limit reached.")

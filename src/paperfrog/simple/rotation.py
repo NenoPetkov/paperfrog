@@ -15,22 +15,45 @@ from paperfrog.storage.database import Store
 
 KEY = "simple_strategy_rotation"
 CHOICES = {"current", "dip_peak"}
+VERSION = "+dip-peak-v2"
+RANGE_BARS = 24
+RECOVERY_BARS = 12
+EXTREME_ATR = 1.0
+RECOVERY_ATR = 0.25
+LONG_MAX_LOCATION = 0.65
+SHORT_MIN_LOCATION = 0.35
+
+
+def entry_policy() -> dict[str, float | int]:
+    return {
+        "range_bars": RANGE_BARS,
+        "recovery_bars": RECOVERY_BARS,
+        "extreme_tolerance_atr": EXTREME_ATR,
+        "minimum_recovery_atr": RECOVERY_ATR,
+        "long_max_range_position": LONG_MAX_LOCATION,
+        "short_min_range_position": SHORT_MIN_LOCATION,
+        "minimum_range_atr": 2,
+    }
 
 
 def features(frame: pd.DataFrame) -> pd.DataFrame:
-    """Local extremes from prior completed bars, with a six-bar recovery window."""
+    """Local extremes and recovery window use only prior completed bars."""
     x = frame.copy()
-    x["dip_floor"] = x.low.shift(1).rolling(24).min()
-    x["peak_ceiling"] = x.high.shift(1).rolling(24).max()
-    x["dip_recent_low"] = x.low.shift(1).rolling(6).min()
-    x["peak_recent_high"] = x.high.shift(1).rolling(6).max()
+    x["dip_floor"] = x.low.shift(1).rolling(RANGE_BARS).min()
+    x["peak_ceiling"] = x.high.shift(1).rolling(RANGE_BARS).max()
+    x["dip_recent_low"] = x.low.shift(1).rolling(RECOVERY_BARS).min()
+    x["peak_recent_high"] = x.high.shift(1).rolling(RECOVERY_BARS).max()
     return x
 
 
 def dip_peak_gate(row: dict[str, Any], side: int) -> str | None:
     keys = ("close", "open", "dip_floor", "peak_ceiling", "dip_recent_low", "peak_recent_high")
     atr_key = "minute_atr" if row.get("entry_timeframe", "15m") != "15m" else "atr"
-    if not all(math.isfinite(float(row.get(k, math.nan))) for k in (*keys, atr_key)):
+    try:
+        complete = all(math.isfinite(float(row.get(k, math.nan))) for k in (*keys, atr_key))
+    except (TypeError, ValueError, OverflowError):
+        complete = False
+    if not complete:
         return "dip/peak needs complete closed-candle extremes"
     atr = float(row[atr_key])
     close, floor, ceiling = float(row["close"]), float(row["dip_floor"]), float(row["peak_ceiling"])
@@ -40,15 +63,15 @@ def dip_peak_gate(row: dict[str, Any], side: int) -> str | None:
     if side * (close - float(row["open"])) <= 0:
         return "dip/peak waiting for a confirming candle"
     if side == 1 and (
-        float(row["dip_recent_low"]) <= floor + 0.5 * atr
-        and 0 <= location <= 0.45
-        and close - float(row["dip_recent_low"]) >= 0.5 * atr
+        float(row["dip_recent_low"]) <= floor + EXTREME_ATR * atr
+        and 0 <= location <= LONG_MAX_LOCATION
+        and close - float(row["dip_recent_low"]) >= RECOVERY_ATR * atr
     ):
         return None
     if side == -1 and (
-        float(row["peak_recent_high"]) >= ceiling - 0.5 * atr
-        and 0.55 <= location <= 1
-        and float(row["peak_recent_high"]) - close >= 0.5 * atr
+        float(row["peak_recent_high"]) >= ceiling - EXTREME_ATR * atr
+        and SHORT_MIN_LOCATION <= location <= 1
+        and float(row["peak_recent_high"]) - close >= RECOVERY_ATR * atr
     ):
         return None
     return "dip/peak waiting for recovery from a recent local low or rejection of a local high"

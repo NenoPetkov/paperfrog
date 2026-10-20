@@ -20,6 +20,7 @@ from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from . import rotation
 from .market_trend import DAY_FIELDS
 from .strategy import BAR_MS, Rules, execution_rules
 
@@ -263,6 +264,14 @@ rewrite thresholds merely because a new review is due. Use forecast_feedback to 
 past forecasts beat a no-price-change baseline; this is diagnostic, not evidence of profit.
 Keep explanation to two short sentences (at most 350 characters). Return at most two short
 lessons, only when new evidence supports them; an empty lessons list is fine.
+entry_policy.strategy identifies the active strategy. For dip_peak, the independent
+dip_peak_rules require a confirmed recovery/rejection near a recent local extreme.
+Each market's dip_peak shows those levels and the exact LONG/SHORT blocker (null means passed).
+Propose conditions compatible with that recovery; a breakout beyond the local range conflicts
+with this strategy. Do not require a new breakout, extreme flow or several redundant momentum
+confirmations for every recovery. Prefer two or three meaningful distinct features per group
+when sufficient; all independent trend, flow, cost, BTC, market and risk gates still apply.
+Prior reviews may concern another strategy; their entry style is not a requirement.
 """
 
 
@@ -369,6 +378,7 @@ class Advisor:
     ) -> dict[str, Any]:
         if not selected or len(selected) > 10 or len(set(selected)) != len(selected):
             raise SafeError("adaptive AI needs a valid selected universe")
+        strategy = rotation.selection(self.store)["active"]
         broad_market = self.store.get("simple_market_trend")
         if self.s.simple_market_trend_enabled and (
             not isinstance(broad_market, dict)
@@ -420,6 +430,19 @@ class Advisor:
                 ):
                     raise SafeError("adaptive AI needs complete closed-day trend context")
                 market["day_trend"] = {"timestamp_ms": context_at, **day}
+            if strategy == "dip_peak":
+                row = x.iloc[-1].to_dict()
+                keys = ("dip_floor", "peak_ceiling", "dip_recent_low", "peak_recent_high")
+                levels = {key: float(row.get(key, math.nan)) for key in keys}
+                atr_key = "minute_atr" if row.get("entry_timeframe", "15m") != "15m" else "atr"
+                levels["entry_atr"] = float(row.get(atr_key, math.nan))
+                if not all(math.isfinite(value) for value in levels.values()):
+                    raise SafeError("adaptive AI needs complete dip/peak extremes")
+                market["dip_peak"] = {
+                    **levels,
+                    "long_blocker": rotation.dip_peak_gate(row, 1),
+                    "short_blocker": rotation.dip_peak_gate(row, -1),
+                }
             markets.append(market)
         history = self.store.get("simple_ai_history", [])
         # Resolve forecasts ONLY at their specified next-candle boundary, never from
@@ -473,13 +496,20 @@ class Advisor:
             if t["timestamp_ms"] <= asof_ms
         ]
         memory = [
-            {"plan": r["plan"], "forecast_results": r.get("forecast_results")} for r in history[-2:]
+            {
+                "strategy": r.get("strategy", "current"),
+                "plan": r["plan"],
+                "forecast_results": r.get("forecast_results"),
+            }
+            for r in history[-2:]
         ]
         rules = execution_rules(self.s)
         return {
             "schema_version": SCHEMA_VERSION,
             "asof_ms": asof_ms,
             "entry_policy": {
+                "strategy": strategy,
+                "dip_peak_rules": rotation.entry_policy() if strategy == "dip_peak" else None,
                 "profile": self.s.simple_entry_profile,
                 "entry_timeframe": self.s.simple_entry_timeframe,
                 "review_minutes": self.s.simple_ai_review_minutes,
@@ -605,6 +635,7 @@ class Advisor:
                 raise SafeError("adaptive AI response expired")
             record = {
                 "schema_version": SCHEMA_VERSION,
+                "strategy": snapshot["entry_policy"]["strategy"],
                 "config_hash": self.s.config_hash,
                 "digest": plan.digest,
                 "plan": plan.model_dump(mode="json"),

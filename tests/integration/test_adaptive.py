@@ -218,6 +218,36 @@ async def test_review_uses_selected_entry_profile_and_keeps_explicit_pause(
     assert store.get("simple_ai_status") == "pause"
 
 
+@pytest.mark.parametrize("strategy", ["current", "dip_peak"])
+async def test_ai_receives_active_strategy_and_recovery_levels(settings, store, strategy):
+    from paperfrog.simple import rotation
+
+    s = ai_settings(settings)
+    rotation.initialize(store, "base", 0)
+    rotation.configure(store, strategy, 1)
+    data = frames()
+    x = data["SOLUSDT"]
+    for key, value in {
+        "dip_floor": 100, "peak_ceiling": 110, "dip_recent_low": 100,
+        "peak_recent_high": 110, "open": 105, "close": 106, "atr": 1,
+    }.items():
+        x.loc[x.index[-1], key] = value
+    p = plan()
+    client = fake_client(p)
+    await Advisor(s, store, client, lambda: p.asof_ms + 1000).review(data, ["SOLUSDT"], p.asof_ms)
+    snapshot = json.loads(client.responses.parse.call_args.kwargs["input"][1]["content"])
+    assert snapshot["entry_policy"]["strategy"] == strategy
+    assert store.get("simple_ai_active")["strategy"] == strategy
+    if strategy == "dip_peak":
+        assert snapshot["entry_policy"]["dip_peak_rules"] == rotation.entry_policy()
+        assert snapshot["markets"][0]["dip_peak"]["long_blocker"] is None
+        assert snapshot["markets"][0]["dip_peak"]["short_blocker"]
+        assert snapshot["markets"][0]["dip_peak"]["dip_floor"] == 100
+    else:
+        assert snapshot["entry_policy"]["dip_peak_rules"] is None
+        assert "dip_peak" not in snapshot["markets"][0]
+
+
 @pytest.mark.parametrize(
     "failure", [None, TimeoutError("private-example"), ValueError("private-example")]
 )

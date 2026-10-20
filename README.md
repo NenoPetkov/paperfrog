@@ -16,10 +16,16 @@ survive restarts. Switches are also delivered through existing Telegram notifica
 
 The dip/peak variant adds a deterministic filter to the existing trend/AI entries:
 it uses the previous 24 completed entry candles as the local range, requires a low
-or high touched within the previous six candles (within 0.5 entry ATR), then a
-confirming candle recovering at least 0.5 ATR. LONG must remain in the lower 45%
-of that range; SHORT in the upper 45%. The range must span at least 2 ATR.
-For eight-minute entries these windows are 192 and 48 minutes. Existing slope,
+or high touched within the previous twelve candles (within 1 entry ATR), then a
+confirming candle recovering at least 0.25 ATR. LONG must remain in the lower 65%
+of that range; SHORT in the upper 65%. The range must span at least 2 ATR.
+Version 2 gives recoveries more time and room while still rejecting a breakout
+beyond the local range. For eight-minute entries these windows are 192 and 96 minutes.
+Dip/peak eligibility is checked before watchlist ranking, so incompatible momentum
+candidates cannot crowd out qualifying recoveries. AI receives the active strategy,
+exact local levels, rules and directional blockers, and is instructed to propose
+simple recovery conditions instead of requiring a breakout. `/why` shows dip/peak
+selection rejections. Existing slope,
 AI, BTC, market-direction, execution, stop, sizing and risk gates still apply.
 Selection never arms LIVE, resumes trading, clears a lock or increases risk limits.
 This rule and its software tests do not demonstrate profitability.

@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock
 
+import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from test_controls import update
@@ -122,11 +123,36 @@ def dip_row(side=1):
 def test_dip_peak_requires_recovery_near_extreme(side):
     obs = dip_row(side)
     assert rotation.dip_peak_gate(obs, side) is None
-    assert rotation.dip_peak_gate({**obs, "close": 105}, side)
+    assert rotation.dip_peak_gate({**obs, "close": 107 if side == 1 else 103}, side)
     assert rotation.dip_peak_gate({**obs, "open": obs["close"]}, side)
     assert rotation.dip_peak_gate({**obs, "atr": float("nan")}, side)
     assert rotation.dip_peak_gate({**obs, "dip_recent_low": 104, "peak_recent_high": 106}, side)
     assert rotation.dip_peak_gate({**obs, "close": 99 if side == 1 else 111}, side)
+
+
+@pytest.mark.parametrize("side", [1, -1])
+def test_recovery_can_reach_middle_of_range_without_chasing_breakout(side):
+    obs = {**dip_row(side), "close": 106 if side == 1 else 104, "open": 105}
+    assert rotation.dip_peak_gate(obs, side) is None
+    assert rotation.dip_peak_gate({**obs, "close": 106.51 if side == 1 else 103.49}, side)
+
+
+@pytest.mark.parametrize("side", [1, -1])
+def test_smaller_confirmed_recovery_and_wider_extreme_tolerance(side):
+    obs = {
+        **dip_row(side),
+        "close": 101 if side == 1 else 109,
+        "open": 100.9 if side == 1 else 109.1,
+        "dip_recent_low": 100.75,
+        "peak_recent_high": 109.25,
+    }
+    assert rotation.dip_peak_gate(obs, side) is None
+    assert rotation.dip_peak_gate({**obs, "close": 100.99 if side == 1 else 109.01}, side)
+
+
+@pytest.mark.parametrize("damage", [None, "invalid", float("inf"), float("nan")])
+def test_malformed_extremes_return_a_blocker(damage):
+    assert rotation.dip_peak_gate({**dip_row(), "dip_floor": damage}, 1)
 
 
 def test_extremes_are_causal_and_exclude_entry_candle():
@@ -135,6 +161,38 @@ def test_extremes_are_causal_and_exclude_entry_candle():
     frame.loc[250:, ["close", "high", "low"]] *= 100
     assert_frame_equal(before, rotation.features(frame).iloc[:250])
     assert before.iloc[-1].dip_floor == frame.low.iloc[225:249].min()
+    assert before.iloc[-1].dip_recent_low == frame.low.iloc[237:249].min()
+    assert before.iloc[-1].peak_recent_high == frame.high.iloc[237:249].max()
+
+
+async def test_dip_watchlist_filters_before_ranking_and_retains_exit_rows(settings, store):
+    from test_minute_entries import slow_context
+
+    s = minute_settings(settings, simple_selected_count=1)
+    service = SimpleService(s)
+    service.store.engine.dispose()
+    service.store = store
+    rotation.initialize(store, "base", 0)
+    rotation.configure(store, "dip_peak", 1)
+    service.context_rows = {"BTCUSDT": slow_context(), "SOLUSDT": slow_context(), "ETHUSDT": slow_context()}
+    service.now_ms = lambda: BOUNDARY + 1000
+    store.put("simple_pool", ["SOLUSDT", "ETHUSDT"])
+    recovery = {**minute_row(), "dip_floor": 94, "peak_ceiling": 104, "dip_recent_low": 94, "peak_recent_high": 104, "score": 1}
+    breakout = {**recovery, "dip_floor": 90, "peak_ceiling": 99, "score": 100}
+    data = {"SOLUSDT": pd.DataFrame([recovery]), "ETHUSDT": pd.DataFrame([breakout])}
+    service.entry_frame = AsyncMock(side_effect=lambda symbol, *args: data[symbol])
+    try:
+        await service.refresh_minutes(BOUNDARY)
+        assert service.selected == ["SOLUSDT"]
+        assert set(service.rows) == {"SOLUSDT", "ETHUSDT"}
+        assert store.get("simple_minute:ETHUSDT") == breakout
+        audit = store.rows("audit", 1)[0]["payload"]
+        assert "strategy_blocks" in audit and "ETHUSDT" in audit
+        rotation.configure(store, "current", BOUNDARY + 1001)
+        await service.refresh_minutes(BOUNDARY)
+        assert service.selected == ["ETHUSDT"]
+    finally:
+        await service.exchange.close()
 
 
 async def test_engine_keeps_origin_when_position_closes_after_manual_switch(
@@ -251,8 +309,9 @@ async def test_service_command_and_event_are_readable(settings):
 
 
 @pytest.mark.parametrize("change_during_dispatch", [False, True])
+@pytest.mark.parametrize("late_recovery", [False, True])
 async def test_live_simulation_rechecks_strategy_before_exchange_order(
-    settings, store, filters, monkeypatch, change_during_dispatch
+    settings, store, filters, monkeypatch, change_during_dispatch, late_recovery
 ):
     from test_simple_live import setup_engine
 
@@ -260,6 +319,8 @@ async def test_live_simulation_rechecks_strategy_before_exchange_order(
     rotation.initialize(store, engine.strategy, now)
     rotation.configure(store, "dip_peak", now)
     obs.update(open=99, dip_floor=98, peak_ceiling=108, dip_recent_low=98, peak_recent_high=108)
+    if late_recovery:
+        obs.update(dip_floor=94, peak_ceiling=104, dip_recent_low=94, peak_recent_high=104)
     submit = engine.broker.submit
 
     async def dispatch(order):

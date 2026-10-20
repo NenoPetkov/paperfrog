@@ -176,7 +176,7 @@ class SimpleService:
                 "strategy": ("adaptive-ai-v1+" if self.s.simple_ai_enabled else "")
                 + strategy_name(self.s.simple_entry_mode, self.rules)
                 + (
-                    "+dip-peak-v1" if rotation.selection(self.store)["active"] == "dip_peak" else ""
+                    rotation.VERSION if rotation.selection(self.store)["active"] == "dip_peak" else ""
                 ),
                 "strategy_rotation": rotation.selection(self.store),
                 "entry_mode": self.s.simple_entry_mode,
@@ -564,8 +564,17 @@ class SimpleService:
                 trend_blocks[symbol] = reason
             else:
                 eligible[symbol] = row
-        selected = choose(eligible, self.s, self.rules)
         async with self.mutex:
+            strategy = rotation.selection(self.store)
+            strategy_blocks = {}
+            if strategy["active"] == "dip_peak":
+                for symbol, row in list(eligible.items()):
+                    side, _ = minute_direction(row, self.rules)
+                    reason = rotation.dip_peak_gate(row, side)
+                    if reason:
+                        strategy_blocks[symbol] = reason
+                        del eligible[symbol]
+            selected = choose(eligible, self.s, self.rules)
             self.rows, self.minute_frames, self.selected = rows, frames, selected
             # Missing observations immediately revoke dispatch permission for that symbol.
             for symbol in pool:
@@ -588,6 +597,8 @@ class SimpleService:
                     if self.s.simple_market_trend_enabled
                     else None,
                     "day_trend_blocks": trend_blocks,
+                    "strategy": strategy["active"],
+                    "strategy_blocks": strategy_blocks,
                     "signals": {
                         symbol: {
                             key: rows[symbol][key]
