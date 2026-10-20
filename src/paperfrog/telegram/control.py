@@ -26,6 +26,7 @@ class Controls:
         status: Callable[[str], Awaitable[str]],
         *,
         force_resume: Callable[[], Awaitable[None]] | None = None,
+        strategy: Callable[[str | None], Awaitable[str]] | None = None,
     ):
         self.s, self.store, self.resume, self.flatten, self.status = (
             settings,
@@ -36,6 +37,7 @@ class Controls:
         )
         self.challenges: dict[tuple[int, int], tuple[str, float]] = {}
         self.force_resume = force_resume
+        self.strategy = strategy
         self.rate: dict[tuple[int, int], list[float]] = {}
 
     async def handle(self, update: dict[str, Any]) -> tuple[int, str] | None:
@@ -74,7 +76,12 @@ class Controls:
                 cid,
                 "Use /flatten first, then send /confirm_flatten CODE using its one-time confirmation code.",
             )
-        if command not in COMMANDS or len(words) != (2 if command == "/confirm_flatten" else 1):
+        valid_length = (
+            len(words) in {1, 2}
+            if command == "/strategy"
+            else len(words) == (2 if command == "/confirm_flatten" else 1)
+        )
+        if command not in COMMANDS or not valid_length:
             return cid, "Unknown command. Use /help."
         event_key = "telegram-update:" + str(update["update_id"])
         if not self.store.once(event_key, {"command": command}):
@@ -88,6 +95,7 @@ class Controls:
                     "\n/summary shows the previous 24h: wins, losses, PnL, errors and locks."
                 )
                 response += "\n/why explains entry blockers and the 12h/2h market readings."
+                response += "\n/strategy shows selection/history; current or dip_peak selects manually, auto enables rotation."
                 response += "\n/resume resets financial locks and cooldowns after execution and health checks."
                 response += "\n/refuse_force resets the same locks despite resume-time scan/crisis checks. Local authorization, reconciliation and order-execution gates still apply."
             elif command == "/summary":
@@ -96,6 +104,10 @@ class Controls:
                 from paperfrog.simple.performance import summary_text
 
                 response = await asyncio.to_thread(summary_text, self.s)
+            elif command == "/strategy":
+                if self.strategy is None:
+                    raise SafeError("strategy selection is only supported by the simple profile")
+                response = await self.strategy(words[1] if len(words) == 2 else None)
             elif command in {"/stop", "/pause", "/lock"}:
                 self.store.put("manual_lock", True)
                 if not self.store.get("risk_lock"):

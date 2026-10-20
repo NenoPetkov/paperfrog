@@ -27,6 +27,7 @@ def strategy_hash(s: Settings) -> str:
     )
     for name in (
         "strategy.py",
+        "rotation.py",
         "engine.py",
         "live_broker.py",
         "service.py",

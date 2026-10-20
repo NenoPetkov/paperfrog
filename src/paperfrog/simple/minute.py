@@ -13,6 +13,7 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
 from .data import normalize
+from .rotation import features as rotation_features
 from .strategy import BAR_MS, Rules
 
 MINUTE_MS = 60_000
@@ -133,7 +134,7 @@ def frame(
     x["entry_timeframe"] = timeframe
     # Keep a distinct copy for older positions' original trend-reversal exit.
     x.attrs["risk_context"] = context
-    return x
+    return rotation_features(x)
 
 
 def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:

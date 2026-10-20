@@ -1,5 +1,29 @@
 # paperfrog
 
+Runtime strategy rotation is enabled for the simple service. `/strategy` shows the
+active strategy, the current sample and the last eight switches in the configured
+display timezone. `/strategy current` selects the original strategy;
+`/strategy dip_peak` selects the dip/peak variant. Either manual selection disables
+automatic switching. `/strategy auto` enables it again without resetting the sample.
+
+Automatic rotation switches between these two strategies when at least six of the
+last eight closed positions in the current stint have negative net PnL, including
+estimated fees and recorded funding. Zero PnL is not a loss. On first deployment,
+the current strategy's most recent eight historical closes seed the sample.
+Each switch starts a fresh sample; positions opened before a switch retain their
+original exits and do not count toward the new stint. Selection, samples and history
+survive restarts. Switches are also delivered through existing Telegram notifications.
+
+The dip/peak variant adds a deterministic filter to the existing trend/AI entries:
+it uses the previous 24 completed entry candles as the local range, requires a low
+or high touched within the previous six candles (within 0.5 entry ATR), then a
+confirming candle recovering at least 0.5 ATR. LONG must remain in the lower 45%
+of that range; SHORT in the upper 45%. The range must span at least 2 ATR.
+For eight-minute entries these windows are 192 and 48 minutes. Existing slope,
+AI, BTC, market-direction, execution, stop, sizing and risk gates still apply.
+Selection never arms LIVE, resumes trading, clears a lock or increases risk limits.
+This rule and its software tests do not demonstrate profitability.
+
 ## Twelve-hour trend, two-hour confirmation and market breadth
 
 `SIMPLE_MARKET_TREND_ENABLED=true` is the default for the simple strategy. Every

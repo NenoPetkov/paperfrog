@@ -22,6 +22,7 @@ from paperfrog.telegram.control import Controls, Telegram
 from paperfrog.telegram.events import EventNotifications
 from paperfrog.telegram.formatting import positions_text, status_text
 
+from . import rotation
 from .adaptive import Advisor, enrich, request_limit
 from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
@@ -64,7 +65,13 @@ class SimpleService:
         self.stop = asyncio.Event()
         self.mutex = asyncio.Lock()
         self.controls = Controls(
-            s, self.store, self.resume, self.flatten, self.status, force_resume=self.refuse_force
+            s,
+            self.store,
+            self.resume,
+            self.flatten,
+            self.status,
+            force_resume=self.refuse_force,
+            strategy=self.strategy_control,
         )
         self.telegram = (
             Telegram(s, self.store, self.controls)
@@ -124,6 +131,14 @@ class SimpleService:
                 await self.engine.close(symbol, self.now_ms(), "operator requested flatten")
             return not await self.engine.broker.positions()
 
+    async def strategy_control(self, choice: str | None) -> str:
+        async with self.mutex:
+            if choice is not None:
+                if self.engine is None:
+                    raise SafeError("execution engine is not ready")
+                rotation.configure(self.store, choice, self.now_ms())
+            return rotation.describe(self.store, self.s.display_timezone)
+
     async def status(self, command: str) -> str:
         positions = (
             self.engine.positions() if self.engine else self.store.get("simple_positions", {})
@@ -159,7 +174,11 @@ class SimpleService:
                 "mode": self.s.trading_mode,
                 "account_mode": self.s.futures_account_mode,
                 "strategy": ("adaptive-ai-v1+" if self.s.simple_ai_enabled else "")
-                + strategy_name(self.s.simple_entry_mode, self.rules),
+                + strategy_name(self.s.simple_entry_mode, self.rules)
+                + (
+                    "+dip-peak-v1" if rotation.selection(self.store)["active"] == "dip_peak" else ""
+                ),
+                "strategy_rotation": rotation.selection(self.store),
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
                 "entry_timeframe": self.s.simple_entry_timeframe,
@@ -878,6 +897,7 @@ class SimpleService:
                     self.s, self.store, self.exchange.filters, self.rules, broker=live_broker
                 )
                 await self.engine.restore()
+                rotation.initialize(self.store, self.engine.strategy, self.now_ms())
                 self.store.put("operating_mode", self.s.trading_mode)
                 self.store.put("simple_loaded_settings", self.s.simple_parameters())
                 if not once:

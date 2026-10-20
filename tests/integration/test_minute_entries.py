@@ -1,5 +1,6 @@
 import copy
 import json
+import time
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -253,8 +254,11 @@ def test_dispatch_independently_requires_order_bound_fresh_minute_slope(settings
 
 @pytest.mark.parametrize("timeframe", ["1m", "5m"])
 async def test_live_minute_entry_rechecks_slope_after_fresh_exchange_quote(
-    settings, store, filters, timeframe
+    settings, store, filters, timeframe, monkeypatch
 ):
+    # Simulated exchange calls must not cross a real candle boundary mid-test.
+    fixed_time = time.time()
+    monkeypatch.setattr(time, "time", lambda: fixed_time)
     engine, sim, adapter, _, now = await setup_engine(
         settings, store, filters, simple_entry_timeframe=timeframe
     )

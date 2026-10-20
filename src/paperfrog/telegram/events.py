@@ -81,6 +81,12 @@ class EventNotifications:
                 "Use /resume to reset financial locks and their equity baselines, "
                 "once execution and health checks pass."
             )
+        if kind == "simple_strategy_changed":
+            return (
+                f"🔄 Strategy: {payload['from']} → {payload['to']}\n"
+                f"{payload['reason']} ({payload['losses']}/{payload['sample']} losses).\n"
+                "New entries only; existing exits and risk locks remain active. /strategy"
+            )
         if kind == "simple_hosted_stop":
             action = "Bought" if payload["side"] > 0 else "Sold"
             return (

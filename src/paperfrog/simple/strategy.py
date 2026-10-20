@@ -11,6 +11,7 @@ from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings, SimpleEntryMode
 
 from .daily import daily_atr
+from .rotation import features as rotation_features
 
 BAR_MS = 900_000
 WARMUP = 192
@@ -203,7 +204,7 @@ def indicators(raw: pd.DataFrame, rules: Rules = RULES) -> pd.DataFrame:
     x["rejection_level"] = np.where(
         previous_up, x.prior_high.shift(1), np.where(previous_down, x.prior_low.shift(1), np.nan)
     )
-    return x
+    return rotation_features(x)
 
 
 def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -> list[str]:

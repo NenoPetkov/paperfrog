@@ -18,6 +18,7 @@ from .bitcoin import require_order as require_btc_order
 from .data import quote_snapshot
 from .market_trend import require_order as require_market_order
 from .minute import require_order as require_minute_order
+from .rotation import require_order as require_strategy_order
 from .strategy import require_execution
 
 
@@ -162,6 +163,7 @@ class LiveBroker:
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
                     raise EntryVeto("simple spread veto at short-interval dispatch")
             require_market_order(self.s, self.store, order, self.now_ms())
+            require_strategy_order(self.store, order)
             self.exchange.entry_authorized = True
         return await self.exchange.submit(order)
 

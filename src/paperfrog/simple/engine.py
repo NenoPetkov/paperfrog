@@ -19,6 +19,7 @@ from paperfrog.risk.sizing import equity_margin_bounds, require_equity_margin_al
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from . import rotation
 from .adaptive import active_plan
 from .adaptive import signal as adaptive_signal
 from .authorization import verify_simple_arm
@@ -318,6 +319,8 @@ class Engine:
             "ai_rule_id": trade.get("ai_rule_id"),
             "journal_version": trade.get("journal_version", 0),
             "trade_id": trade["id"],
+            "strategy_choice": trade.get("strategy_choice", "current"),
+            "strategy_epoch": trade.get("strategy_epoch", 0),
             "entry_context": trade.get("entry_context"),
             "entry_price": trade["entry_price"],
             "exit_price": float(fill.price),
@@ -341,6 +344,7 @@ class Engine:
         records = self.store.get("simple_closed", [], conn)
         records.append(record)
         self.store.put("simple_closed", records, conn)
+        rotation.closed(self.store, trade, pnl, now_ms, conn)
         del positions[symbol]
         self.store.put("simple_positions", positions, conn)
         self.notice(
@@ -532,6 +536,11 @@ class Engine:
             market_reason = market_entry_gate(self.s, self.store, row, direction, now_ms)
             if market_reason:
                 return 0, market_reason
+        if direction and rotation.selection(self.store)["active"] == "dip_peak":
+            blocked = rotation.dip_peak_gate(row, direction)
+            if blocked:
+                return 0, blocked
+            reason = "Dip/peak confirmed recovery; " + reason
         return direction, reason
 
     async def enter(
@@ -572,7 +581,11 @@ class Engine:
         )
         if not direction:
             return
-        signal_key = f"{self.strategy}:{symbol}:{int(row['timestamp_ms'])}"
+        selected_strategy = rotation.selection(self.store)
+        strategy_label = self.strategy + (
+            "+dip-peak-v1" if selected_strategy["active"] == "dip_peak" else ""
+        )
+        signal_key = f"{strategy_label}:{symbol}:{int(row['timestamp_ms'])}"
         if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
             signal_key += ":" + self.s.simple_entry_timeframe
         trade_id = hashlib.sha256(signal_key.encode()).hexdigest()[:24]
@@ -763,6 +776,8 @@ class Engine:
         )
         intent: dict[str, Any] = {
             "id": trade_id,
+            "strategy_choice": selected_strategy["active"],
+            "strategy_epoch": selected_strategy["epoch"],
             "side": direction,
             "entry_mode": self.s.simple_entry_mode,
             "entry_timeframe": self.s.simple_entry_timeframe,
@@ -770,7 +785,9 @@ class Engine:
             "stop_fraction": stop,
             "journal_version": 1,
             "entry_context": {
-                "strategy": self.strategy,
+                "strategy": strategy_label,
+                "strategy_choice": selected_strategy["active"],
+                "strategy_epoch": selected_strategy["epoch"],
                 "config_hash": self.s.config_hash,
                 "rules": self.rules.public(),
                 "mode": self.s.trading_mode,
@@ -834,6 +851,22 @@ class Engine:
                     "order": order.model_dump(mode="json"),
                 },
             )
+        self.store.put(
+            "simple_strategy_order:" + order.client_id,
+            {
+                "active": selected_strategy["active"],
+                "epoch": selected_strategy["epoch"],
+                "order": order.model_dump(mode="json"),
+                "row": {
+                    **indicators(row),
+                    "open": float(row["open"]),
+                    "entry_timeframe": row.get("entry_timeframe", "15m"),
+                }
+                if selected_strategy["active"] == "dip_peak"
+                else {},
+            },
+        )
+        rotation.require_order(self.store, order)
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
         if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
@@ -889,8 +922,10 @@ class Engine:
         positions = self.positions()
         positions[symbol] = {
             "id": trade_id,
+            "strategy_choice": intent.get("strategy_choice", "current"),
+            "strategy_epoch": intent.get("strategy_epoch", 0),
             "side": direction,
-            "entry_mode": self.s.simple_entry_mode,
+            "entry_mode": intent.get("entry_mode", self.s.simple_entry_mode),
             "entry_timeframe": intent.get("entry_timeframe", "15m"),
             "quantity": str(fill.quantity),
             "entry_price": float(fill.price),
