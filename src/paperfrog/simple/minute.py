@@ -13,7 +13,7 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
 from .data import normalize
-from .rotation import features as rotation_features
+from .rotation import decision_side
 from .strategy import BAR_MS, Rules
 
 MINUTE_MS = 60_000
@@ -134,7 +134,7 @@ def frame(
     x["entry_timeframe"] = timeframe
     # Keep a distinct copy for older positions' original trend-reversal exit.
     x.attrs["risk_context"] = context
-    return rotation_features(x)
+    return x
 
 
 def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
@@ -220,6 +220,6 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Q
         or not 0 <= now_ms - quote.timestamp_ms <= s.market_stale_seconds * 1000
     ):
         raise EntryVeto("fresh short-interval execution quote required")
-    reason = veto(row, order.side, now_ms, float(quote.mark), execution_rules(s))
+    reason = veto(row, decision_side(store, order), now_ms, float(quote.mark), execution_rules(s))
     if reason:
         raise EntryVeto(reason)

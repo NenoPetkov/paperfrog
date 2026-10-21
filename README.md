@@ -1,44 +1,39 @@
 # paperfrog
 
-Runtime strategy rotation is enabled for the simple service. `/strategy` shows the
-active strategy, the current sample and the last eight switches in the configured
-display timezone. `/strategy current` selects the original strategy;
-`/strategy dip_peak` selects the dip/peak variant. Either manual selection disables
-automatic switching. `/strategy auto` enables it again without resetting the sample.
+The simple service rotates automatically between `current` (normal decisions) and
+`opposite` (normal LONG becomes SHORT; normal SHORT becomes LONG). It switches when
+at least six of the last eight completed positions opened in the current stint
+have negative net PnL, including fees and recorded funding. Zero PnL is not a loss.
+Every switch resets the sample. Old open trades keep their original exits and do
+not count toward the new stint. Selection, sample and history survive restarts.
+Installing this policy replaces dip/peak, starts in normal automatic mode, and
+starts counting from the first new position; historical results are not seeded.
 
-Automatic rotation switches between these two strategies when at least six of the
-last eight closed positions in the current stint have negative net PnL, including
-estimated fees and recorded funding. Zero PnL is not a loss. On first deployment,
-the current strategy's most recent eight historical closes seed the sample.
-Each switch starts a fresh sample; positions opened before a switch retain their
-original exits and do not count toward the new stint. Selection, samples and history
-survive restarts. Switches are also delivered through existing Telegram notifications.
+The normal signal, AI, slope, BTC and market direction checks run on the original
+decision. Opposite mode reverses it exactly once before sizing and execution.
+No signal and AI pauses still produce no entry. Stops, trailing stops, prices,
+liquidity, exposure and PnL use the actual executed side. Trend exits track the
+original decision so a reversed position is not immediately closed on entry.
+AI is explicitly instructed to produce normal decisions without compensating for
+opposite execution. Exact order permissions bind both directions and the current
+strategy epoch; a strategy change before dispatch rejects the entry.
 
-The dip/peak variant adds a deterministic filter to the existing trend/AI entries:
-it uses the previous 24 completed entry candles as the local range, requires a low
-or high touched within the previous twelve candles (within 1 entry ATR), then a
-confirming candle recovering at least 0.25 ATR. LONG must remain in the lower 65%
-of that range; SHORT in the upper 65%. The range must span at least 2 ATR.
-Version 2 gives recoveries more time and room while still rejecting a breakout
-beyond the local range. For eight-minute entries these windows are 192 and 96 minutes.
-Dip/peak eligibility is checked before watchlist ranking, so incompatible momentum
-candidates cannot crowd out qualifying recoveries. AI receives the active strategy,
-exact local levels, rules and directional blockers, and is instructed to propose
-simple recovery conditions instead of requiring a breakout. `/why` shows dip/peak
-selection rejections. Existing slope,
-AI, BTC, market-direction, execution, stop, sizing and risk gates still apply.
-Selection never arms LIVE, resumes trading, clears a lock or increases risk limits.
-This rule and its software tests do not demonstrate profitability.
+`/strategy` shows selection, sample and recent switches. `/strategy current` and
+`/strategy opposite` select manually and disable automatic switching; `/strategy
+auto` enables it again. Selection does not arm LIVE, resume trading or clear locks.
+The production operator configuration uses `SIMPLE_ENTRY_TIMEFRAME=5m`,
+`SIMPLE_AI_REVIEW_MINUTES=5`, and `MAX_CONCURRENT_STRATEGY_TRADES=4`.
+Portfolio risk and margin limits still apply. Defaults remain PAPER.
 
 ## Twelve-hour trend, two-hour confirmation and market breadth
 
 `SIMPLE_MARKET_TREND_ENABLED=true` is the default for the simple strategy. Every
-new LONG must have positive 12-hour return, positive least-squares price slope
+normal LONG decision must have positive 12-hour return, positive least-squares price slope
 over those twelve hours, a close above its 12-hour mean, and positive two-hour return.
-SHORT requires all four negative. These checks use 49 consecutive completed
+A normal SHORT decision requires all four negative. These checks use 49 consecutive completed
 15-minute prices, ending at the risk-context boundary, for an exact 12-hour
-close-to-close window. The mean uses the 48 closes within that window. An
-eight-minute bounce cannot bypass a falling twelve-hour trend. Missing, gapped, nonfinite,
+close-to-close window. The mean uses the 48 closes within that window. A
+five-minute bounce cannot bypass a falling twelve-hour trend. Missing, gapped, nonfinite,
 future or stale observations cannot authorize an entry.
 
 The market **bull index** is the equal-weight percentage of covered coins in the
@@ -47,8 +42,8 @@ or watchlist ranking. It requires at least 20 coins, at least 80% pool coverage,
 and separate BTC/ETH context. **BULL** requires an index above 50, positive
 median returns over both 12h and 2h, and positive BTC and ETH returns over both
 horizons. **BEAR** is symmetric;
-conflicting or exactly flat evidence is **MIXED**. LONG needs BULL and SHORT needs
-BEAR. This is a transparent breadth measure, not an external sentiment index or
+conflicting or exactly flat evidence is **MIXED**. The normal LONG decision needs BULL and normal SHORT needs
+BEAR; opposite execution reverses the resulting order. This is a transparent breadth measure, not an external sentiment index or
 calibrated prediction. A MIXED market can legitimately produce no entries.
 
 The independent veto runs during candidate selection, signal evaluation and

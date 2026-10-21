@@ -536,11 +536,9 @@ class Engine:
             market_reason = market_entry_gate(self.s, self.store, row, direction, now_ms)
             if market_reason:
                 return 0, market_reason
-        if direction and rotation.selection(self.store)["active"] == "dip_peak":
-            blocked = rotation.dip_peak_gate(row, direction)
-            if blocked:
-                return 0, blocked
-            reason = "Dip/peak confirmed recovery; " + reason
+        if direction and rotation.selection(self.store)["active"] == "opposite":
+            direction = -direction
+            reason = "Opposite execution of normal decision; " + reason
         return direction, reason
 
     async def enter(
@@ -583,7 +581,7 @@ class Engine:
             return
         selected_strategy = rotation.selection(self.store)
         strategy_label = self.strategy + (
-            rotation.VERSION if selected_strategy["active"] == "dip_peak" else ""
+            rotation.VERSION if selected_strategy["active"] == "opposite" else ""
         )
         signal_key = f"{strategy_label}:{symbol}:{int(row['timestamp_ms'])}"
         if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
@@ -621,9 +619,10 @@ class Engine:
                     "refreshed_at_ms": now_ms,
                 },
             )
+        normal_direction = rotation.execution_side(direction, selected_strategy)
         assert q is not None
         if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-            reason_veto = minute_veto(row, direction, now_ms, float(q.mark), self.rules)
+            reason_veto = minute_veto(row, normal_direction, now_ms, float(q.mark), self.rules)
             if reason_veto:
                 raise SafeError(reason_veto)
             if self.store.get("simple_minute:" + symbol) != row:
@@ -779,6 +778,7 @@ class Engine:
             "strategy_choice": selected_strategy["active"],
             "strategy_epoch": selected_strategy["epoch"],
             "side": direction,
+            "decision_side": normal_direction,
             "entry_mode": self.s.simple_entry_mode,
             "entry_timeframe": self.s.simple_entry_timeframe,
             "opened_ms": now_ms,
@@ -786,6 +786,7 @@ class Engine:
             "journal_version": 1,
             "entry_context": {
                 "strategy": strategy_label,
+                "decision_side": normal_direction,
                 "strategy_choice": selected_strategy["active"],
                 "strategy_epoch": selected_strategy["epoch"],
                 "config_hash": self.s.config_hash,
@@ -811,7 +812,7 @@ class Engine:
         }
         if self.s.simple_market_trend_enabled:
             current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
-            market_reason = market_entry_gate(self.s, self.store, row, direction, current_ms)
+            market_reason = market_entry_gate(self.s, self.store, row, normal_direction, current_ms)
             if market_reason:
                 raise SafeError(market_reason)
             self.store.put(
@@ -825,7 +826,7 @@ class Engine:
             )
         if self.s.simple_btc_reference_enabled:
             current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
-            btc_reason = btc_entry_gate(self.s, self.store, row, direction, current_ms)
+            btc_reason = btc_entry_gate(self.s, self.store, row, normal_direction, current_ms)
             if btc_reason:
                 raise SafeError(btc_reason)
             context = {key: value for key, value in row.items() if key.startswith("btc_")}
@@ -857,13 +858,7 @@ class Engine:
                 "active": selected_strategy["active"],
                 "epoch": selected_strategy["epoch"],
                 "order": order.model_dump(mode="json"),
-                "row": {
-                    **indicators(row),
-                    "open": float(row["open"]),
-                    "entry_timeframe": row.get("entry_timeframe", "15m"),
-                }
-                if selected_strategy["active"] == "dip_peak"
-                else {},
+                "decision_side": normal_direction,
             },
         )
         rotation.require_order(self.store, order)
@@ -925,6 +920,7 @@ class Engine:
             "strategy_choice": intent.get("strategy_choice", "current"),
             "strategy_epoch": intent.get("strategy_epoch", 0),
             "side": direction,
+            "decision_side": intent.get("decision_side", direction),
             "entry_mode": intent.get("entry_mode", self.s.simple_entry_mode),
             "entry_timeframe": intent.get("entry_timeframe", "15m"),
             "quantity": str(fill.quantity),

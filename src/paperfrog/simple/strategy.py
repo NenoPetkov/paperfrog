@@ -11,7 +11,6 @@ from paperfrog.domain.types import SafeError
 from paperfrog.settings import Settings, SimpleEntryMode
 
 from .daily import daily_atr
-from .rotation import features as rotation_features
 
 BAR_MS = 900_000
 WARMUP = 192
@@ -204,7 +203,7 @@ def indicators(raw: pd.DataFrame, rules: Rules = RULES) -> pd.DataFrame:
     x["rejection_level"] = np.where(
         previous_up, x.prior_high.shift(1), np.where(previous_down, x.prior_low.shift(1), np.nan)
     )
-    return rotation_features(x)
+    return x
 
 
 def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -> list[str]:
@@ -323,13 +322,18 @@ def exit_reason(
     if now_ms - int(position["opened_ms"]) >= rules.maximum_hold_bars * BAR_MS:
         return f"{rules.maximum_hold_bars / 4:g}-hour holding limit reached"
     if row is not None and math.isfinite(float(row.get("trend_atr", math.nan))):
+        decision = int(position.get("decision_side", side))
         mode = position.get("entry_mode", "trend")
         if mode == "failed_breakout":
-            if side * (float(row["close"]) - float(position["rejection_level"])) <= 0:
+            if decision * (float(row["close"]) - float(position["rejection_level"])) <= 0:
                 return "failed-breakout thesis invalidated: price reclaimed the breakout level"
-        elif (side if mode == "trend" else -side) * float(row["trend_atr"]) < 0:
+        elif (decision if mode == "trend" else -decision) * float(row["trend_atr"]) < 0:
             return (
-                "recent trend reversed against the position"
+                (
+                    "recent trend reversed against the position"
+                    if decision == side
+                    else "recent trend reversed against the original entry decision"
+                )
                 if mode == "trend"
                 else "original breakout trend ended; reversal experiment exit"
             )

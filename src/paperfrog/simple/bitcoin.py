@@ -16,6 +16,7 @@ from paperfrog.domain.types import EntryVeto, Order, SafeError
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .rotation import decision_side
 from .strategy import BAR_MS, Rules
 
 BTC = "BTCUSDT"
@@ -271,6 +272,6 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int) -> None:
     record = store.get("simple_btc_order:" + order.client_id, {})
     if record.get("order") != order.model_dump(mode="json"):
         raise EntryVeto("BTC entry permission is not bound to this order")
-    reason = entry_gate(s, store, record.get("context", {}), order.side, now_ms)
+    reason = entry_gate(s, store, record.get("context", {}), decision_side(store, order), now_ms)
     if reason:
         raise EntryVeto(reason)

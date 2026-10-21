@@ -12,6 +12,7 @@ from paperfrog.domain.types import EntryVeto, Order, SafeError
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from .rotation import decision_side
 from .strategy import BAR_MS
 
 DAY_BARS = 48
@@ -181,6 +182,6 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int) -> None:
         or record.get("config_hash") != s.config_hash
     ):
         raise EntryVeto("day/market trend permission is not bound to this order")
-    reason = entry_gate(s, store, record.get("row", {}), order.side, now_ms)
+    reason = entry_gate(s, store, record.get("row", {}), decision_side(store, order), now_ms)
     if reason:
         raise EntryVeto(reason)

@@ -7,74 +7,29 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import pandas as pd
 from sqlalchemy import Connection
 
 from paperfrog.domain.types import EntryVeto, Order, SafeError
 from paperfrog.storage.database import Store
 
 KEY = "simple_strategy_rotation"
-CHOICES = {"current", "dip_peak"}
-VERSION = "+dip-peak-v2"
-RANGE_BARS = 24
-RECOVERY_BARS = 12
-EXTREME_ATR = 1.0
-RECOVERY_ATR = 0.25
-LONG_MAX_LOCATION = 0.65
-SHORT_MIN_LOCATION = 0.35
+CHOICES = {"current", "opposite"}
+VERSION = "+opposite-v1"
+POLICY_VERSION = 2
 
 
-def entry_policy() -> dict[str, float | int]:
-    return {
-        "range_bars": RANGE_BARS,
-        "recovery_bars": RECOVERY_BARS,
-        "extreme_tolerance_atr": EXTREME_ATR,
-        "minimum_recovery_atr": RECOVERY_ATR,
-        "long_max_range_position": LONG_MAX_LOCATION,
-        "short_min_range_position": SHORT_MIN_LOCATION,
-        "minimum_range_atr": 2,
-    }
+def execution_side(side: int, state: dict[str, Any]) -> int:
+    """Invert only a qualifying normal decision; no signal stays no signal."""
+    return -side if state["active"] == "opposite" else side
 
 
-def features(frame: pd.DataFrame) -> pd.DataFrame:
-    """Local extremes and recovery window use only prior completed bars."""
-    x = frame.copy()
-    x["dip_floor"] = x.low.shift(1).rolling(RANGE_BARS).min()
-    x["peak_ceiling"] = x.high.shift(1).rolling(RANGE_BARS).max()
-    x["dip_recent_low"] = x.low.shift(1).rolling(RECOVERY_BARS).min()
-    x["peak_recent_high"] = x.high.shift(1).rolling(RECOVERY_BARS).max()
-    return x
-
-
-def dip_peak_gate(row: dict[str, Any], side: int) -> str | None:
-    keys = ("close", "open", "dip_floor", "peak_ceiling", "dip_recent_low", "peak_recent_high")
-    atr_key = "minute_atr" if row.get("entry_timeframe", "15m") != "15m" else "atr"
-    try:
-        complete = all(math.isfinite(float(row.get(k, math.nan))) for k in (*keys, atr_key))
-    except (TypeError, ValueError, OverflowError):
-        complete = False
-    if not complete:
-        return "dip/peak needs complete closed-candle extremes"
-    atr = float(row[atr_key])
-    close, floor, ceiling = float(row["close"]), float(row["dip_floor"]), float(row["peak_ceiling"])
-    if atr <= 0 or ceiling - floor < 2 * atr or side not in {-1, 1}:
-        return "dip/peak range too narrow or invalid"
-    location = (close - floor) / (ceiling - floor)
-    if side * (close - float(row["open"])) <= 0:
-        return "dip/peak waiting for a confirming candle"
-    if side == 1 and (
-        float(row["dip_recent_low"]) <= floor + EXTREME_ATR * atr
-        and 0 <= location <= LONG_MAX_LOCATION
-        and close - float(row["dip_recent_low"]) >= RECOVERY_ATR * atr
-    ):
-        return None
-    if side == -1 and (
-        float(row["peak_recent_high"]) >= ceiling - EXTREME_ATR * atr
-        and SHORT_MIN_LOCATION <= location <= 1
-        and float(row["peak_recent_high"]) - close >= RECOVERY_ATR * atr
-    ):
-        return None
-    return "dip/peak waiting for recovery from a recent local low or rejection of a local high"
+def decision_side(store: Store, order: Order) -> int:
+    """Direction gates validate the normal decision bound to this exact order."""
+    if store.get(KEY) is None or order.reduce_only:
+        return order.side
+    require_order(store, order)
+    permission = store.get("simple_strategy_order:" + order.client_id, {})
+    return int(permission["decision_side"])
 
 
 def selection(store: Store, conn: Connection | None = None) -> dict[str, Any]:
@@ -107,7 +62,7 @@ def evaluate(store: Store, state: dict[str, Any], now_ms: int, conn: Connection)
         switch(
             store,
             state,
-            "dip_peak" if state["active"] == "current" else "current",
+            "opposite" if state["active"] == "current" else "current",
             now_ms,
             "automatic: more than 70% losses in the last 8 closed positions",
             conn,
@@ -116,23 +71,31 @@ def evaluate(store: Store, state: dict[str, Any], now_ms: int, conn: Connection)
 
 def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
     with store.transaction() as conn:
-        if store.get(KEY, None, conn) is not None:
+        previous = store.get(KEY, None, conn)
+        if previous is not None and previous.get("policy_version") == POLICY_VERSION:
             return
-        outcomes = []
-        seen = set()
-        for trade in sorted(store.get("simple_closed", [], conn), key=lambda x: x["timestamp_ms"]):
-            context = trade.get("entry_context") or {}
-            identity = trade.get("trade_id")
-            if (
-                identity
-                and identity not in seen
-                and context.get("strategy", base_strategy) == base_strategy
-                and math.isfinite(float(trade["pnl"]))
-            ):
-                outcomes.append({"id": identity, "pnl": float(trade["pnl"])})
-                seen.add(identity)
-        state = {"active": "current", "epoch": 0, "auto": True, "outcomes": outcomes[-8:]}
-        evaluate(store, state, now_ms, conn)
+        # A new controller starts from trade one. Existing open positions retain
+        # their original epoch and cannot contaminate the new strategy sample.
+        state = {
+            "active": "current",
+            "epoch": 0,
+            "auto": True,
+            "outcomes": [],
+            "policy_version": POLICY_VERSION,
+            "changed_ms": now_ms,
+        }
+        if previous is not None:
+            state.update(previous)
+            state["auto"] = True
+            switch(
+                store,
+                state,
+                "current",
+                now_ms,
+                "replace dip/peak with normal/opposite; fresh sample",
+                conn,
+            )
+            state["policy_version"] = POLICY_VERSION
         store.put(KEY, state, conn)
 
 
@@ -161,7 +124,7 @@ def closed(
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
     if choice not in CHOICES | {"auto"}:
-        raise SafeError("use /strategy current, /strategy dip_peak or /strategy auto")
+        raise SafeError("use /strategy current, /strategy opposite or /strategy auto")
     with store.transaction() as conn:
         state = store.get(KEY, None, conn)
         if state is None:
@@ -184,8 +147,8 @@ def describe(store: Store, timezone: str) -> str:
         f"Strategy: {state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (net fees/funding).",
         "Auto switches at 6+ losses out of 8 closed positions; each switch starts a new sample.",
-        "current = original strategy; dip_peak = confirmed dip/peak within existing trend/AI gates.",
-        "/strategy current | /strategy dip_peak = manual; /strategy auto = automatic.",
+        "current = normal decision; opposite = LONG becomes SHORT and SHORT becomes LONG.",
+        "/strategy current | /strategy opposite = manual; /strategy auto = automatic.",
         "Recent switches:",
     ]
     for event in reversed(store.get("simple_strategy_history", [])[-8:]):
@@ -208,7 +171,6 @@ def require_order(store: Store, order: Order) -> None:
         or permission.get("epoch") != state["epoch"]
     ):
         raise EntryVeto("strategy selection changed or order permission missing")
-    if state["active"] == "dip_peak":
-        reason = dip_peak_gate(permission.get("row", {}), order.side)
-        if reason:
-            raise EntryVeto(reason)
+    original = permission.get("decision_side")
+    if original not in {-1, 1} or execution_side(original, state) != order.side:
+        raise EntryVeto("strategy order direction does not match the normal decision")
