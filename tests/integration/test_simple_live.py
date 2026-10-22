@@ -47,6 +47,7 @@ class ExchangeSimulation:
         self.equity = "500"
         self.available = None
         self.partial = False
+        self.reduce_fraction = Decimal(1)
         self.unknown_order = False
         self.reject_stop = False
         self.unknown_stop = False
@@ -150,6 +151,7 @@ class ExchangeSimulation:
             qty = Decimal(params["quantity"])
             if params["reduceOnly"] == "true":
                 qty = min(qty, abs(self.quantity))
+                qty = (qty * self.reduce_fraction // Decimal(".001")) * Decimal(".001")
             elif self.partial:
                 qty = (qty / 2 // Decimal(".001")) * Decimal(".001")
             result = self.order_result(
@@ -157,7 +159,10 @@ class ExchangeSimulation:
                 params["side"],
                 qty,
                 Decimal(params["price"]),
-                "EXPIRED" if self.partial and params["reduceOnly"] == "false" else "FILLED",
+                "EXPIRED"
+                if (self.partial and params["reduceOnly"] == "false")
+                or (params["reduceOnly"] == "true" and self.reduce_fraction < 1)
+                else "FILLED",
             )
             if self.unknown_order:
                 self.unknown_order = False

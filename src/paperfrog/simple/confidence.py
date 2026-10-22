@@ -84,14 +84,30 @@ def net_return(s: Settings, trade: dict[str, Any], quote: Quote) -> float:
     entry = float(trade["entry_price"])
     net = (price - entry) * quantity * side - price * quantity * s.fee_rate
     net += float(trade["funding"]) - float(trade["entry_fee"])
-    return net / (entry * quantity)
+    realized, fees = partial_accounting(trade)
+    net += float(realized - fees)
+    return net / (entry * float(trade.get("initial_quantity", trade["quantity"])))
+
+
+def partial_accounting(trade: dict[str, Any]) -> tuple[Decimal, Decimal]:
+    gross, fees = Decimal(0), Decimal(0)
+    for part in trade.get("partial_exit_fills", []):
+        fill = part["fill"]
+        gross += (
+            (Decimal(fill["price"]) - Decimal(str(trade["entry_price"])))
+            * Decimal(fill["quantity"])
+            * trade["side"]
+        )
+        fees += Decimal(fill["fee"])
+    return gross, fees
 
 
 def limit_price(s: Settings, trade: dict[str, Any], fraction: float, tick: Decimal) -> Decimal:
     """IOC price boundary that preserves the requested estimated net return."""
     entry, quantity = Decimal(str(trade["entry_price"])), Decimal(trade["quantity"])
-    costs = Decimal(str(trade["entry_fee"])) - Decimal(str(trade["funding"]))
-    profit = entry * quantity * Decimal(str(fraction))
+    realized, fees = partial_accounting(trade)
+    costs = Decimal(str(trade["entry_fee"])) - Decimal(str(trade["funding"])) + fees - realized
+    profit = entry * Decimal(trade.get("initial_quantity", trade["quantity"])) * Decimal(str(fraction))
     fee = Decimal(str(s.fee_rate))
     if trade["side"] > 0:
         price = (entry * quantity + costs + profit) / (quantity * (1 - fee))
@@ -119,45 +135,50 @@ async def reconcile(s: Settings, store: Store, exchange: Any, now_ms: int) -> No
         realized = Decimal(0)
         fill_times: dict[str, list[int]] = {"entry": [], "exit": []}
         for label, side in (("entry", record["direction"]), ("exit", -record["direction"])):
-            order_id = record.get(label + "_exchange_id")
-            if not order_id:
-                raise SafeError("exchange order identity missing")
-            rows = await exchange.request(
-                "GET",
-                "/fapi/v1/userTrades",
-                {
-                    "symbol": record["symbol"],
-                    "orderId": order_id,
-                    "limit": 1000,
-                },
-                signed=True,
+            order_ids = (
+                record.get("exit_exchange_ids") or [record.get("exit_exchange_id")]
+                if label == "exit"
+                else [record.get("entry_exchange_id")]
             )
-            if not isinstance(rows, list) or len(rows) >= 1000:
-                raise SafeError("complete exchange fills required")
+            if not all(order_ids) or len(set(map(str, order_ids))) != len(order_ids):
+                raise SafeError("exchange order identity missing")
             seen: set[str] = set()
             quantity = Decimal(0)
-            for row in rows:
-                if str(row["orderId"]) != str(order_id):
-                    continue
-                identity = str(row["id"])
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                if row["symbol"] != record["symbol"] or row["side"] != (
-                    "BUY" if side > 0 else "SELL"
-                ):
-                    raise SafeError("exchange fill identity mismatch")
-                if row["commissionAsset"] not in {"BNFCR", "USDT", "USDC"}:
-                    raise SafeError("commission currency conversion unavailable")
-                qty, fee, gross = (
-                    Decimal(str(row[k])) for k in ("qty", "commission", "realizedPnl")
+            for order_id in order_ids:
+                rows = await exchange.request(
+                    "GET",
+                    "/fapi/v1/userTrades",
+                    {"symbol": record["symbol"], "orderId": order_id, "limit": 1000},
+                    signed=True,
                 )
-                if not all(v.is_finite() for v in (qty, fee, gross)) or qty <= 0:
-                    raise SafeError("invalid exchange accounting")
-                fill_times[label].append(int(row["time"]))
-                quantity += qty
-                fees += fee
-                realized += gross
+                if not isinstance(rows, list) or len(rows) >= 1000:
+                    raise SafeError("complete exchange fills required")
+                order_quantity = Decimal(0)
+                for row in rows:
+                    if str(row["orderId"]) != str(order_id):
+                        continue
+                    identity = str(row["id"])
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    if row["symbol"] != record["symbol"] or row["side"] != (
+                        "BUY" if side > 0 else "SELL"
+                    ):
+                        raise SafeError("exchange fill identity mismatch")
+                    if row["commissionAsset"] not in {"BNFCR", "USDT", "USDC"}:
+                        raise SafeError("commission currency conversion unavailable")
+                    qty, fee, gross = (
+                        Decimal(str(row[k])) for k in ("qty", "commission", "realizedPnl")
+                    )
+                    if not all(v.is_finite() for v in (qty, fee, gross)) or qty <= 0:
+                        raise SafeError("invalid exchange accounting")
+                    fill_times[label].append(int(row["time"]))
+                    order_quantity += qty
+                    fees += fee
+                    realized += gross
+                if order_quantity <= 0:
+                    raise SafeError("exchange order fills missing")
+                quantity += order_quantity
             if quantity != Decimal(str(record["quantity"])):
                 raise SafeError("exchange fill quantities incomplete")
         entry_ms, exit_ms = min(fill_times["entry"]), max(fill_times["exit"])

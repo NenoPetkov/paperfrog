@@ -516,6 +516,15 @@ Stops only tighten. Existing per-trade, exposure, daily/weekly/drawdown, cooldow
 entry-count limits apply. Total direct exposure is additionally bounded by the existing
 net-beta notional budget, without assuming two opposite coin positions offset risk.
 
+Terminal IOC closes may fill only part of a position or none of it. The strategy
+journal records each confirmed partial reduction atomically, retains the hosted
+close-position stop, and monitors the remaining quantity on subsequent fresh polls.
+Restart recovery uses the original order result without resubmitting it. Unknown
+outcomes still block entries until reconciled. Fees, funding and realized partial
+fills contribute to the whole-position profit target and final PnL; a position
+counts as one outcome only after it is fully closed. Live confidence verification
+checks every exit order against Binance fills before counting that outcome.
+
 For an eligible exchange entry, finish symbol setup first, then refresh that coin's
 book/mark and account margin together before calculating quantity and limit price.
 The actual spread and costs are checked using that new quote. Cached wide or stale

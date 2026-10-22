@@ -171,23 +171,7 @@ class Engine:
                 if fill.quantity <= 0 or fill.price <= 0:
                     raise SafeError("invalid journaled entry fill; account remains paused")
                 self.record_entry(symbol, fill, intent)
-            for symbol, closing in self.store.get("simple_closing", {}).items():
-                if symbol not in self.positions():
-                    continue
-                fill = await self.coordinator.submit_once(Order.model_validate(closing["order"]))
-                if fill.quantity == 0 and closing.get("profit_target") is not None:
-                    records = self.store.get("simple_closing", {})
-                    records.pop(symbol, None)
-                    self.store.put("simple_closing", records)
-                    continue
-                if fill.quantity != Decimal(self.positions()[symbol]["quantity"]):
-                    raise SafeError("incomplete reduction after restart; account remains paused")
-                with self.store.transaction() as conn:
-                    self.finish(symbol, fill, closing["timestamp_ms"], closing["reason"], conn)
-                    records = self.store.get("simple_closing", {}, conn)
-                    records.pop(symbol, None)
-                    self.store.put("simple_closing", records, conn)
-                await self.broker.cancel_protection(symbol)
+            await self.recover_closings()
             for symbol in list(self.positions()):
                 stop_fill = await self.broker.stop_fill(symbol)
                 if stop_fill is not None:
@@ -287,6 +271,80 @@ class Engine:
             ):
                 raise SafeError("simple execution journal incomplete; entries remain blocked")
 
+    async def recover_closings(self) -> None:
+        """Settle persisted close intents using the original order's terminal result."""
+        for symbol, closing in self.store.get("simple_closing", {}).items():
+            order = Order.model_validate(closing["order"])
+            trade = self.positions().get(symbol)
+            if (
+                trade is None
+                or not order.reduce_only
+                or order.symbol != symbol
+                or order.quantity != Decimal(trade["quantity"])
+                or order.side != -trade["side"]
+            ):
+                raise SafeError("persisted close intent does not match the remaining position")
+            fill = await self.coordinator.submit_once(order)
+            self.record_reduction(symbol, closing, fill)
+            if symbol not in self.positions():
+                await self.broker.cancel_protection(symbol)
+
+    def record_reduction(self, symbol: str, closing: dict[str, Any], fill: Fill) -> None:
+        """Atomically account a terminal IOC, including zero and partial fills."""
+        order = Order.model_validate(closing["order"])
+        with self.store.transaction() as conn:
+            pending = self.store.get("simple_closing", {}, conn)
+            if symbol not in pending:
+                return  # The fill and removal of its intent commit together.
+            if pending[symbol] != closing:
+                raise SafeError("close intent changed during reconciliation")
+            positions = self.store.get("simple_positions", {}, conn)
+            trade = positions.get(symbol)
+            if (
+                trade is None
+                or not order.reduce_only
+                or order.symbol != symbol
+                or order.quantity != Decimal(trade["quantity"])
+                or order.side != -trade["side"]
+                or fill.client_id != order.client_id
+                or fill.symbol != symbol
+                or fill.side != order.side
+                or fill.status not in {"FILLED", "CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH"}
+                or fill.quantity > order.quantity
+                or (fill.quantity > 0 and fill.price <= 0)
+                or (fill.quantity == 0 and fill.fee != 0)
+            ):
+                raise SafeError("close fill does not match the remaining position and intent")
+            if fill.quantity == order.quantity:
+                self.finish(symbol, fill, closing["timestamp_ms"], closing["reason"], conn)
+            elif fill.quantity > 0:
+                trade.setdefault("initial_quantity", trade["quantity"])
+                trade.setdefault("partial_exit_fills", []).append(
+                    {
+                        "fill": fill.model_dump(mode="json"),
+                        "timestamp_ms": closing["timestamp_ms"],
+                        "reason": closing["reason"],
+                        "quote_reference": closing.get("quote_reference"),
+                    }
+                )
+                trade["quantity"] = str(order.quantity - fill.quantity)
+                positions[symbol] = trade
+                self.store.put("simple_positions", positions, conn)
+                self.store.audit(
+                    "simple_partial_close",
+                    {
+                        "trade_id": trade["id"],
+                        "symbol": symbol,
+                        "client_id": fill.client_id,
+                        "closed_quantity": str(fill.quantity),
+                        "remaining_quantity": trade["quantity"],
+                        "hosted_protection_retained": True,
+                    },
+                    conn,
+                )
+            pending.pop(symbol)
+            self.store.put("simple_closing", pending, conn)
+
     def finish(
         self,
         symbol: str,
@@ -315,9 +373,17 @@ class Engine:
         if exit_reference is None:
             closing = self.store.get("simple_closing", {}, conn).get(symbol, {})
             exit_reference = closing.get("quote_reference")
+        exits = [Fill.model_validate(p["fill"]) for p in trade.get("partial_exit_fills", [])]
+        exits.append(fill)
+        total_quantity = sum((f.quantity for f in exits), Decimal(0))
+        if total_quantity != Decimal(trade.get("initial_quantity", trade["quantity"])):
+            raise SafeError("complete exit quantities required before counting an outcome")
+        exit_notional = sum((f.quantity * f.price for f in exits), Decimal(0))
+        exit_fee = sum((f.fee for f in exits), Decimal(0))
+        gross_pnl = (float(exit_notional) - trade["entry_price"] * float(total_quantity)) * trade["side"]
         pnl = (
-            (float(fill.price) - trade["entry_price"]) * float(fill.quantity) * trade["side"]
-            - float(fill.fee)
+            gross_pnl
+            - float(exit_fee)
             - trade["entry_fee"]
             + trade["funding"]
         )
@@ -328,15 +394,16 @@ class Engine:
             "profit_target_fraction": trade.get("profit_target_fraction"),
             "entry_exchange_id": trade.get("entry_exchange_id"),
             "exit_exchange_id": fill.exchange_id,
+            "exit_exchange_ids": [f.exchange_id for f in exits],
+            "exit_fills": [f.model_dump(mode="json") for f in exits],
             "entry_ms": trade["opened_ms"],
             "symbol": symbol,
             "direction": trade["side"],
             "pnl": pnl,
             "reason": reason,
-            "fees": float(fill.fee) + trade["entry_fee"],
+            "fees": float(exit_fee) + trade["entry_fee"],
             "funding": trade["funding"],
-            "turnover": float(fill.quantity * fill.price)
-            + float(trade["quantity"]) * trade["entry_price"],
+            "turnover": float(exit_notional) + float(total_quantity) * trade["entry_price"],
             "ai_rule_id": trade.get("ai_rule_id"),
             "journal_version": trade.get("journal_version", 0),
             "trade_id": trade["id"],
@@ -344,14 +411,12 @@ class Engine:
             "strategy_epoch": trade.get("strategy_epoch", 0),
             "entry_context": trade.get("entry_context"),
             "entry_price": trade["entry_price"],
-            "exit_price": float(fill.price),
-            "quantity": float(fill.quantity),
+            "exit_price": float(exit_notional / total_quantity),
+            "quantity": float(total_quantity),
             "entry_fee": trade["entry_fee"],
-            "exit_fee": float(fill.fee),
-            "gross_pnl": (float(fill.price) - trade["entry_price"])
-            * float(fill.quantity)
-            * trade["side"],
-            "net_return": pnl / (trade["entry_price"] * float(fill.quantity)),
+            "exit_fee": float(exit_fee),
+            "gross_pnl": gross_pnl,
+            "net_return": pnl / (trade["entry_price"] * float(total_quantity)),
             "holding_seconds": (now_ms - trade["opened_ms"]) / 1000,
             "initial_stop_distance": trade.get("initial_stop_distance"),
             "final_stop_price": trade.get("stop_price"),
@@ -361,6 +426,7 @@ class Engine:
             "entry_execution_cost": trade.get("entry_execution_cost"),
             "exit_execution_cost": execution_cost(fill, exit_reference),
             "exit_quote_reference": exit_reference,
+            "partial_exit_fills": trade.get("partial_exit_fills", []),
         }
         records = self.store.get("simple_closed", [], conn)
         records.append(record)
@@ -407,6 +473,8 @@ class Engine:
     async def quote(self, quote: Quote, now_ms: int) -> None:
         if not 0 <= now_ms - quote.timestamp_ms <= self.s.market_stale_seconds * 1000:
             raise SafeError("simple quote stale or future dated")
+        if self.store.get("simple_closing"):
+            await self.recover_closings()
         positions = self.positions()
         if quote.symbol in positions:
             observe(positions[quote.symbol], float(quote.mark), quote.timestamp_ms)
@@ -432,6 +500,9 @@ class Engine:
     async def close(
         self, symbol: str, now_ms: int, reason: str, *, profit_target: float | None = None
     ) -> None:
+        if self.store.get("simple_closing"):
+            await self.recover_closings()
+            return  # Re-evaluate any remainder on the next fresh monitor pass.
         if isinstance(self.broker, LiveBroker):
             # Entry refresh may postdate the caller's loop timestamp. Check the
             # current exchange clock without weakening stale/future quote limits.
@@ -441,8 +512,8 @@ class Engine:
         if not 0 <= now_ms - q.timestamp_ms <= self.s.market_stale_seconds * 1000:
             raise SafeError("fresh quote required for reduction")
         quantity = (await self.broker.positions()).get(symbol, Decimal(0))
-        if quantity == 0:
-            raise SafeError("position disappeared without a recorded close")
+        if quantity != Decimal(trade["quantity"]) * trade["side"]:
+            raise SafeError("position quantity disagrees with the close journal")
         order = Order(
             client_id=client_id(trade["id"], f"close-{now_ms}"),
             symbol=symbol,
@@ -467,20 +538,9 @@ class Engine:
         }
         self.store.put("simple_closing", closing)
         fill = await self.coordinator.submit_once(order)
-        if fill.quantity == 0 and profit_target is not None:
-            closing = self.store.get("simple_closing", {})
-            closing.pop(symbol, None)
-            self.store.put("simple_closing", closing)
-            return  # Price moved before IOC execution; retry on a later fresh quote.
-        if fill.quantity != abs(quantity):
-            self.store.transition(State.ERROR_SAFE, "partial reduction; reconciliation required")
-            raise SafeError("partial reduction; reconciliation required")
-        with self.store.transaction() as conn:
-            self.finish(symbol, fill, now_ms, reason, conn)
-            closing = self.store.get("simple_closing", {}, conn)
-            closing.pop(symbol, None)
-            self.store.put("simple_closing", closing, conn)
-        await self.broker.cancel_protection(symbol)
+        self.record_reduction(symbol, closing[symbol], fill)
+        if symbol not in self.positions():
+            await self.broker.cancel_protection(symbol)
 
     async def monitor(
         self,
@@ -491,6 +551,8 @@ class Engine:
         awaiting_initial_scan: bool = False,
     ) -> None:
         now = datetime.fromtimestamp(now_ms / 1000, UTC)
+        if self.store.get("simple_closing"):
+            await self.recover_closings()
         if not await self.coordinator.reconcile():
             raise SafeError("simple reconciliation mismatch")
         await self.require_journal()
