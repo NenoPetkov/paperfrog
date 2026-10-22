@@ -150,7 +150,7 @@ class Engine:
             else 0,
         )
 
-    async def restore(self) -> None:
+    async def restore(self, *, recover_state: bool = True) -> None:
         if isinstance(self.broker, LiveBroker):
             # Reconcile uncertain IOC submissions without ever submitting them again.
             if self.store.unresolved_orders() and not await self.coordinator.reconcile():
@@ -192,13 +192,54 @@ class Engine:
             )
         if not await self.coordinator.reconcile():
             raise SafeError("simple startup reconciliation failed")
-        lock = self.store.get("risk_lock")
-        self.store.transition(
-            lock["state"] if lock else State.PAUSED,
-            lock["reason"]
-            if lock
-            else "startup reconciliation complete; waiting for fresh market data",
-        )
+        if recover_state:
+            lock = self.store.get("risk_lock")
+            self.store.transition(
+                lock["state"] if lock else State.PAUSED,
+                lock["reason"]
+                if lock
+                else "startup reconciliation complete; waiting for fresh market data",
+            )
+
+    async def recover_execution(self) -> bool:
+        """Release a resolved execution fault, preserving every financial and manual lock."""
+        if not isinstance(self.broker, LiveBroker) or self.store.get("state") != State.ERROR_SAFE:
+            return False
+        reason = self.store.get("state_reason", "")
+        if "restart required" in reason or self.store.get("local_flatten_request"):
+            return False
+        now_ms = self.broker.now_ms()
+        if now_ms < self.store.get("simple_execution_recovery_retry_ms", 0):
+            return False
+        attempts = min(6, int(self.store.get("simple_execution_recovery_attempts", 0)))
+        self.store.put("simple_execution_recovery_attempts", attempts + 1)
+        self.store.put("simple_execution_recovery_retry_ms", now_ms + min(60_000, 5_000 * 2**attempts))
+        self.broker.require_authorization()
+        # Preflight rejects unknown exchange orders/stops and changed credentials.
+        # Restore reconciles original orders and verifies every remaining hosted stop.
+        await self.broker.preflight()
+        await self.restore(recover_state=False)
+        await self.require_journal()
+        with self.store.transaction() as conn:
+            lock = self.store.get("risk_lock", None, conn)
+            manual = self.store.get("manual_lock", False, conn)
+            self.store.transition(
+                lock["state"] if lock else State.PAUSED if manual else State.DEGRADED,
+                lock["reason"]
+                if lock
+                else "execution recovered; manual pause retained"
+                if manual
+                else "execution reconciled and hosted protection verified; checking fresh data before resume",
+                conn,
+            )
+            self.store.put("simple_execution_recovery_attempts", 0, conn)
+            self.store.put("simple_execution_recovery_retry_ms", 0, conn)
+            self.store.audit(
+                "simple_execution_recovered",
+                {"previous_reason": reason, "financial_locks_reset": False, "manual_pause_retained": manual},
+                conn,
+            )
+        return True
 
     async def resume(
         self,

@@ -193,14 +193,23 @@ class BinanceAdapter:
         )
 
     async def query(self, symbol: str, client_id: str) -> Fill:
-        return self._fill(
-            await self.request(
-                "GET",
-                "/fapi/v1/order",
-                {"symbol": symbol, "origClientOrderId": client_id},
-                signed=True,
-            )
-        )
+        # A RESULT response can precede usable pricing or the order lookup index.
+        # Retry only this read of the original identity, never the submission.
+        for attempt in range(3):
+            try:
+                return self._fill(
+                    await self.request(
+                        "GET",
+                        "/fapi/v1/order",
+                        {"symbol": symbol, "origClientOrderId": client_id},
+                        signed=True,
+                    )
+                )
+            except (OrderNotFound, UnknownOrder):
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.2 * (attempt + 1))
+        raise UnknownOrder("original order confirmation unavailable")
 
     async def account(self) -> dict[str, Any]:
         return dict(await self.request("GET", "/fapi/v3/account", signed=True))

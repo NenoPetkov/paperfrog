@@ -10,7 +10,7 @@ def state_label(state: str) -> str:
         "RUNNING": "🟢 Running",
         "PAUSED": "⏸ Paused",
         "DEGRADED": "⏳ Waiting for healthy data",
-        "ERROR_SAFE": "🛑 Safety pause",
+        "ERROR_SAFE": "🔄 Checking execution",
         "SOFT_RISK_LOCK": "☕ Loss cooldown",
         "DAILY_RISK_LOCK": "⏸ Daily risk limit",
         "WEEKLY_RISK_LOCK": "⏸ Weekly risk limit",
@@ -33,7 +33,7 @@ def readable_reason(reason: str) -> str:
     if "hosted stop" in reason or "protection" in reason:
         return "I couldn't confirm the protective stop on Binance. I'm blocking entries while execution is checked."
     if "order not found" in reason or "unknown" in reason or "not terminal" in reason:
-        return "Binance hasn't confirmed an order's outcome. I'll check the original order; I won't send a duplicate."
+        return "Binance hasn't confirmed an order's outcome. I'm checking the original order and will continue automatically once positions and protection are verified."
     return reason.rstrip(".") + "."
 
 

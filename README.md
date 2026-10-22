@@ -525,6 +525,14 @@ fills contribute to the whole-position profit target and final PnL; a position
 counts as one outcome only after it is fully closed. Live confidence verification
 checks every exit order against Binance fills before counting that outcome.
 
+Brief order-lookup delays retry the original order identity without resubmitting
+it. Execution faults automatically recheck local authorization, exchange orders,
+position journals and every remaining hosted stop with bounded retry backoff.
+Once those checks agree, normal fresh-data checks can resume entries without an
+operator command. Manual pauses, emergency-close requests, financial risk locks,
+equity baselines and cooldowns are retained. Unknown orders, unmatched positions
+and unverified protection continue to block entries while recovery is retried.
+
 For an eligible exchange entry, finish symbol setup first, then refresh that coin's
 book/mark and account margin together before calculating quantity and limit price.
 The actual spread and costs are checked using that new quote. Cached wide or stale

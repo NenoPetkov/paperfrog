@@ -49,6 +49,7 @@ class ExchangeSimulation:
         self.partial = False
         self.reduce_fraction = Decimal(1)
         self.unknown_order = False
+        self.order_lookup_misses = 0
         self.reject_stop = False
         self.unknown_stop = False
         self.stop_lookup_misses = 0
@@ -168,6 +169,9 @@ class ExchangeSimulation:
                 self.unknown_order = False
                 return httpx.Response(503, json={"code": -1000})
         elif path.endswith("/order") and method == "GET":
+            if self.order_lookup_misses:
+                self.order_lookup_misses -= 1
+                return httpx.Response(400, json={"code": -2013})
             result = self.orders.get(params.get("origClientOrderId"))
             if "orderId" in params:
                 result = next(

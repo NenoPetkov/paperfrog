@@ -711,6 +711,9 @@ class SimpleService:
                 if isinstance(engine.broker, LiveBroker):
                     await engine.broker.refresh()
                     await engine.broker.refresh_funding(self.now_ms())
+                    if self.store.get("state") == State.ERROR_SAFE:
+                        async with self.mutex:
+                            await engine.recover_execution()
                 symbols = list(dict.fromkeys([*engine.positions(), *self.selected]))
                 semaphore = asyncio.Semaphore(3)
 
