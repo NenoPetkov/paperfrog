@@ -15,7 +15,7 @@ from paperfrog.storage.database import Store
 KEY = "simple_strategy_rotation"
 CHOICES = {"current", "opposite"}
 VERSION = "+opposite-v1"
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 
 
 def execution_side(side: int, state: dict[str, Any]) -> int:
@@ -57,42 +57,38 @@ def switch(
 
 
 def evaluate(store: Store, state: dict[str, Any], now_ms: int, conn: Connection) -> None:
-    outcomes = state["outcomes"]
-    if state["auto"] and len(outcomes) == 8 and sum(x["pnl"] < 0 for x in outcomes) >= 6:
-        switch(
-            store,
-            state,
-            "opposite" if state["active"] == "current" else "current",
-            now_ms,
-            "automatic: more than 70% losses in the last 8 closed positions",
-            conn,
-        )
+    return  # Automatic rotation is disabled by the current-only policy.
 
 
 def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
     with store.transaction() as conn:
         previous = store.get(KEY, None, conn)
-        if previous is not None and previous.get("policy_version") == POLICY_VERSION:
+        if (
+            previous is not None
+            and previous.get("policy_version") == POLICY_VERSION
+            and previous.get("active") == "current"
+            and previous.get("auto") is False
+        ):
             return
         # A new controller starts from trade one. Existing open positions retain
         # their original epoch and cannot contaminate the new strategy sample.
         state = {
             "active": "current",
             "epoch": 0,
-            "auto": True,
+            "auto": False,
             "outcomes": [],
             "policy_version": POLICY_VERSION,
             "changed_ms": now_ms,
         }
         if previous is not None:
             state.update(previous)
-            state["auto"] = True
+            state["auto"] = False
             switch(
                 store,
                 state,
                 "current",
                 now_ms,
-                "replace dip/peak with normal/opposite; fresh sample",
+                "current-only policy; automatic rotation disabled",
                 conn,
             )
             state["policy_version"] = POLICY_VERSION
@@ -123,21 +119,9 @@ def closed(
 
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
-    if choice not in CHOICES | {"auto"}:
-        raise SafeError("use /strategy current, /strategy opposite or /strategy auto")
-    with store.transaction() as conn:
-        state = store.get(KEY, None, conn)
-        if state is None:
-            raise SafeError("strategy controller is not ready")
-        state["auto"] = choice == "auto"
-        if choice == "auto":
-            evaluate(store, state, now_ms, conn)
-        elif choice != state["active"]:
-            switch(store, state, choice, now_ms, "Telegram manual selection", conn)
-        store.put(KEY, state, conn)
-        store.audit(
-            "simple_strategy_policy", {"active": state["active"], "auto": state["auto"]}, conn
-        )
+    if choice != "current":
+        raise SafeError("strategy locked to current; opposite and automatic rotation are disabled")
+    initialize(store, "current", now_ms)
 
 
 def describe(store: Store, timezone: str) -> str:
@@ -145,10 +129,9 @@ def describe(store: Store, timezone: str) -> str:
     outcomes = state["outcomes"]
     lines = [
         f"Strategy: {state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
-        f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (net fees/funding).",
-        "Auto switches at 6+ losses out of 8 closed positions; each switch starts a new sample.",
-        "current = normal decision; opposite = LONG becomes SHORT and SHORT becomes LONG.",
-        "/strategy current | /strategy opposite = manual; /strategy auto = automatic.",
+        f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
+        "Locked to current. Opposite execution and automatic rotation are disabled.",
+        "/strategy shows the current strategy, confidence and switch history.",
         "Recent switches:",
     ]
     for event in reversed(store.get("simple_strategy_history", [])[-8:]):

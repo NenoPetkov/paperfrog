@@ -19,7 +19,7 @@ from paperfrog.risk.sizing import equity_margin_bounds, require_equity_margin_al
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
-from . import rotation
+from . import confidence, rotation
 from .adaptive import active_plan
 from .adaptive import signal as adaptive_signal
 from .authorization import verify_simple_arm
@@ -175,6 +175,11 @@ class Engine:
                 if symbol not in self.positions():
                     continue
                 fill = await self.coordinator.submit_once(Order.model_validate(closing["order"]))
+                if fill.quantity == 0 and closing.get("profit_target") is not None:
+                    records = self.store.get("simple_closing", {})
+                    records.pop(symbol, None)
+                    self.store.put("simple_closing", records)
+                    continue
                 if fill.quantity != Decimal(self.positions()[symbol]["quantity"]):
                     raise SafeError("incomplete reduction after restart; account remains paused")
                 with self.store.transaction() as conn:
@@ -292,8 +297,20 @@ class Engine:
         *,
         exit_reference: dict[str, Any] | None = None,
     ) -> None:
+        if conn is None:
+            with self.store.transaction() as connection:
+                self.finish(symbol, fill, now_ms, reason, connection, exit_reference=exit_reference)
+            return
         positions = dict(self.store.get("simple_positions", {}, conn))
+        if symbol not in positions:
+            return  # A recovered close must never count twice.
         trade = positions[symbol]
+        if (
+            fill.symbol != symbol
+            or fill.quantity != Decimal(trade["quantity"])
+            or fill.side != -trade["side"]
+        ):
+            raise SafeError("complete position reduction required before counting an outcome")
         observe(trade, float(fill.price), now_ms)
         if exit_reference is None:
             closing = self.store.get("simple_closing", {}, conn).get(symbol, {})
@@ -307,6 +324,10 @@ class Engine:
         self.risk.closed(trade["id"], pnl, datetime.fromtimestamp(now_ms / 1000, UTC), conn)
         record = {
             "timestamp_ms": now_ms,
+            "confidence_version": trade.get("confidence_version"),
+            "profit_target_fraction": trade.get("profit_target_fraction"),
+            "entry_exchange_id": trade.get("entry_exchange_id"),
+            "exit_exchange_id": fill.exchange_id,
             "entry_ms": trade["opened_ms"],
             "symbol": symbol,
             "direction": trade["side"],
@@ -345,6 +366,11 @@ class Engine:
         records.append(record)
         self.store.put("simple_closed", records, conn)
         rotation.closed(self.store, trade, pnl, now_ms, conn)
+        confidence.enqueue(self.store, record, conn)
+        if record.get("confidence_version") == confidence.VERSION and isinstance(
+            self.broker, PaperBroker
+        ):
+            confidence.settle(self.store, record, pnl, conn)
         del positions[symbol]
         self.store.put("simple_positions", positions, conn)
         self.notice(
@@ -403,7 +429,9 @@ class Engine:
         positions[symbol]["funding"] += float(amount)
         self.store.put("simple_positions", positions)
 
-    async def close(self, symbol: str, now_ms: int, reason: str) -> None:
+    async def close(
+        self, symbol: str, now_ms: int, reason: str, *, profit_target: float | None = None
+    ) -> None:
         if isinstance(self.broker, LiveBroker):
             # Entry refresh may postdate the caller's loop timestamp. Check the
             # current exchange clock without weakening stale/future quote limits.
@@ -420,8 +448,12 @@ class Engine:
             symbol=symbol,
             side=-trade["side"],
             quantity=abs(quantity),
-            limit_price=f.round_price(
-                q.bid * Decimal(".98") if quantity > 0 else q.ask * Decimal("1.02")
+            limit_price=(
+                confidence.limit_price(self.s, trade, profit_target, f.tick)
+                if profit_target is not None
+                else f.round_price(
+                    q.bid * Decimal(".98") if quantity > 0 else q.ask * Decimal("1.02")
+                )
             ),
             reduce_only=True,
         )
@@ -431,9 +463,15 @@ class Engine:
             "timestamp_ms": now_ms,
             "reason": reason,
             "quote_reference": reference(q),
+            "profit_target": profit_target,
         }
         self.store.put("simple_closing", closing)
         fill = await self.coordinator.submit_once(order)
+        if fill.quantity == 0 and profit_target is not None:
+            closing = self.store.get("simple_closing", {})
+            closing.pop(symbol, None)
+            self.store.put("simple_closing", closing)
+            return  # Price moved before IOC execution; retry on a later fresh quote.
         if fill.quantity != abs(quantity):
             self.store.transition(State.ERROR_SAFE, "partial reduction; reconciliation required")
             raise SafeError("partial reduction; reconciliation required")
@@ -490,8 +528,25 @@ class Engine:
                 )
             ):
                 reason = reason or "closed-candle monitoring data unavailable"
+            profit_target = None
+            if not reason and self.s.simple_confidence_enabled:
+                profit_target = min(
+                    float(trade.get("profit_target_fraction") or confidence.SMALL),
+                    confidence.target(self.store),
+                )
+                if trade.get("profit_target_fraction") != profit_target:
+                    positions = self.positions()
+                    positions[symbol]["profit_target_fraction"] = profit_target
+                    self.store.put("simple_positions", positions)
+                if confidence.net_return(self.s, trade, q) >= profit_target:
+                    reason = f"confidence net profit target {profit_target:.2%} reached"
+                else:
+                    profit_target = None
             if reason:
-                await self.close(symbol, now_ms, reason)
+                if profit_target is None:
+                    await self.close(symbol, now_ms, reason)
+                else:
+                    await self.close(symbol, now_ms, reason, profit_target=profit_target)
             elif row is not None:
                 stop = tighten_stop(trade, float(q.mark), float(row["atr"]), self.rules)
                 if stop != trade["stop_price"]:
@@ -775,6 +830,10 @@ class Engine:
         )
         intent: dict[str, Any] = {
             "id": trade_id,
+            "confidence_version": confidence.VERSION if self.s.simple_confidence_enabled else None,
+            "profit_target_fraction": confidence.target(self.store)
+            if self.s.simple_confidence_enabled
+            else None,
             "strategy_choice": selected_strategy["active"],
             "strategy_epoch": selected_strategy["epoch"],
             "side": direction,
@@ -917,6 +976,9 @@ class Engine:
         positions = self.positions()
         positions[symbol] = {
             "id": trade_id,
+            "confidence_version": intent.get("confidence_version"),
+            "profit_target_fraction": intent.get("profit_target_fraction"),
+            "entry_exchange_id": fill.exchange_id,
             "strategy_choice": intent.get("strategy_choice", "current"),
             "strategy_epoch": intent.get("strategy_epoch", 0),
             "side": direction,

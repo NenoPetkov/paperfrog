@@ -583,7 +583,7 @@ async def run(args: argparse.Namespace) -> None:
         state = Store(folder / "reviews.sqlite")
         client = (
             AsyncOpenAI(api_key=s.openai_api_key.get_secret_value(), timeout=50, max_retries=0)
-            if s.openai_api_key.get_secret_value()
+            if s.simple_ai_enabled and s.openai_api_key.get_secret_value()
             else None
         )
         reviewer = Reviewer(s, root, state, client)

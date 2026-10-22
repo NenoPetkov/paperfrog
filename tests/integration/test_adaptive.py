@@ -218,7 +218,7 @@ async def test_review_uses_selected_entry_profile_and_keeps_explicit_pause(
     assert store.get("simple_ai_status") == "pause"
 
 
-@pytest.mark.parametrize("strategy", ["current", "opposite"])
+@pytest.mark.parametrize("strategy", ["current"])
 async def test_ai_receives_strategy_and_leaves_inversion_to_executor(settings, store, strategy):
     from paperfrog.simple import rotation
 

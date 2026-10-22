@@ -22,7 +22,7 @@ from paperfrog.telegram.control import Controls, Telegram
 from paperfrog.telegram.events import EventNotifications
 from paperfrog.telegram.formatting import positions_text, status_text
 
-from . import rotation
+from . import confidence, rotation
 from .adaptive import Advisor, enrich, request_limit
 from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
@@ -137,7 +137,16 @@ class SimpleService:
                 if self.engine is None:
                     raise SafeError("execution engine is not ready")
                 rotation.configure(self.store, choice, self.now_ms())
-            return rotation.describe(self.store, self.s.display_timezone)
+            description = rotation.describe(self.store, self.s.display_timezone)
+            if self.s.simple_confidence_enabled:
+                result = confidence.state(self.store)
+                description += (
+                    f"\nConfidence: {result['wins']} wins / {result['losses']} losses / "
+                    f"{result['breakevens']} breakevens; win streak {result['streak']}."
+                    f"\nNet target: {confidence.target(self.store):.2%} of entry notional. "
+                    f"Awaiting verified accounting: {len(result['pending'])}."
+                )
+            return description
 
     async def status(self, command: str) -> str:
         positions = (
@@ -181,6 +190,11 @@ class SimpleService:
                     else ""
                 ),
                 "strategy_rotation": rotation.selection(self.store),
+                "confidence": {
+                    **confidence.state(self.store),
+                    "enabled": self.s.simple_confidence_enabled,
+                    "target_fraction": confidence.target(self.store),
+                },
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
                 "entry_timeframe": self.s.simple_entry_timeframe,
@@ -845,6 +859,8 @@ class SimpleService:
                                     },
                                 )
                     self.store.put("heartbeat", time.time())
+                if self.s.simple_confidence_enabled and isinstance(engine.broker, LiveBroker):
+                    await confidence.reconcile(self.s, self.store, self.exchange, self.now_ms())
             except (SafeError, ValueError, KeyError, OSError) as exc:
                 self.exchange.entry_authorized = False
                 reason = str(exc) if isinstance(exc, SafeError) else type(exc).__name__

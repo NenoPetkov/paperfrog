@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     simple_total_margin_cap: float = Field(1.0, gt=0, le=1.0)
     futures_account_mode: Literal["isolated", "credits"] = "isolated"
     simple_live_research_waiver: bool = False
+    simple_confidence_enabled: bool = False
     simple_ai_enabled: bool = False
     simple_ai_review_minutes: int = Field(15, ge=1, le=15)
     simple_ai_output_limit: int = Field(4000, ge=512, le=8192)
@@ -176,6 +177,7 @@ class Settings(BaseSettings):
                     "weekly_loss_limit",
                     "high_water_drawdown",
                     "profit_guard_scale",
+                    "simple_confidence_enabled",
                     "simple_ai_enabled",
                     "simple_ai_review_minutes",
                     "simple_ai_output_limit",

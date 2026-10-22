@@ -837,3 +837,37 @@ Legacy code below is retained for existing safety/operations and reproducible re
 
 
 Legacy research/account commands and the earlier architecture are retained in [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md). They require the legacy profile and do not validate or authorize the simple strategy.
+
+
+### Confidence exits (October 2026)
+
+The runtime strategy controller is locked to `current`; `opposite` and `auto`
+commands are rejected, including after a restart. Historical switch records remain.
+Set `SIMPLE_AI_ENABLED=false` to disable both entry AI and OpenAI daily reviews.
+The daily summary can still run without OpenAI.
+
+Set `SIMPLE_CONFIDENCE_ENABLED=true` to use early profit exits. The initial target
+is **0.15% net of entry notional**, rising to **0.30% after three consecutive wins**.
+A loss or breakeven resets the streak. Position sizing, leverage, stops, risk locks
+and maximum holding time do not change. Targets are sampled every monitor cycle,
+using bid for longs / ask for shorts, estimated exit fees and a slippage reserve.
+Profit IOC limits protect the estimated net target; an unfilled IOC retries later.
+Partial executions retain the existing reconciliation lock. Emergency exits keep
+priority and their existing execution policy.
+
+Targets are fixed at entry and may decrease when confidence falls; an open trade's
+target never increases. Existing positions receive the small target but do not
+contribute to the new confidence sample. Only positions entered under this policy
+count. Paper outcomes use simulated net PnL. Live outcomes wait for complete
+exchange fills for both order IDs and funding income over the holding interval.
+Actual commissions and realized PnL come from Binance's `/fapi/v1/userTrades` API;
+unsupported fee currencies or incomplete records leave accounting pending.
+Records retain original estimated PnL and add `verified_net_pnl`, `verified_fees`
+and `verified_funding`. Confidence uses the verified result exclusively.
+
+One fully closed position counts once, in closure order, with durable deduplication
+and atomic ledger writes. A pending result holds the small target, never blocks
+protective exits, and is retried once per minute. Breakeven tolerance is 0.000001%
+of entry notional (minimum 1e-8 account units). `/strategy` and `/simple` expose
+wins, losses, breakevens, streak, pending accounting and the current target.
+This is an execution policy; software checks do not establish profitability.
