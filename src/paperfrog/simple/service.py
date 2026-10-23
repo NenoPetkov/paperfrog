@@ -921,8 +921,8 @@ class SimpleService:
                 self.engine = Engine(
                     self.s, self.store, self.exchange.filters, self.rules, broker=live_broker
                 )
-                await self.engine.restore()
                 rotation.initialize(self.store, self.engine.strategy, self.now_ms())
+                await self.engine.restore()
                 self.store.put("operating_mode", self.s.trading_mode)
                 self.store.put("simple_loaded_settings", self.s.simple_parameters())
                 if not once:

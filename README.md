@@ -1,12 +1,15 @@
 # paperfrog
 
-The simple service supports two manually selected strategies: `current` executes
-normal decisions, while `opposite` opens SHORT for a qualifying LONG decision and
-LONG for a qualifying SHORT decision. Use `/strategy` to see the selection and
-commands, `/strategy current` for normal execution, or `/strategy opposite` for
-reversed execution. Selection, results and switch history survive restarts.
-Results never trigger automatic switching. Each switch starts a fresh results
-sample; existing open trades keep their recorded direction and exits.
+The simple service switches automatically between `current` (normal execution)
+and `opposite` (LONG becomes SHORT; SHORT becomes LONG) after **two consecutive
+net losing positions**. A win or breakeven resets the loss streak. Switching resets
+the streak to zero: win, win, loss, loss → switch; loss, loss → switch again.
+Each complete position counts once, including all partial exit fills, estimated
+fees and recorded funding. Trades from an earlier strategy stint do not count
+toward the new stint. Existing open positions keep their recorded direction and exits.
+Automatic mode, selected strategy, streak and switch history survive restarts.
+Installing this policy enables automatic mode on the existing strategy and starts
+a fresh streak from future closures, without seeding historical losses.
 
 The normal signal, AI, slope, BTC and market direction checks run on the original
 decision. Opposite mode reverses it exactly once before sizing and execution.
@@ -17,9 +20,12 @@ AI is explicitly instructed to produce normal decisions without compensating for
 opposite execution. Exact order permissions bind both directions and the current
 strategy epoch; a strategy change before dispatch rejects the entry.
 
-`/strategy` also shows confidence, profit targets and recent switches. Selecting
-the same strategy again leaves its sample and history intact. `/strategy auto`
-is disabled. Selection does not arm LIVE, resume trading or clear locks.
+`/strategy` shows the mode, selected strategy, consecutive loss streak, confidence,
+profit targets and recent switches. `/strategy auto` enables automatic switching
+from the selected strategy with a fresh streak. `/strategy current` and
+`/strategy opposite` select manually and pause automatic switching. Repeating the
+current mode/selection leaves its streak and history intact. A strategy switch
+never arms LIVE, resumes trading, resets financial loss counters or clears locks.
 The production operator configuration uses `SIMPLE_ENTRY_TIMEFRAME=15m`,
 `SIMPLE_AI_REVIEW_MINUTES=15`, and `MAX_CONCURRENT_STRATEGY_TRADES=4`.
 Portfolio risk and margin limits still apply. Defaults remain PAPER.
