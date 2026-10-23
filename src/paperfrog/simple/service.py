@@ -221,7 +221,8 @@ class SimpleService:
                 "market_trend": {
                     "enabled": self.s.simple_market_trend_enabled,
                     "context": self.store.get("simple_market_trend"),
-                    "policy": "4h return, regression, mean and 1h trend must align; market breadth, BTC and ETH must agree over 4h and 1h",
+                    "policy": "coin 4h return, regression, mean and 1h trend must align; current requires aligned market breadth and BTC/ETH; opposite also accepts a verified MIXED market",
+                    "mixed_entries_allowed": rotation.selection(self.store)["active"] == "opposite",
                 },
                 "daily_analysis": {
                     "directory": str(

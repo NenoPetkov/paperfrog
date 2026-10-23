@@ -13,9 +13,17 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 from paperfrog.telegram.formatting import state_label
 
+from . import rotation
 from .adaptive import active_plan, request_limit
 from .bitcoin import direction_gate
-from .market_trend import CONFIRMATION_HOURS, MIN_COVERAGE, MIN_MARKETS, TREND_HOURS, regime
+from .market_trend import (
+    CONFIRMATION_HOURS,
+    MIN_COVERAGE,
+    MIN_MARKETS,
+    TREND_HOURS,
+    regime,
+    regime_allows,
+)
 from .strategy import BAR_MS
 
 READINGS = (
@@ -52,6 +60,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         "reconciled",
         "simple_ai_budget",
         "last_signal",
+        rotation.KEY,
     )
     with store.engine.connect() as conn:
         conn.exec_driver_sql("BEGIN")
@@ -128,6 +137,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
             f"Daily entry limit reached: {sum(counts.values())}/{s.max_strategy_entries_per_day} (resets 00:00 UTC)."
         )
 
+    strategy = (values[rotation.KEY] or {}).get("active", "current")
     market = values["simple_market_trend"]
     fresh_market = False
     if s.simple_market_trend_enabled:
@@ -159,6 +169,9 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
                 f"Ethereum: 4h {market['eth_return_4h']:+.2%} | 1h {market['eth_return_1h']:+.2%}",
             ]
             for side, label in ((1, "LONG"), (-1, "SHORT")):
+                if market["regime"] == "MIXED" and regime_allows("MIXED", side, strategy):
+                    lines.append(f"{label} market check: passed — MIXED allowed in opposite strategy")
+                    continue
                 failed = []
                 index = float(market["bull_index"])
                 if side * (index - 50) <= 0:
@@ -175,9 +188,14 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
                     + ("blocked — " + "; ".join(failed) if failed else "passed")
                 )
             if market["regime"] == "MIXED":
-                blockers.append(
-                    "Market signals disagree or are flat: MIXED permits neither LONG nor SHORT."
-                )
+                if regime_allows("MIXED", 1, strategy):
+                    notes.append(
+                        "Opposite strategy permits MIXED-market entries; coin trend, BTC and risk checks still apply."
+                    )
+                else:
+                    blockers.append(
+                        "Market signals disagree or are flat: MIXED permits neither LONG nor SHORT."
+                    )
             elif s.simple_btc_reference_enabled:
                 side = 1 if market["regime"] == "BULL" else -1
                 btc_reason = direction_gate(s, store, side, now_ms)

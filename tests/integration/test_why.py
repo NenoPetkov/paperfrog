@@ -7,6 +7,7 @@ from sqlalchemy import text
 from test_controls import update
 from test_market_trend import breadth, guarded
 
+from paperfrog.simple import rotation
 from paperfrog.simple.blockers import explain
 from paperfrog.simple.service import SimpleService
 from paperfrog.simple.strategy import BAR_MS
@@ -58,6 +59,21 @@ def test_mixed_explains_exact_conflicting_readings_and_checks(settings, store):
     assert "MIXED permits neither LONG nor SHORT" in output
     assert "EEST" in output and "17:15:00" in output
     assert "config_hash" not in output and '{"' not in output
+
+
+def test_opposite_mixed_reports_permission_and_preserves_risk_blockers(settings, store):
+    s, record = ready(settings, store)
+    rotation.configure(store, "opposite", 0)
+    record.update(regime="MIXED", eth_return_1h=-0.02)
+    store.put("simple_market_trend", record)
+    store.put("risk_lock", {"reason": "three_losses", "until": NOW / 1000 + 60})
+    output = explain(s, store, NOW, False, False)
+    assert "Market: MIXED" in output
+    assert "LONG market check: passed — MIXED allowed in opposite strategy" in output
+    assert "SHORT market check: passed — MIXED allowed in opposite strategy" in output
+    assert "MIXED permits neither" not in output
+    assert "coin trend, BTC and risk checks still apply" in output
+    assert "loss streak cooldown, until" in output
 
 
 @pytest.mark.parametrize("side,label", [(1, "LONG"), (-1, "SHORT")])

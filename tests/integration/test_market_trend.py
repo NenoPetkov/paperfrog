@@ -9,6 +9,7 @@ from test_simple import engine_fixture, source
 
 from paperfrog.domain.types import Order, SafeError
 from paperfrog.settings import Settings
+from paperfrog.simple import rotation
 from paperfrog.simple.market_trend import (
     DAY_FIELDS,
     day_context,
@@ -33,6 +34,14 @@ def breadth(store, s, boundary=BOUNDARY, side=1):
     at = boundary // BAR_MS * BAR_MS
     rows = {symbol: day(boundary, side) for symbol in [*POOL, "BTCUSDT", "ETHUSDT"]}
     record = {**market_context(rows, POOL, at), "config_hash": s.config_hash}
+    store.put("simple_market_trend", record)
+    return record
+
+
+def mixed_breadth(store, s, boundary=BOUNDARY, side=1):
+    record = breadth(store, s, boundary, side)
+    record["eth_return_1h"] *= -1
+    record["regime"] = "MIXED"
     store.put("simple_market_trend", record)
     return record
 
@@ -187,6 +196,67 @@ def test_each_long_horizon_component_is_mandatory(settings, store, side, field):
     assert entry_gate(s, store, row, side, BOUNDARY + 1000) is None
     row[field] *= -1
     assert "coin" in entry_gate(s, store, row, side, BOUNDARY + 1000)
+
+
+@pytest.mark.parametrize("strategy", ["current", "opposite"])
+@pytest.mark.parametrize("side", [1, -1])
+def test_verified_mixed_market_is_allowed_only_for_opposite(settings, store, strategy, side):
+    s = guarded(settings)
+    rotation.configure(store, strategy, 0)
+    mixed_breadth(store, s, side=side)
+    row = {"timestamp_ms": BOUNDARY, **day(side=side)}
+    reason = entry_gate(s, store, row, side, BOUNDARY + 1000)
+    if strategy == "opposite":
+        assert reason is None
+    else:
+        assert "market MIXED" in reason
+
+
+@pytest.mark.parametrize("damage", ["stale", "future", "coverage", "nan", "regime", "coin", "missing"])
+def test_opposite_mixed_permission_still_requires_valid_market_and_coin_context(settings, store, damage):
+    s = guarded(settings)
+    rotation.configure(store, "opposite", 0)
+    record = mixed_breadth(store, s)
+    row = {"timestamp_ms": BOUNDARY, **day()}
+    if damage == "stale":
+        record["timestamp_ms"] -= BAR_MS
+    elif damage == "future":
+        record["timestamp_ms"] += BAR_MS
+    elif damage == "coverage":
+        record["pool_coins"] = 100
+    elif damage == "nan":
+        record["eth_return_1h"] = None
+    elif damage == "regime":
+        record["eth_return_1h"] = 0.02  # All components now say BULL, contradicting MIXED.
+    elif damage == "coin":
+        row["day_return_1h"] *= -1
+    else:
+        record = None
+    store.put("simple_market_trend", record)
+    assert entry_gate(s, store, row, 1, BOUNDARY + 1000)
+
+
+@pytest.mark.parametrize("side", [1, -1])
+def test_mixed_order_permission_is_revoked_after_switching_to_current(settings, store, side):
+    from decimal import Decimal
+
+    s = guarded(settings)
+    rotation.configure(store, "opposite", 0)
+    mixed_breadth(store, s, side=side)
+    order = Order(client_id="pf-mixed", symbol="SOLUSDT", side=-side,
+                  quantity=Decimal(1), limit_price=Decimal(100))
+    store.put("simple_market_order:" + order.client_id, {
+        "row": {"timestamp_ms": BOUNDARY, **day(side=side)},
+        "config_hash": s.config_hash, "order": order.model_dump(mode="json"),
+    })
+    store.put("simple_strategy_order:" + order.client_id, {
+        "order": order.model_dump(mode="json"), "active": "opposite",
+        "epoch": rotation.selection(store)["epoch"], "decision_side": side,
+    })
+    require_order(s, store, order, BOUNDARY + 1000)
+    rotation.configure(store, "current", 1)
+    with pytest.raises(SafeError, match="strategy selection changed"):
+        require_order(s, store, order, BOUNDARY + 1000)
 
 
 @pytest.mark.parametrize("side", [1, -1])
@@ -362,6 +432,24 @@ async def test_ai_receives_day_and_market_evidence_without_old_active_advice(set
     assert "cannot be overridden" in prompt
 
 
+@pytest.mark.parametrize("strategy", ["current", "opposite"])
+def test_ai_mixed_context_follows_selected_strategy(settings, store, strategy):
+    s = guarded(settings, simple_ai_enabled=True)
+    rotation.configure(store, strategy, 0)
+    frame = market()
+    for key, value in day().items():
+        frame[key] = value
+    mixed_breadth(store, s)
+    advisor = Advisor(s, store, fake_client(plan(BOUNDARY)), lambda: BOUNDARY + 1000)
+    if strategy == "current":
+        with pytest.raises(SafeError, match="selected strategy"):
+            advisor.snapshot({"SOLUSDT": frame}, ["SOLUSDT"], BOUNDARY)
+    else:
+        payload = advisor.snapshot({"SOLUSDT": frame}, ["SOLUSDT"], BOUNDARY)
+        assert payload["market_trend"]["regime"] == "MIXED"
+        assert payload["entry_policy"]["strategy"] == "opposite"
+
+
 async def test_live_dispatch_rechecks_market_after_final_quote_and_keeps_exits(
     settings, store, filters, monkeypatch
 ):
@@ -430,6 +518,74 @@ async def test_live_allowed_entry_retains_stop_and_exit_when_market_disappears(
         assert sim.stops and sim.quantity != 0
         store.put("simple_market_trend", None)
         await engine.close("SOLUSDT", engine.broker.now_ms(), "operator requested flatten")
+        assert sim.quantity == 0 and not engine.positions()
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("strategy", ["current", "opposite"])
+async def test_fifteen_minute_candidate_scan_respects_selected_mixed_policy(settings, monkeypatch, strategy):
+    import paperfrog.simple.service as module
+
+    s = settings.model_copy(update={"simple_market_trend_enabled": True})
+    service = SimpleService(s)
+    boundary = BOUNDARY // BAR_MS * BAR_MS
+    service.now_ms = lambda: BOUNDARY + 1000
+    rotation.configure(service.store, strategy, 0)
+    service.exchange.sync_time = AsyncMock()
+    monkeypatch.setattr(module, "scan", AsyncMock(return_value={"symbols": POOL}))
+
+    async def candles(_exchange, _lake, symbol, *_):
+        raw = source(288, side=-1 if symbol == "ETHUSDT" else 1)
+        raw["timestamp_ms"] += boundary - int(raw.iloc[-1].timestamp_ms)
+        return raw
+
+    monkeypatch.setattr(module, "candles", candles)
+    audit = service.store.audit
+
+    def finish(kind, payload, *args):
+        audit(kind, payload, *args)
+        if kind == "simple_selection":
+            service.stop.set()
+
+    service.store.audit = finish
+    try:
+        await service.research()
+        assert service.store.get("simple_market_trend")["regime"] == "MIXED"
+        assert bool(service.selected) is (strategy == "opposite")
+    finally:
+        await service.exchange.close()
+        service.store.engine.dispose()
+
+
+@pytest.mark.parametrize("side", [1, -1])
+async def test_opposite_fifteen_minute_live_entry_trades_mixed_with_stop_and_exit(
+    settings, store, filters, monkeypatch, side
+):
+    import time
+
+    from test_simple_live import setup_engine
+
+    fixed_now = int(time.time() * 1000) // 7_200_000 * 7_200_000 + 1000
+    monkeypatch.setattr(time, "time", lambda: fixed_now / 1000)
+    engine, sim, adapter, obs, now = await setup_engine(
+        settings, store, filters, simple_market_trend_enabled=True,
+    )
+    rotation.configure(store, "opposite", now)
+    obs.update(day(now, side))
+    if side < 0:
+        obs.update(trend_atr=-2, flow=-0.4, prior_low=101)
+    mixed_breadth(store, engine.s, now, side)
+    try:
+        await engine.enter("SOLUSDT", obs, now)
+        trade = engine.positions()["SOLUSDT"]
+        assert trade["side"] == -side and trade["decision_side"] == side
+        assert sim.quantity * side < 0
+        assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+        assert store.get("live_stops")["SOLUSDT"]["side"] == -side
+        assert sum(method == "POST" and path.endswith("/order") for method, path in sim.calls) == 1
+        store.put("simple_market_trend", None)
+        await engine.close("SOLUSDT", engine.broker.now_ms(), "test protective close")
         assert sim.quantity == 0 and not engine.positions()
     finally:
         await adapter.close()

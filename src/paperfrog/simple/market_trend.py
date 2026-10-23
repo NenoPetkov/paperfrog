@@ -12,7 +12,7 @@ from paperfrog.domain.types import EntryVeto, Order, SafeError
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
-from .rotation import decision_side
+from .rotation import decision_side, selection
 from .strategy import BAR_MS
 
 DAY_BARS = 16
@@ -44,6 +44,14 @@ def regime(
     if index < 50 and max(median, btc, eth, median_1h, btc_1h, eth_1h) < 0:
         return "BEAR"
     return "MIXED"
+
+
+def regime_allows(market_regime: str, side: int, strategy: str) -> bool:
+    """Opposite execution also accepts a verified MIXED broad market."""
+    return side in (-1, 1) and (
+        market_regime == ("BULL" if side > 0 else "BEAR")
+        or (market_regime == "MIXED" and strategy == "opposite")
+    )
 
 
 def day_context(frame: pd.DataFrame, boundary: int) -> dict[str, float | int]:
@@ -78,7 +86,8 @@ def market_context(
 
     Bull index = percent of covered pool coins up over 4h. BULL requires an
     advancing majority, positive median/BTC/ETH returns over BOTH 4h and 1h.
-    BEAR is symmetric. Conflicting horizons are MIXED and permit neither side.
+    BEAR is symmetric. Conflicting horizons are MIXED; only opposite execution
+    can enter that regime, after all other entry checks pass.
     """
     members = list(dict.fromkeys(pool))
 
@@ -170,7 +179,7 @@ def entry_gate(
         or market.get("regime") != regime(*(float(market[key]) for key in fields[:7]))
     ):
         return "broad market trend invalid; new entries blocked"
-    if market.get("regime") != ("BULL" if side > 0 else "BEAR"):
+    if not regime_allows(market["regime"], side, selection(store)["active"]):
         return f"market {market.get('regime', 'UNKNOWN')}; {label} requires aligned breadth and BTC/ETH over 4h and 1h"
     return None
 

@@ -21,7 +21,7 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
 from . import rotation
-from .market_trend import DAY_FIELDS
+from .market_trend import DAY_FIELDS, regime_allows
 from .strategy import BAR_MS, Rules, execution_rules
 
 Feature = Literal[
@@ -316,8 +316,10 @@ market_trend.bull_index is the percent of the liquid scan pool up over 4h,
 calculated BEFORE directional selection; it is breadth, not a sentiment forecast.
 LONG requires BULL: an advancing 4h majority, positive median returns over BOTH
 4h and 1h, and positive BTC and ETH returns over BOTH 4h and 1h.
-SHORT requires the symmetric BEAR regime. MIXED or
-missing/stale context permits neither side. These gates cannot be overridden.
+SHORT requires the symmetric BEAR regime. When entry_policy.strategy is opposite,
+a verified MIXED market also permits either normal decision before execution reverses it.
+Current execution blocks MIXED. Coin trend, BTC, cost and risk checks still apply in
+either strategy. Missing/stale context permits neither side. These gates cannot be overridden.
 Use each market's day_trend and the broad market_trend alongside recent bars.
 """
     if s.simple_entry_profile == "active":
@@ -383,9 +385,12 @@ class Advisor:
             not isinstance(broad_market, dict)
             or broad_market.get("config_hash") != self.s.config_hash
             or broad_market.get("timestamp_ms") != asof_ms // BAR_MS * BAR_MS
-            or broad_market.get("regime") not in {"BULL", "BEAR"}
+            or not any(
+                regime_allows(broad_market.get("regime", ""), side, strategy)
+                for side in (-1, 1)
+            )
         ):
-            raise SafeError("adaptive AI needs current aligned broad-market context")
+            raise SafeError("adaptive AI needs current broad-market context permitted by the selected strategy")
         markets = []
         for symbol in selected:
             if not re.fullmatch(r"[A-Z0-9]{2,24}USDT", symbol):

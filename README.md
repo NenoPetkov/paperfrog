@@ -56,8 +56,12 @@ and separate BTC/ETH context. **BULL** requires an index above 50, positive
 median returns over both 4h and 1h, and positive BTC and ETH returns over both
 horizons. **BEAR** is symmetric;
 conflicting or exactly flat evidence is **MIXED**. The normal LONG decision needs BULL and normal SHORT needs
-BEAR; opposite execution reverses the resulting order. This is a transparent breadth measure, not an external sentiment index or
-calibrated prediction. A MIXED market can legitimately produce no entries.
+BEAR; opposite execution reverses the resulting order. Opposite also accepts a
+verified **MIXED** broad market for either qualifying normal direction. The coin's
+own 4h/1h trend, BTC checks, fresh data, costs, sizing and risk limits still apply.
+Current execution continues to block MIXED. Missing, stale, incomplete or
+inconsistent market data blocks both strategies. This is a transparent breadth
+measure, not an external sentiment index or calibrated prediction.
 
 The independent veto runs during candidate selection, signal evaluation and
 immediately before live submission, using current context and order-bound

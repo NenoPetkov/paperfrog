@@ -140,6 +140,7 @@ def describe(store: Store, timezone: str) -> str:
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
         "/strategy current — normal execution: LONG → LONG, SHORT → SHORT.",
         "/strategy opposite — reverse execution: LONG → SHORT, SHORT → LONG.",
+        "Opposite also permits MIXED markets; current requires BULL/BEAR alignment.",
         "Selection applies to new entries and survives restarts. Automatic switching is disabled.",
         "Recent switches:",
     ]
