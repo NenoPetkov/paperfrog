@@ -241,6 +241,9 @@ class LiveBroker:
             self.validate_stop(result, symbol, existing)
             if result.get("algoStatus") != "NEW":
                 raise SafeError("hosted protection is not active; reconcile execution")
+            if existing.get("state") != "CONFIRMED":
+                existing["state"] = "CONFIRMED"
+                self.store.put("live_stops", stops)
             # Retain the hosted initial stop throughout the trade. Tighter ATR exits are
             # monitored by Engine; no cancel/recreate window can leave the position naked.
             return
@@ -259,8 +262,14 @@ class LiveBroker:
         self.store.put("live_stops", stops)
 
     async def stop_fill(self, symbol: str) -> Fill | None:
+        if symbol not in self.store.get("simple_positions", {}):
+            return None
+        return await self.protection_fill(symbol)
+
+    async def protection_fill(self, symbol: str) -> Fill | None:
+        """Read an original hosted stop, including an entry awaiting recovery."""
         stop = self.store.get("live_stops", {}).get(symbol)
-        if stop is None or symbol not in self.store.get("simple_positions", {}):
+        if stop is None:
             return None
         result = await self.query_stop(stop["key"])
         self.validate_stop(result, symbol, stop)
@@ -273,6 +282,7 @@ class LiveBroker:
             if fill.status == "FILLED":
                 if (
                     fill.symbol != symbol
+                    or fill.exchange_id != str(actual_id)
                     or fill.side != -stop["side"]
                     or fill.quantity <= 0
                     or fill.price <= 0

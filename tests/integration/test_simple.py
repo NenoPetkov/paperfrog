@@ -139,7 +139,7 @@ def test_active_entries_accept_weaker_alignment_but_require_confirming_flow(dire
     assert entry(x, 0.001, rules=ACTIVE_RULES)[0] == direction
     x["flow"] *= -1
     assert entry(x, 0.001, rules=ACTIVE_RULES)[0] == 0
-    x["flow"] = direction * 0.02
+    x["flow"] = direction * 0.01
     assert entry(x, 0.001, rules=ACTIVE_RULES)[0] == 0
 
 
@@ -150,7 +150,9 @@ def test_active_profile_preserves_defaults_and_protective_rules(settings):
     active = settings.model_copy(update={"simple_entry_profile": "active"})
     assert execution_rules(active) == ACTIVE_RULES
     changed = {key for key, value in RULES.public().items() if ACTIVE_RULES.public()[key] != value}
-    assert changed == {"version", "breakout_bars", "minimum_trend_atr", "minimum_flow"}
+    assert changed == {
+        "version", "fast_ema", "slow_ema", "breakout_bars", "minimum_trend_atr", "minimum_flow"
+    }
     for mode in ("reverse", "failed_breakout"):
         from paperfrog.settings import Settings
 

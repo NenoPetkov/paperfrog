@@ -5,7 +5,7 @@ COMMAND_DESCRIPTIONS = {
     "/status": "Current bot state and open positions",
     "/strategy": "Current strategy, confidence and switch history",
     "/summary": "Previous 24h: wins, losses, PnL, errors and locks",
-    "/why": "Explain current entry blockers and the 12h/2h market trend",
+    "/why": "Explain current entry blockers and the 4h/1h market trend",
     "/positions": "Show open positions",
     "/orders": "Show recent order states",
     "/risk": "Show risk limits, current locks and account diagnostics",

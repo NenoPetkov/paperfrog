@@ -15,16 +15,16 @@ from paperfrog.telegram.formatting import state_label
 
 from .adaptive import active_plan, request_limit
 from .bitcoin import direction_gate
-from .market_trend import MIN_COVERAGE, MIN_MARKETS, regime
+from .market_trend import CONFIRMATION_HOURS, MIN_COVERAGE, MIN_MARKETS, TREND_HOURS, regime
 from .strategy import BAR_MS
 
 READINGS = (
-    ("median_return_12h", "Market median 12h"),
-    ("btc_return_12h", "Bitcoin 12h"),
-    ("eth_return_12h", "Ethereum 12h"),
-    ("median_return_2h", "Market median 2h"),
-    ("btc_return_2h", "Bitcoin 2h"),
-    ("eth_return_2h", "Ethereum 2h"),
+    ("median_return_4h", "Market median 4h"),
+    ("btc_return_4h", "Bitcoin 4h"),
+    ("eth_return_4h", "Ethereum 4h"),
+    ("median_return_1h", "Market median 1h"),
+    ("btc_return_1h", "Bitcoin 1h"),
+    ("eth_return_1h", "Ethereum 1h"),
 )
 
 
@@ -137,8 +137,8 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
                 all(math.isfinite(value) for value in nums)
                 and 0 <= nums[0] <= 100
                 and market.get("config_hash") == s.config_hash
-                and market.get("trend_hours") == 12
-                and market.get("confirmation_hours") == 2
+                and market.get("trend_hours") == TREND_HOURS
+                and market.get("confirmation_hours") == CONFIRMATION_HOURS
                 and 0 <= now_ms - int(market["timestamp_ms"]) < BAR_MS
                 and MIN_MARKETS <= int(market["covered_coins"]) <= int(market["pool_coins"])
                 and int(market["covered_coins"]) >= MIN_COVERAGE * int(market["pool_coins"])
@@ -147,23 +147,23 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         except (KeyError, TypeError, ValueError, OverflowError):
             fresh_market = False
         if not fresh_market:
-            lines += ["", "Market: waiting for fresh 12h/2h data."]
+            lines += ["", "Market: waiting for fresh 4h/1h data."]
             blockers.append("Market trend data is missing, stale or from an older rule version.")
         else:
             lines += [
                 "",
                 f"Market: {market['regime']} · candles closed {stamp(market['timestamp_ms'])}",
-                f"Coins up over 12h: {market['bull_index']:.1f}% · coverage {market['covered_coins']}/{market['pool_coins']}",
-                f"Market median: 12h {market['median_return_12h']:+.2%} | 2h {market['median_return_2h']:+.2%}",
-                f"Bitcoin: 12h {market['btc_return_12h']:+.2%} | 2h {market['btc_return_2h']:+.2%}",
-                f"Ethereum: 12h {market['eth_return_12h']:+.2%} | 2h {market['eth_return_2h']:+.2%}",
+                f"Coins up over 4h: {market['bull_index']:.1f}% · coverage {market['covered_coins']}/{market['pool_coins']}",
+                f"Market median: 4h {market['median_return_4h']:+.2%} | 1h {market['median_return_1h']:+.2%}",
+                f"Bitcoin: 4h {market['btc_return_4h']:+.2%} | 1h {market['btc_return_1h']:+.2%}",
+                f"Ethereum: 4h {market['eth_return_4h']:+.2%} | 1h {market['eth_return_1h']:+.2%}",
             ]
             for side, label in ((1, "LONG"), (-1, "SHORT")):
                 failed = []
                 index = float(market["bull_index"])
                 if side * (index - 50) <= 0:
                     failed.append(
-                        f"12h advancing coins must be {'above' if side > 0 else 'below'} 50% (now {index:.1f}%)"
+                        f"4h advancing coins must be {'above' if side > 0 else 'below'} 50% (now {index:.1f}%)"
                     )
                 failed += [
                     f"{name} is {'flat' if float(market[key]) == 0 else 'negative' if float(market[key]) < 0 else 'positive'} ({float(market[key]):+.2%})"
@@ -184,13 +184,13 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
                 if btc_reason:
                     blockers.append(btc_reason + ".")
     else:
-        lines += ["", "The 12h/2h market filter is disabled."]
+        lines += ["", "The 4h/1h market filter is disabled."]
 
     selected = values["simple_selected"] or []
     current_scan = (
         selection.get("entry_timeframe", "15m") == s.simple_entry_timeframe
-        and selection.get("trend_hours") == 12
-        and selection.get("confirmation_hours") == 2
+        and selection.get("trend_hours") == TREND_HOURS
+        and selection.get("confirmation_hours") == CONFIRMATION_HOURS
         and 0 <= now_ms - int(selection.get("asof_ms", 0)) < s.simple_entry_bar_ms
     )
     if s.simple_market_trend_enabled:
@@ -201,7 +201,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         )
     lines += ["", f"Eligible candidates: {len(selected)}"]
     if not current_scan:
-        blockers.append("Waiting for the next fresh entry scan using the 12h/2h rules.")
+        blockers.append("Waiting for the next fresh entry scan using the 4h/1h rules.")
     elif not selected:
         blockers.append("No coin passed the entry and trend filters in the latest scan.")
     if current_scan:

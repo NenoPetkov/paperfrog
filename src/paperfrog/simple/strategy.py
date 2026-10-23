@@ -107,10 +107,12 @@ class Rules:
 RULES = Rules()
 ACTIVE_RULES = replace(
     RULES,
-    version="simple-trend-active-v1",
-    breakout_bars=8,
-    minimum_trend_atr=0.4,
-    minimum_flow=0.03,
+    version="simple-trend-active-v2",
+    fast_ema=8,
+    slow_ema=24,
+    breakout_bars=4,
+    minimum_trend_atr=0.3,
+    minimum_flow=0.02,
 )
 
 

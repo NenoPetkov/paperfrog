@@ -309,13 +309,13 @@ an actual downward breakout. A POSITIVE breakout_up_atr means price closed above
     if s.simple_market_trend_enabled:
         prompt += """
 An immutable day/market gate vetoes every new entry independently of your rules.
-LONG requires the coin's 12h return, 12h regression slope, price versus its 12h
-mean, and 2h return ALL positive. SHORT requires all negative. A brief rebound
+LONG requires the coin's 4h return, 4h regression slope, price versus its 4h
+mean, and 1h return ALL positive. SHORT requires all negative. A brief rebound
 inside a falling day does not qualify as a LONG; the symmetric rule applies to SHORT.
-market_trend.bull_index is the percent of the liquid scan pool up over 12h,
+market_trend.bull_index is the percent of the liquid scan pool up over 4h,
 calculated BEFORE directional selection; it is breadth, not a sentiment forecast.
-LONG requires BULL: an advancing 12h majority, positive median returns over BOTH
-12h and 2h, and positive BTC and ETH returns over BOTH 12h and 2h.
+LONG requires BULL: an advancing 4h majority, positive median returns over BOTH
+4h and 1h, and positive BTC and ETH returns over BOTH 4h and 1h.
 SHORT requires the symmetric BEAR regime. MIXED or
 missing/stale context permits neither side. These gates cannot be overridden.
 Use each market's day_trend and the broad market_trend alongside recent bars.

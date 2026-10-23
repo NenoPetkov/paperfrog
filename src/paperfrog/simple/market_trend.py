@@ -1,4 +1,4 @@
-"""Independent 12h/2h coin and broad market vetoes for new entries only."""
+"""Independent 4h/1h coin and broad market vetoes for new entries only."""
 
 from __future__ import annotations
 
@@ -15,12 +15,12 @@ from paperfrog.storage.database import Store
 from .rotation import decision_side
 from .strategy import BAR_MS
 
-DAY_BARS = 48
-TREND_HOURS = 12
-CONFIRMATION_HOURS = 2
+DAY_BARS = 16
+TREND_HOURS = 4
+CONFIRMATION_HOURS = 1
 MIN_MARKETS = 20
 MIN_COVERAGE = 0.8
-DAY_FIELDS = ("day_return_12h", "day_return_2h", "day_slope_12h", "day_mean_distance_12h")
+DAY_FIELDS = ("day_return_4h", "day_return_1h", "day_slope_4h", "day_mean_distance_4h")
 
 
 def finite(row: dict[str, Any], keys: tuple[str, ...]) -> bool:
@@ -35,19 +35,19 @@ def regime(
     median: float,
     btc: float,
     eth: float,
-    median_2h: float,
-    btc_2h: float,
-    eth_2h: float,
+    median_1h: float,
+    btc_1h: float,
+    eth_1h: float,
 ) -> str:
-    if index > 50 and min(median, btc, eth, median_2h, btc_2h, eth_2h) > 0:
+    if index > 50 and min(median, btc, eth, median_1h, btc_1h, eth_1h) > 0:
         return "BULL"
-    if index < 50 and max(median, btc, eth, median_2h, btc_2h, eth_2h) < 0:
+    if index < 50 and max(median, btc, eth, median_1h, btc_1h, eth_1h) < 0:
         return "BEAR"
     return "MIXED"
 
 
 def day_context(frame: pd.DataFrame, boundary: int) -> dict[str, float | int]:
-    """Use 49 closed quarter-hour prices: exactly 12 hours, without future bars."""
+    """Use 17 closed quarter-hour prices: exactly 4 hours, without future bars."""
     x = frame[frame.timestamp_ms <= boundary].tail(DAY_BARS + 1)
     if (
         boundary % BAR_MS
@@ -56,18 +56,18 @@ def day_context(frame: pd.DataFrame, boundary: int) -> dict[str, float | int]:
         or int(x.iloc[0].timestamp_ms) != boundary - DAY_BARS * BAR_MS
         or (x.timestamp_ms.diff().dropna() != BAR_MS).any()
     ):
-        raise SafeError("complete consecutive closed 12-hour trend history required")
+        raise SafeError("complete consecutive closed 4-hour trend history required")
     prices = x.close.to_numpy(dtype=float)
     if not np.isfinite(prices).all() or (prices <= 0).any():
-        raise SafeError("invalid 12-hour trend prices")
+        raise SafeError("invalid 4-hour trend prices")
     times = np.arange(DAY_BARS + 1, dtype=float) - DAY_BARS / 2
     slope = float(np.dot(times, prices - prices.mean()) / np.dot(times, times))
     return {
         "day_context_ms": boundary,
-        "day_return_12h": float(prices[-1] / prices[0] - 1),
-        "day_return_2h": float(prices[-1] / prices[-9] - 1),
-        "day_slope_12h": slope * DAY_BARS / float(prices.mean()),
-        "day_mean_distance_12h": float(prices[-1] / prices[1:].mean() - 1),
+        "day_return_4h": float(prices[-1] / prices[0] - 1),
+        "day_return_1h": float(prices[-1] / prices[-5] - 1),
+        "day_slope_4h": slope * DAY_BARS / float(prices.mean()),
+        "day_mean_distance_4h": float(prices[-1] / prices[1:].mean() - 1),
     }
 
 
@@ -76,8 +76,8 @@ def market_context(
 ) -> dict[str, Any]:
     """Equal-weight breadth over the liquidity pool BEFORE directional selection.
 
-    Bull index = percent of covered pool coins up over 12h. BULL requires an
-    advancing majority, positive median/BTC/ETH returns over BOTH 12h and 2h.
+    Bull index = percent of covered pool coins up over 4h. BULL requires an
+    advancing majority, positive median/BTC/ETH returns over BOTH 4h and 1h.
     BEAR is symmetric. Conflicting horizons are MIXED and permit neither side.
     """
     members = list(dict.fromkeys(pool))
@@ -93,24 +93,24 @@ def market_context(
         or any(symbol not in rows or not valid(rows[symbol]) for symbol in ("BTCUSDT", "ETHUSDT"))
     ):
         raise SafeError("broad market trend needs BTC, ETH and at least 80% of 20+ pool coins")
-    returns = [float(row["day_return_12h"]) for row in usable]
+    returns = [float(row["day_return_4h"]) for row in usable]
     bull_index = 100 * sum(value > 0 for value in returns) / len(returns)
     median = float(np.median(returns))
-    btc, eth = (float(rows[symbol]["day_return_12h"]) for symbol in ("BTCUSDT", "ETHUSDT"))
-    median_2h = float(np.median([row["day_return_2h"] for row in usable]))
-    btc_2h, eth_2h = (float(rows[symbol]["day_return_2h"]) for symbol in ("BTCUSDT", "ETHUSDT"))
+    btc, eth = (float(rows[symbol]["day_return_4h"]) for symbol in ("BTCUSDT", "ETHUSDT"))
+    median_1h = float(np.median([row["day_return_1h"] for row in usable]))
+    btc_1h, eth_1h = (float(rows[symbol]["day_return_1h"]) for symbol in ("BTCUSDT", "ETHUSDT"))
     return {
         "timestamp_ms": boundary,
         "trend_hours": TREND_HOURS,
         "confirmation_hours": CONFIRMATION_HOURS,
-        "regime": regime(bull_index, median, btc, eth, median_2h, btc_2h, eth_2h),
+        "regime": regime(bull_index, median, btc, eth, median_1h, btc_1h, eth_1h),
         "bull_index": bull_index,
-        "median_return_12h": median,
-        "median_return_2h": median_2h,
-        "btc_return_12h": btc,
-        "eth_return_12h": eth,
-        "btc_return_2h": btc_2h,
-        "eth_return_2h": eth_2h,
+        "median_return_4h": median,
+        "median_return_1h": median_1h,
+        "btc_return_4h": btc,
+        "eth_return_4h": eth,
+        "btc_return_1h": btc_1h,
+        "eth_return_1h": eth_1h,
         "covered_coins": len(usable),
         "pool_coins": len(members),
     }
@@ -129,14 +129,14 @@ def entry_gate(
         context_at = int(row["day_context_ms"])
         complete = all(math.isfinite(float(row[key])) for key in DAY_FIELDS)
     except (KeyError, TypeError, ValueError, OverflowError):
-        return "coin 12-hour trend missing or invalid; new entries blocked"
+        return "coin 4-hour trend missing or invalid; new entries blocked"
     if not complete or context_at != expected or not 0 <= now_ms - context_at < BAR_MS:
-        return "coin 12-hour trend stale or future dated; new entries blocked"
+        return "coin 4-hour trend stale or future dated; new entries blocked"
     for key, description in (
-        ("day_return_12h", "12-hour return"),
-        ("day_slope_12h", "12-hour regression trend"),
-        ("day_mean_distance_12h", "price versus the 12-hour mean"),
-        ("day_return_2h", "two-hour return"),
+        ("day_return_4h", "4-hour return"),
+        ("day_slope_4h", "4-hour regression trend"),
+        ("day_mean_distance_4h", "price versus the 4-hour mean"),
+        ("day_return_1h", "one-hour return"),
     ):
         if side * float(row[key]) <= 0:
             return f"coin {description} opposes {label} ({float(row[key]):+.2%})"
@@ -144,18 +144,20 @@ def entry_gate(
     if (
         not isinstance(market, dict)
         or market.get("config_hash") != s.config_hash
+        or market.get("trend_hours") != TREND_HOURS
+        or market.get("confirmation_hours") != CONFIRMATION_HOURS
         or market.get("timestamp_ms") != context_at
         or not 0 <= now_ms - int(market.get("timestamp_ms", 0)) < BAR_MS
     ):
         return "broad market trend missing or stale; new entries blocked"
     fields = (
         "bull_index",
-        "median_return_12h",
-        "btc_return_12h",
-        "eth_return_12h",
-        "median_return_2h",
-        "btc_return_2h",
-        "eth_return_2h",
+        "median_return_4h",
+        "btc_return_4h",
+        "eth_return_4h",
+        "median_return_1h",
+        "btc_return_1h",
+        "eth_return_1h",
         "covered_coins",
         "pool_coins",
     )
@@ -169,7 +171,7 @@ def entry_gate(
     ):
         return "broad market trend invalid; new entries blocked"
     if market.get("regime") != ("BULL" if side > 0 else "BEAR"):
-        return f"market {market.get('regime', 'UNKNOWN')}; {label} requires aligned breadth and BTC/ETH over 12h and 2h"
+        return f"market {market.get('regime', 'UNKNOWN')}; {label} requires aligned breadth and BTC/ETH over 4h and 1h"
     return None
 
 

@@ -93,7 +93,7 @@ async def test_service_exposes_locked_strategy_and_confidence(settings):
         rotation.initialize(service.store, "base", 0)
         service.engine = object()
         response = await service.strategy_control("current")
-        assert "current" in response and "disabled" in response and "0.15%" in response
+        assert "current" in response and "disabled" in response and "0.30%" in response
         with pytest.raises(SafeError):
             await service.strategy_control("auto")
     finally:

@@ -159,6 +159,8 @@ class Engine:
                 if symbol in self.positions():
                     continue
                 journal = self.store.get("trade:" + intent["id"], {})
+                if journal.get("execution_complete") is not True:
+                    journal = await self.recover_pending_entry(symbol, intent, journal)
                 if (
                     journal.get("execution_complete") is not True
                     or len(journal.get("fills", [])) != 1
@@ -172,6 +174,8 @@ class Engine:
                     raise SafeError("invalid journaled entry fill; account remains paused")
                 self.record_entry(symbol, fill, intent)
             await self.recover_closings()
+            if self.positions():
+                await self.broker.refresh_funding(self.broker.now_ms())
             for symbol in list(self.positions()):
                 stop_fill = await self.broker.stop_fill(symbol)
                 if stop_fill is not None:
@@ -200,6 +204,79 @@ class Engine:
                 if lock
                 else "startup reconciliation complete; waiting for fresh market data",
             )
+
+    async def recover_pending_entry(
+        self, symbol: str, intent: dict[str, Any], journal: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Verify a filled entry and its original stop after a protection timeout.
+
+        Only reads of original exchange identities are allowed here. An absent,
+        partial or mismatched execution/protection never authorizes a new entry.
+        """
+        assert isinstance(self.broker, LiveBroker)
+        if len(journal.get("orders", [])) != 1 or len(journal.get("fills", [])) > 1:
+            raise SafeError("incomplete entry identities; account remains paused")
+        order = Order.model_validate(journal["orders"][0])
+        if (
+            order.reduce_only
+            or order.symbol != symbol
+            or order.side != intent["side"]
+            or order.client_id != client_id(intent["id"], symbol)
+            or journal.get("entry_vetoed_before_submission")
+        ):
+            raise SafeError("pending entry identity mismatch; account remains paused")
+        if journal.get("fills"):
+            saved = Fill.model_validate(journal["fills"][0])
+            if saved.quantity <= 0 or saved.price <= 0:
+                raise SafeError("invalid journaled entry fill; account remains paused")
+        fill = await self.broker.query(symbol, order.client_id)
+        if (
+            fill.client_id != order.client_id
+            or fill.symbol != symbol
+            or fill.side != order.side
+            or fill.status != "FILLED"
+            or fill.quantity != order.quantity
+            or fill.quantity <= 0
+            or fill.price <= 0
+            or (
+                journal.get("fills")
+                and Fill.model_validate(journal["fills"][0]) != fill
+            )
+        ):
+            raise SafeError("original entry fill is incomplete or changed; account remains paused")
+        stop = self.store.get("live_stops", {}).get(symbol, {})
+        trigger = self.filters[symbol].round_price(
+            fill.price * (1 - Decimal(str(intent["stop_fraction"])) * fill.side)
+        )
+        if (
+            stop.get("key") != client_id(intent["id"], "stop-0")
+            or stop.get("side") != fill.side
+            or Decimal(stop.get("trigger", "0")) != trigger
+        ):
+            raise SafeError("original entry protection missing or changed; account remains paused")
+        stop_fill = await self.broker.protection_fill(symbol)
+        actual = (await self.broker.positions()).get(symbol, Decimal(0))
+        if stop_fill is None:
+            if actual != fill.quantity * fill.side:
+                raise SafeError("protected entry quantity mismatch; account remains paused")
+            await self.broker.protect(symbol, fill.side, trigger, stop["key"])
+            await self.broker.verify_liquidation(float(intent["stop_fraction"]))
+        elif stop_fill.quantity != fill.quantity or actual != 0:
+            raise SafeError("original protective exit is incomplete; account remains paused")
+        journal = {
+            **journal,
+            "fills": [fill.model_dump(mode="json")],
+            "execution_complete": True,
+            "recovered_after_protection_timeout": True,
+        }
+        with self.store.transaction() as conn:
+            self.store.put("trade:" + intent["id"], journal, conn)
+            self.store.audit(
+                "simple_pending_entry_verified",
+                {"trade_id": intent["id"], "symbol": symbol, "hosted_stop_filled": stop_fill is not None},
+                conn,
+            )
+        return journal
 
     async def recover_execution(self) -> bool:
         """Release a resolved execution fault, preserving every financial and manual lock."""

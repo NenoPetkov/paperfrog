@@ -202,3 +202,79 @@ async def test_already_reconciled_close_does_not_leave_stale_execution_latch(set
         assert await engine.recover_execution() is False
     finally:
         await adapter.close()
+
+
+@pytest.mark.parametrize("stop_fired", [False, True])
+@pytest.mark.parametrize("fill_journaled", [False, True])
+async def test_protection_timeout_recovers_original_entry_and_stop_without_resubmission(
+    settings, store, filters, monkeypatch, stop_fired, fill_journaled
+):
+    engine, sim, adapter, obs, now = await setup_engine(settings, store, filters)
+    original = engine.broker.query_stop
+
+    async def timeout_after_stop_created(key):
+        raise TimeoutError()
+
+    try:
+        monkeypatch.setattr(engine.broker, "query_stop", timeout_after_stop_created)
+        with pytest.raises(TimeoutError):
+            await engine.enter("SOLUSDT", obs, now)
+        assert store.get("state") == State.ERROR_SAFE
+        intent = store.get("simple_pending")["SOLUSDT"]
+        journal = store.get("trade:" + intent["id"])
+        assert not journal["execution_complete"]
+        if not fill_journaled:
+            journal["fills"] = []
+            store.put("trade:" + intent["id"], journal)
+        monkeypatch.setattr(engine.broker, "query_stop", original)
+        if stop_fired:
+            sim.fire_stop()
+        posts = sum(method == "POST" for method, _ in sim.calls)
+        assert await engine.recover_execution() is True
+        assert not store.get("simple_pending")
+        assert store.get("trade:" + intent["id"])["execution_complete"]
+        assert sum(method == "POST" for method, _ in sim.calls) == posts
+        if stop_fired:
+            assert not engine.positions() and not sim.quantity
+            assert not store.get("live_stops")
+            assert len(store.get("simple_closed")) == 1
+            await engine.restore(recover_state=False)
+            assert len(store.get("simple_closed")) == 1
+        else:
+            assert Decimal(engine.positions()["SOLUSDT"]["quantity"]) == sim.quantity
+            assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+        assert store.get("reconciled") is True
+    finally:
+        await adapter.close()
+
+
+@pytest.mark.parametrize("fault", ["missing_stop", "changed_fill", "partial_stop"])
+async def test_protection_timeout_cannot_recover_unverified_execution(
+    settings, store, filters, monkeypatch, fault
+):
+    engine, sim, adapter, obs, now = await setup_engine(settings, store, filters)
+    original = engine.broker.query_stop
+
+    async def timeout_after_stop_created(key):
+        raise TimeoutError()
+
+    try:
+        monkeypatch.setattr(engine.broker, "query_stop", timeout_after_stop_created)
+        with pytest.raises(TimeoutError):
+            await engine.enter("SOLUSDT", obs, now)
+        monkeypatch.setattr(engine.broker, "query_stop", original)
+        if fault == "missing_stop":
+            sim.stops.clear()
+        elif fault == "changed_fill":
+            next(iter(sim.orders.values()))["avgPrice"] = "105"
+        else:
+            sim.fire_stop()
+            list(sim.orders.values())[-1]["executedQty"] = "0.001"
+        posts = sum(method == "POST" for method, _ in sim.calls)
+        with pytest.raises(SafeError):
+            await engine.recover_execution()
+        assert store.get("state") == State.ERROR_SAFE
+        assert store.get("simple_pending") and not engine.positions()
+        assert sum(method == "POST" for method, _ in sim.calls) == posts
+    finally:
+        await adapter.close()

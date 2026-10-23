@@ -21,26 +21,40 @@ strategy epoch; a strategy change before dispatch rejects the entry.
 `/strategy` shows selection, sample and recent switches. `/strategy current` and
 `/strategy opposite` select manually and disable automatic switching; `/strategy
 auto` enables it again. Selection does not arm LIVE, resume trading or clear locks.
-The production operator configuration uses `SIMPLE_ENTRY_TIMEFRAME=5m`,
-`SIMPLE_AI_REVIEW_MINUTES=5`, and `MAX_CONCURRENT_STRATEGY_TRADES=4`.
+The production operator configuration uses `SIMPLE_ENTRY_TIMEFRAME=15m`,
+`SIMPLE_AI_REVIEW_MINUTES=15`, and `MAX_CONCURRENT_STRATEGY_TRADES=4`.
 Portfolio risk and margin limits still apply. Defaults remain PAPER.
 
-## Twelve-hour trend, two-hour confirmation and market breadth
+The active profile uses EMA 8/24, a four-bar breakout range, minimum trend
+separation of 0.3 ATR and confirming taker flow of 0.02. This reacts sooner than
+the previous EMA 16/48, eight-bar range, 0.4 ATR and 0.03 flow profile. Entries
+still require completed candles, fresh quotes, aligned coin/market trends and
+the existing independent BTC, liquidity and risk gates. Prices are monitored
+every five seconds for exits. These settings cannot guarantee entry timing or profits.
+
+If entry protection confirmation times out after a fill, recovery queries the
+original entry and hosted stop. It accepts only a full matching entry with either
+verified active protection and matching exchange exposure, or a full matching
+protective exit and a flat symbol. It never resubmits the entry or invents an exit.
+Missing or inconsistent evidence keeps trading paused. A recovered stop outcome
+is journaled once, preserving risk locks, loss history and equity anchors.
+
+## Four-hour trend, one-hour confirmation and market breadth
 
 `SIMPLE_MARKET_TREND_ENABLED=true` is the default for the simple strategy. Every
-normal LONG decision must have positive 12-hour return, positive least-squares price slope
-over those twelve hours, a close above its 12-hour mean, and positive two-hour return.
-A normal SHORT decision requires all four negative. These checks use 49 consecutive completed
-15-minute prices, ending at the risk-context boundary, for an exact 12-hour
-close-to-close window. The mean uses the 48 closes within that window. A
-five-minute bounce cannot bypass a falling twelve-hour trend. Missing, gapped, nonfinite,
+normal LONG decision must have positive four-hour return, positive least-squares price slope
+over those four hours, a close above its four-hour mean, and positive one-hour return.
+A normal SHORT decision requires all four negative. These checks use 17 consecutive completed
+15-minute prices, ending at the risk-context boundary, for an exact four-hour
+close-to-close window. The mean uses the 16 closes within that window. A
+brief bounce cannot bypass a falling four-hour trend. Missing, gapped, nonfinite,
 future or stale observations cannot authorize an entry.
 
 The market **bull index** is the equal-weight percentage of covered coins in the
-liquid scan pool with positive 12-hour returns, calculated before trend filtering
+liquid scan pool with positive four-hour returns, calculated before trend filtering
 or watchlist ranking. It requires at least 20 coins, at least 80% pool coverage,
 and separate BTC/ETH context. **BULL** requires an index above 50, positive
-median returns over both 12h and 2h, and positive BTC and ETH returns over both
+median returns over both 4h and 1h, and positive BTC and ETH returns over both
 horizons. **BEAR** is symmetric;
 conflicting or exactly flat evidence is **MIXED**. The normal LONG decision needs BULL and normal SHORT needs
 BEAR; opposite execution reverses the resulting order. This is a transparent breadth measure, not an external sentiment index or
@@ -49,14 +63,14 @@ calibrated prediction. A MIXED market can legitimately produce no entries.
 The independent veto runs during candidate selection, signal evaluation and
 immediately before live submission, using current context and order-bound
 permissions. It applies with or without AI and cannot be overridden by AI rules
-or the neutral-allowed BTC policy. AI receives both coin 12h/2h features and market
+or the neutral-allowed BTC policy. AI receives both coin 4h/1h features and market
 context. Existing holdings retain their normal protective stops and exits;
 reduce-only closes never require this entry permission. `/why` is the read-only,
 human-readable Telegram view of current entry blockers, market regime, exact
 failed LONG/SHORT market requirements, timestamps, coverage, coin rejections,
 cooldowns and current AI permission. It is also registered in the Telegram Menu.
 Expired cooldown records are distinguished from active locks; older scans or
-old 24h/4h snapshots are identified as unavailable, never relabelled as 12h/2h.
+old 12h/2h snapshots are identified as unavailable, never relabelled as 4h/1h.
 `/risk`, `/health` and
 the local `/simple` diagnostics expose the index, coverage and regime. Selection
 audits record blocked coins and reasons; new trade journals retain the day and
@@ -64,7 +78,7 @@ market observations used at entry. The ordinary replay refuses to fabricate
 broad-market history. Tests verify behavior, not improved profitability.
 
 Market context still refreshes on completed 15-minute boundaries; the live entry
-and AI schedule remains eight minutes. The trailing 24-hour liquidity window and
+and configured AI schedule is fifteen minutes. The trailing 24-hour liquidity window and
 the previous-24-hour performance `/summary` are independent of these trend windows.
 AI rule features use `return_2h` and `return_12h`; old-schema AI permissions are
 invalidated and await a fresh scheduled review. Historical journals retain their
@@ -864,7 +878,7 @@ Set `SIMPLE_AI_ENABLED=false` to disable both entry AI and OpenAI daily reviews.
 The daily summary can still run without OpenAI.
 
 Set `SIMPLE_CONFIDENCE_ENABLED=true` to use early profit exits. The initial target
-is **0.15% net of entry notional**, rising to **0.30% after three consecutive wins**.
+is **0.30% net of entry notional**, rising to **0.60% after three consecutive wins**.
 A loss or breakeven resets the streak. Position sizing, leverage, stops, risk locks
 and maximum holding time do not change. Targets are sampled every monitor cycle,
 using bid for longs / ask for shorts, estimated exit fees and a slippage reserve.

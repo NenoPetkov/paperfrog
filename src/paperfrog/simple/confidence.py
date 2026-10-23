@@ -14,8 +14,8 @@ from paperfrog.storage.database import Store
 
 VERSION = 1
 KEY = "simple_confidence"
-SMALL = 0.0015
-LARGE = 0.003
+SMALL = 0.003
+LARGE = 0.006
 WINS_REQUIRED = 3
 
 

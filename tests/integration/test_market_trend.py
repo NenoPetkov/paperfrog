@@ -55,25 +55,25 @@ def test_exact_day_history_regression_mean_and_future_exclusion(side):
     original = raw.copy(deep=True)
     values = day_context(raw, boundary)
     assert values["day_context_ms"] == boundary
-    assert values["day_return_12h"] == pytest.approx(np.exp(side * 48 * 0.0025) - 1)
-    assert values["day_return_2h"] == pytest.approx(np.exp(side * 8 * 0.0025) - 1)
+    assert values["day_return_4h"] == pytest.approx(np.exp(side * 16 * 0.0025) - 1)
+    assert values["day_return_1h"] == pytest.approx(np.exp(side * 4 * 0.0025) - 1)
     assert all(side * values[key] > 0 for key in DAY_FIELDS)
     raw.loc[251:, "close"] *= 1e9
     assert day_context(raw, boundary) == values
     assert_frame_equal(original.iloc[:251], raw.iloc[:251])
 
 
-def test_twelve_hour_features_ignore_an_older_falling_day():
+def test_four_hour_features_ignore_an_older_falling_day():
     raw = source(150)
-    raw.loc[raw.index[-97:], "close"] = np.r_[
-        np.linspace(200, 80, 49)[:-1], np.linspace(80, 100, 49)
+    raw.loc[raw.index[-49:], "close"] = np.r_[
+        np.linspace(200, 80, 33)[:-1], np.linspace(80, 100, 17)
     ]
     at = int(raw.iloc[-1].timestamp_ms)
-    assert raw.iloc[-1].close / raw.iloc[-97].close - 1 < 0
+    assert raw.iloc[-1].close / raw.iloc[-49].close - 1 < 0
     features = day_context(raw, at)
-    assert features["day_return_12h"] == pytest.approx(0.25)
+    assert features["day_return_4h"] == pytest.approx(100 / raw.iloc[-17].close - 1)
     assert all(features[key] > 0 for key in DAY_FIELDS)
-    raw.loc[raw.index[:-49], "close"] *= 3
+    raw.loc[raw.index[:-17], "close"] *= 3
     assert day_context(raw, at) == features
     assert "day_return_24h" not in features
 
@@ -124,7 +124,7 @@ def test_incomplete_or_invalid_day_fails_closed(damage):
     elif damage == "duplicate":
         raw.loc[raw.index[-12], "timestamp_ms"] = raw.iloc[-13].timestamp_ms
     elif damage == "short":
-        raw = raw.tail(48)
+        raw = raw.tail(16)
     elif damage == "nan":
         raw.loc[raw.index[-12], "close"] = float("nan")
     elif damage == "future":
@@ -150,13 +150,13 @@ def test_breadth_uses_full_liquidity_pool_and_benchmarks_not_selected_gainers():
 
 @pytest.mark.parametrize("side", [1, -1])
 @pytest.mark.parametrize("component", ["breadth", "btc", "eth"])
-def test_positive_day_with_falling_two_hour_market_is_mixed_in_both_directions(side, component):
+def test_positive_day_with_falling_one_hour_market_is_mixed_in_both_directions(side, component):
     at = BOUNDARY // BAR_MS * BAR_MS
     rows = {symbol: day(BOUNDARY, side) for symbol in [*POOL, "BTCUSDT", "ETHUSDT"]}
     assert market_context(rows, POOL, at)["regime"] == ("BULL" if side > 0 else "BEAR")
     changed = POOL if component == "breadth" else [component.upper() + "USDT"]
     for symbol in changed:
-        rows[symbol]["day_return_2h"] *= -1
+        rows[symbol]["day_return_1h"] *= -1
     assert market_context(rows, POOL, at)["regime"] == "MIXED"
 
 
@@ -173,7 +173,7 @@ def test_missing_market_evidence_cannot_reuse_previous_permission(damage):
     elif damage == "stale":
         rows["BTCUSDT"]["day_context_ms"] -= BAR_MS
     else:
-        rows["ETHUSDT"]["day_return_12h"] = float("nan")
+        rows["ETHUSDT"]["day_return_4h"] = float("nan")
     with pytest.raises(SafeError):
         market_context(rows, pool, at)
 
@@ -214,10 +214,10 @@ async def test_ai_cannot_override_coin_day_trend_or_market_direction(
     permit(s, store, p)
     breadth(store, s, side=side)
     assert engine.entry_signal(obs, BOUNDARY + 1000, 0.001)[0] == side
-    # Synthetic falling 12h history must veto an upward 8/24/40m bounce.
-    obs["day_return_12h"] = -side * 0.021665642286416653
+    # Synthetic falling 4h history must veto an upward 8/24/40m bounce.
+    obs["day_return_4h"] = -side * 0.021665642286416653
     result, reason = engine.entry_signal(obs, BOUNDARY + 1000, 0.001)
-    assert result == 0 and "12-hour return" in reason
+    assert result == 0 and "4-hour return" in reason
     obs.update(day(side=side))
     breadth(store, s, side=-side)
     result, reason = engine.entry_signal(obs, BOUNDARY + 1000, 0.001)
@@ -240,7 +240,7 @@ def test_stale_and_malformed_gate_context_cannot_allow_orders(settings, store, d
     elif damage == "mixed":
         record["regime"] = "MIXED"
     else:
-        row["day_slope_12h"] = float("nan")
+        row["day_slope_4h"] = float("nan")
     store.put("simple_market_trend", record)
     assert entry_gate(s, store, row, 1, BOUNDARY + 1000)
 
@@ -258,7 +258,7 @@ async def test_guard_filters_eight_minute_pool_before_ai_selection(settings, sto
     data = obs.copy()
     for key, value in day().items():
         data[key] = value
-    data["day_return_12h"] = -0.021665642286416653
+    data["day_return_4h"] = -0.021665642286416653
     service.entry_frame = AsyncMock(return_value=data)
     breadth(store, s)
     try:
@@ -266,7 +266,7 @@ async def test_guard_filters_eight_minute_pool_before_ai_selection(settings, sto
         assert service.selected == []
         assert "ELSAUSDT" in service.rows  # Exit observations are retained.
         audit = store.rows("audit", 1)[0]
-        assert "12-hour return" in audit["payload"]
+        assert "4-hour return" in audit["payload"]
     finally:
         await service.exchange.close()
 
@@ -312,7 +312,7 @@ async def test_research_builds_market_before_selection_and_revokes_missing_cover
             assert actual["timestamp_ms"] == boundary
             assert "ETHUSDT" in service.context_rows
             assert service.context_rows[POOL[0]]["day_context_ms"] == boundary
-        assert all("day_return_12h" in row for row in service.context_rows.values())
+        assert all("day_return_4h" in row for row in service.context_rows.values())
     finally:
         await service.exchange.close()
         service.store.engine.dispose()
@@ -353,12 +353,12 @@ async def test_ai_receives_day_and_market_evidence_without_old_active_advice(set
     record = breadth(store, s)
     advisor = Advisor(s, store, fake_client(plan(BOUNDARY)), lambda: BOUNDARY + 1000)
     payload = advisor.snapshot({"SOLUSDT": frame}, ["SOLUSDT"], BOUNDARY)
-    assert payload["markets"][0]["day_trend"]["day_return_12h"] == 0.02
+    assert payload["markets"][0]["day_trend"]["day_return_4h"] == 0.02
     assert payload["market_trend"]["bull_index"] == record["bull_index"]
     assert "config_hash" not in payload["market_trend"]
     assert payload["entry_policy"]["day_market_trend_required"]
     prompt = review_prompt(s)
-    assert "Mixed one/four/12-hour returns are context" not in prompt
+    assert "Mixed one/four/4-hour returns are context" not in prompt
     assert "cannot be overridden" in prompt
 
 

@@ -221,7 +221,7 @@ class SimpleService:
                 "market_trend": {
                     "enabled": self.s.simple_market_trend_enabled,
                     "context": self.store.get("simple_market_trend"),
-                    "policy": "12h return, regression, mean and 2h trend must align; market breadth, BTC and ETH must agree over 12h and 2h",
+                    "policy": "4h return, regression, mean and 1h trend must align; market breadth, BTC and ETH must agree over 4h and 1h",
                 },
                 "daily_analysis": {
                     "directory": str(
@@ -395,8 +395,8 @@ class SimpleService:
                         {
                             "asof_ms": boundary,
                             "entry_timeframe": "15m",
-                            "trend_hours": 12,
-                            "confirmation_hours": 2,
+                            "trend_hours": 4,
+                            "confirmation_hours": 1,
                             "pool_size": len(snapshot["symbols"]),
                             "usable_size": len(rows),
                             "selected": context_selected,
@@ -594,8 +594,8 @@ class SimpleService:
                 {
                     "asof_ms": boundary,
                     "entry_timeframe": self.s.simple_entry_timeframe,
-                    "trend_hours": 12,
-                    "confirmation_hours": 2,
+                    "trend_hours": 4,
+                    "confirmation_hours": 1,
                     "pool_size": len(pool),
                     "usable_size": len(rows),
                     "selected": selected,

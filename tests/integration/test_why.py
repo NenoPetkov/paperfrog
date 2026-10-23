@@ -28,8 +28,8 @@ def ready(settings, store, **changes):
         {
             "asof_ms": ENTRY,
             "entry_timeframe": "8m",
-            "trend_hours": 12,
-            "confirmation_hours": 2,
+            "trend_hours": 4,
+            "confirmation_hours": 1,
             "pool_size": 100,
             "usable_size": 100,
         },
@@ -42,19 +42,19 @@ def test_mixed_explains_exact_conflicting_readings_and_checks(settings, store):
     record.update(
         {
             "regime": "MIXED",
-            "median_return_2h": -0.012,
-            "btc_return_2h": -0.005,
-            "eth_return_2h": -0.013,
+            "median_return_1h": -0.012,
+            "btc_return_1h": -0.005,
+            "eth_return_1h": -0.013,
         }
     )
     store.put("simple_market_trend", record)
     output = explain(s, store, NOW, False, False)
     assert "Market: MIXED" in output
-    assert "Market median: 12h +2.00% | 2h -1.20%" in output
+    assert "Market median: 4h +2.00% | 1h -1.20%" in output
     assert "LONG market check: blocked" in output
-    assert "Market median 2h is negative (-1.20%)" in output
+    assert "Market median 1h is negative (-1.20%)" in output
     assert "SHORT market check: blocked" in output
-    assert "12h advancing coins must be below 50%" in output
+    assert "4h advancing coins must be below 50%" in output
     assert "MIXED permits neither LONG nor SHORT" in output
     assert "EEST" in output and "17:15:00" in output
     assert "config_hash" not in output and '{"' not in output
@@ -75,7 +75,7 @@ def test_aligned_market_reports_pass_for_the_correct_direction(settings, store, 
 def test_invalid_or_old_snapshot_is_never_relabelled_as_current(settings, store, damage):
     s, record = ready(settings, store)
     if damage == "old_windows":
-        record["median_return_24h"] = record.pop("median_return_12h")
+        record["median_return_24h"] = record.pop("median_return_4h")
         record["trend_hours"] = 24
     elif damage == "stale":
         record["timestamp_ms"] -= BAR_MS
@@ -87,13 +87,13 @@ def test_invalid_or_old_snapshot_is_never_relabelled_as_current(settings, store,
         record = None
     elif damage == "nan":
         # SQLite JSON can contain null even though Store rejects nonfinite floats.
-        record["median_return_12h"] = None
+        record["median_return_4h"] = None
     else:
         record["regime"] = "BEAR"
     store.put("simple_market_trend", record)
     output = explain(s, store, NOW, False, False)
-    assert "waiting for fresh 12h/2h data" in output
-    assert "Bitcoin: 12h" not in output
+    assert "waiting for fresh 4h/1h data" in output
+    assert "Bitcoin: 4h" not in output
     assert "LONG market check: passed" not in output
 
 
@@ -138,15 +138,15 @@ def test_fresh_rejections_explain_coins_and_old_scan_is_marked_stale(settings, s
     audit = {
         "asof_ms": ENTRY,
         "entry_timeframe": "8m",
-        "trend_hours": 12,
-        "confirmation_hours": 2,
+        "trend_hours": 4,
+        "confirmation_hours": 1,
         "pool_size": 100,
         "usable_size": 100,
-        "day_trend_blocks": {"ELSAUSDT": "coin 12-hour return opposes LONG (-2.00%)"},
+        "day_trend_blocks": {"ELSAUSDT": "coin 4-hour return opposes LONG (-2.00%)"},
     }
     store.audit("simple_selection", audit)
     output = explain(s, store, NOW, False, False)
-    assert "ELSAUSDT: coin 12-hour return opposes LONG (-2.00%)" in output
+    assert "ELSAUSDT: coin 4-hour return opposes LONG (-2.00%)" in output
     assert "No coin passed" in output
     audit["asof_ms"] -= 480_000
     store.audit("simple_selection", audit)
