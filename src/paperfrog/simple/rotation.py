@@ -15,7 +15,7 @@ from paperfrog.storage.database import Store
 KEY = "simple_strategy_rotation"
 CHOICES = {"current", "opposite"}
 VERSION = "+opposite-v1"
-POLICY_VERSION = 3
+POLICY_VERSION = 4
 
 
 def execution_side(side: int, state: dict[str, Any]) -> int:
@@ -57,7 +57,7 @@ def switch(
 
 
 def evaluate(store: Store, state: dict[str, Any], now_ms: int, conn: Connection) -> None:
-    return  # Automatic rotation is disabled by the current-only policy.
+    return  # Strategy selection is manual; results never trigger a switch.
 
 
 def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
@@ -66,12 +66,12 @@ def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
         if (
             previous is not None
             and previous.get("policy_version") == POLICY_VERSION
-            and previous.get("active") == "current"
+            and previous.get("active") in CHOICES
             and previous.get("auto") is False
         ):
             return
-        # A new controller starts from trade one. Existing open positions retain
-        # their original epoch and cannot contaminate the new strategy sample.
+        # Upgrades and restarts retain the selected strategy. Existing positions
+        # keep their recorded execution side, exits and strategy epoch.
         state = {
             "active": "current",
             "epoch": 0,
@@ -82,15 +82,18 @@ def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
         }
         if previous is not None:
             state.update(previous)
+            if state["active"] not in CHOICES:
+                raise SafeError("invalid saved strategy selection; local review required")
             state["auto"] = False
-            switch(
-                store,
-                state,
-                "current",
-                now_ms,
-                "current-only policy; automatic rotation disabled",
-                conn,
-            )
+            if previous.get("auto"):
+                switch(
+                    store,
+                    state,
+                    state["active"],
+                    now_ms,
+                    "manual strategy selection; automatic rotation disabled",
+                    conn,
+                )
             state["policy_version"] = POLICY_VERSION
         store.put(KEY, state, conn)
 
@@ -119,9 +122,14 @@ def closed(
 
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
-    if choice != "current":
-        raise SafeError("strategy locked to current; opposite and automatic rotation are disabled")
+    if choice not in CHOICES:
+        raise SafeError("use /strategy current or /strategy opposite; automatic switching is disabled")
     initialize(store, "current", now_ms)
+    with store.transaction() as conn:
+        state = selection(store, conn)
+        if state["active"] != choice:
+            switch(store, state, choice, now_ms, "manual selection via /strategy", conn)
+            store.put(KEY, state, conn)
 
 
 def describe(store: Store, timezone: str) -> str:
@@ -130,8 +138,9 @@ def describe(store: Store, timezone: str) -> str:
     lines = [
         f"Strategy: {state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
-        "Locked to current. Opposite execution and automatic rotation are disabled.",
-        "/strategy shows the current strategy, confidence and switch history.",
+        "/strategy current — normal execution: LONG → LONG, SHORT → SHORT.",
+        "/strategy opposite — reverse execution: LONG → SHORT, SHORT → LONG.",
+        "Selection applies to new entries and survives restarts. Automatic switching is disabled.",
         "Recent switches:",
     ]
     for event in reversed(store.get("simple_strategy_history", [])[-8:]):

@@ -1,13 +1,12 @@
 # paperfrog
 
-The simple service rotates automatically between `current` (normal decisions) and
-`opposite` (normal LONG becomes SHORT; normal SHORT becomes LONG). It switches when
-at least six of the last eight completed positions opened in the current stint
-have negative net PnL, including fees and recorded funding. Zero PnL is not a loss.
-Every switch resets the sample. Old open trades keep their original exits and do
-not count toward the new stint. Selection, sample and history survive restarts.
-Installing this policy replaces dip/peak, starts in normal automatic mode, and
-starts counting from the first new position; historical results are not seeded.
+The simple service supports two manually selected strategies: `current` executes
+normal decisions, while `opposite` opens SHORT for a qualifying LONG decision and
+LONG for a qualifying SHORT decision. Use `/strategy` to see the selection and
+commands, `/strategy current` for normal execution, or `/strategy opposite` for
+reversed execution. Selection, results and switch history survive restarts.
+Results never trigger automatic switching. Each switch starts a fresh results
+sample; existing open trades keep their recorded direction and exits.
 
 The normal signal, AI, slope, BTC and market direction checks run on the original
 decision. Opposite mode reverses it exactly once before sizing and execution.
@@ -18,9 +17,9 @@ AI is explicitly instructed to produce normal decisions without compensating for
 opposite execution. Exact order permissions bind both directions and the current
 strategy epoch; a strategy change before dispatch rejects the entry.
 
-`/strategy` shows selection, sample and recent switches. `/strategy current` and
-`/strategy opposite` select manually and disable automatic switching; `/strategy
-auto` enables it again. Selection does not arm LIVE, resume trading or clear locks.
+`/strategy` also shows confidence, profit targets and recent switches. Selecting
+the same strategy again leaves its sample and history intact. `/strategy auto`
+is disabled. Selection does not arm LIVE, resume trading or clear locks.
 The production operator configuration uses `SIMPLE_ENTRY_TIMEFRAME=15m`,
 `SIMPLE_AI_REVIEW_MINUTES=15`, and `MAX_CONCURRENT_STRATEGY_TRADES=4`.
 Portfolio risk and margin limits still apply. Defaults remain PAPER.
