@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 from test_controls import update
-from test_eight_minute import BOUNDARY, market
+from test_eight_minute import BOUNDARY
 from test_market_trend import breadth, day, guarded
+from test_opposite_confirmation import confirmed_row
 from test_simple import engine_fixture, quote, row
 from test_simple_live import setup_engine
 
@@ -24,175 +25,63 @@ def settle_result(store, trade_id, pnl, now_ms=100):
 
 
 @pytest.mark.parametrize("initial", ["current", "opposite"])
-def test_auto_repeated_two_loss_switches_match_requested_sequence(store, initial):
-    rotation.initialize(store, "base", 0)
-    if initial == "opposite":
-        rotation.configure(store, "opposite", 1)
-        rotation.configure(store, "auto", 2)
-    sequence = [1, 1, -1, -1, -1, -1, 1, -1, 1, -1, -1]
-    expected = ["current", "current", "current", "opposite", "opposite", "current",
-                "current", "current", "current", "current", "opposite"]
-    streaks = [0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0]
-    if initial == "opposite":
-        expected = ["opposite" if active == "current" else "current" for active in expected]
-    for i, (pnl, active, streak) in enumerate(zip(sequence, expected, streaks, strict=True)):
+def test_losses_never_switch_selected_strategy_even_across_restart(store, initial):
+    rotation.configure(store, initial, 0)
+    epoch = rotation.selection(store)["epoch"]
+    for i, pnl in enumerate([1, 1, -1, -1, -1, -1, 1, -1, -1]):
         settle_result(store, str(i), pnl, i)
-        state = rotation.selection(store)
-        assert state["active"] == active and state["loss_streak"] == streak
-        assert state["auto"] is True
-    events = [event for event in store.get("simple_strategy_history") if event["auto"]]
-    other = "opposite" if initial == "current" else "current"
-    assert [(e["from"], e["to"]) for e in events] == [
-        (initial, other), (other, initial), (initial, other)
-    ]
-    assert all(e["consecutive_losses"] == 2 and e["auto"] for e in events)
-
-
-@pytest.mark.parametrize("reset_pnl", [1.0, 0.0])
-def test_win_or_breakeven_breaks_consecutive_losses(store, reset_pnl):
-    rotation.initialize(store, "base", 0)
-    for i, pnl in enumerate([-1, reset_pnl, -1]):
-        settle_result(store, str(i), pnl)
-    assert rotation.selection(store)["active"] == "current"
-    assert rotation.selection(store)["loss_streak"] == 1
-    assert not store.get("simple_strategy_history")
-
-
-def test_auto_streak_survives_restart_and_duplicate_outcomes_do_not_count(store):
-    rotation.initialize(store, "base", 0)
-    first = settle_result(store, "one", -1)
+        assert rotation.selection(store)["active"] == initial
+        assert rotation.selection(store)["auto"] is False
     reopened = Store(Path(store.engine.url.database))
     try:
         rotation.initialize(reopened, "base", 200)
-        rotation.closed(reopened, first, -1, 201)
-        assert rotation.selection(reopened)["loss_streak"] == 1
-        settle_result(reopened, "two", -1, 202)
-        assert rotation.selection(reopened)["active"] == "opposite"
-        rotation.closed(reopened, first, -1, 203)
-        assert rotation.selection(reopened)["loss_streak"] == 0
-        settle_result(reopened, "three", -1, 204)
-        rotation.initialize(reopened, "base", 205)
-        assert rotation.selection(reopened)["loss_streak"] == 1
-        settle_result(reopened, "four", -1, 206)
-        assert rotation.selection(reopened)["active"] == "current"
+        settle_result(reopened, "later-loss", -1, 201)
+        assert rotation.selection(reopened)["active"] == initial
+        assert rotation.selection(reopened)["epoch"] == epoch
+        assert not any(e["auto"] for e in reopened.get("simple_strategy_history", []))
     finally:
         reopened.engine.dispose()
 
 
-def test_old_stint_closures_cannot_count_again_when_strategy_cycles_back(store):
-    rotation.initialize(store, "base", 0)
-    old_trade = {"id": "still-open", "strategy_epoch": 0, "strategy_choice": "current"}
-    for i in range(4):
-        settle_result(store, str(i), -1)
-    assert rotation.selection(store)["active"] == "current"
-    assert rotation.selection(store)["epoch"] == 2
-    rotation.closed(store, old_trade, -1, 200)
-    assert rotation.selection(store)["loss_streak"] == 0
+@pytest.mark.parametrize("active", ["current", "opposite"])
+def test_upgrade_disables_auto_preserving_selection_positions_and_financial_locks(store, active):
+    store.put(rotation.KEY, {"policy_version": 5, "active": active, "auto": True,
+                            "epoch": 7, "loss_streak": 1, "outcomes": [{"id": "old", "pnl": -1}]})
+    preserved = {"manual_lock": True, "risk_lock": {"reason": "three_losses"},
+                 "consecutive_losses": 3, "anchors": {"equity": 500},
+                 "simple_positions": {"SOLUSDT": {"side": -1, "stop_price": 101}}}
+    for key, value in preserved.items():
+        store.put(key, value)
+    rotation.initialize(store, "base", 100)
+    state = rotation.selection(store)
+    assert state["active"] == active and state["epoch"] == 7 and state["auto"] is False
+    assert state["outcomes"] == [] and state["loss_streak"] == 0
+    assert store.get(rotation.RESULT_PREFIX + "old") is not None
+    rotation.initialize(store, "base", 200)
+    assert rotation.selection(store) == state
+    assert {key: store.get(key) for key in preserved} == preserved
 
 
-def test_results_are_deduplicated_beyond_the_recent_sample(store):
+def test_manual_switch_dedup_and_transaction_rollback(store):
     rotation.configure(store, "current", 0)
     first = settle_result(store, "first", -1)
     for i in range(10):
         settle_result(store, str(i), 1)
-    rotation.closed(store, first, -1, 200)
+    rotation.closed(store, first, -1, 100)
     assert rotation.selection(store)["loss_streak"] == 0
-    rotation.configure(store, "auto", 201)
-    rotation.closed(store, first, -1, 202)
-    assert rotation.selection(store)["loss_streak"] == 0
-
-
-def test_switch_and_dedup_marker_rollback_atomically(store):
-    rotation.initialize(store, "base", 0)
-    settle_result(store, "first", -1)
-    trade = {"id": "second", "strategy_epoch": 0, "strategy_choice": "current"}
     with pytest.raises(RuntimeError), store.transaction() as conn:
-        rotation.closed(store, trade, -1, 200, conn)
-        raise RuntimeError("simulated failure before closure commit")
-    assert rotation.selection(store)["active"] == "current"
-    assert rotation.selection(store)["loss_streak"] == 1
-    assert store.get(rotation.RESULT_PREFIX + "second") is None
-    assert not store.get("simple_strategy_history")
-    rotation.closed(store, trade, -1, 201)
-    assert rotation.selection(store)["active"] == "opposite"
-
-
-def test_auto_mode_enabling_and_repeated_commands_preserve_live_streak(store):
-    rotation.configure(store, "opposite", 0)
-    settle_result(store, "manual", -1)
-    rotation.configure(store, "auto", 10)
-    assert rotation.selection(store)["active"] == "opposite"
+        rotation.closed(store, {"id": "rollback", "strategy_choice": "current", "strategy_epoch": 0}, -1, 101, conn)
+        raise RuntimeError("rollback")
+    assert store.get(rotation.RESULT_PREFIX + "rollback") is None
+    rotation.configure(store, "opposite", 102)
+    rotation.configure(store, "current", 103)
+    assert rotation.selection(store)["epoch"] == 2
+    rotation.closed(store, first, -1, 104)
     assert rotation.selection(store)["loss_streak"] == 0
-    settle_result(store, "auto-one", -1)
-    state = rotation.selection(store)
-    rotation.configure(store, "auto", 20)
-    rotation.initialize(store, "base", 21)
-    assert rotation.selection(store) == state
-    settle_result(store, "auto-two", -1)
-    assert rotation.selection(store)["active"] == "current"
-
-
-def test_automatic_switch_preserves_positions_financial_state_and_locks(store):
-    rotation.initialize(store, "base", 0)
-    preserved = {
-        "manual_lock": True, "risk_lock": {"state": "SOFT_RISK_LOCK", "reason": "three_losses"},
-        "anchors": {"equity": 500}, "consecutive_losses": 3,
-        "cooldown:SOLUSDT": 2000, "simple_positions": {"SOLUSDT": {"side": 1, "stop_price": 99}},
-    }
-    for key, value in preserved.items():
-        store.put(key, value)
-    settle_result(store, "one", -1)
-    settle_result(store, "two", -1)
-    assert rotation.selection(store)["active"] == "opposite"
-    assert {key: store.get(key) for key in preserved} == preserved
-
-
-@pytest.mark.parametrize(
-    "active,auto", [("current", True), ("opposite", True), ("opposite", False)]
-)
-def test_migration_enables_auto_without_changing_strategy_or_seeding_old_losses(store, active, auto):
-    store.put(
-        rotation.KEY,
-        {
-            "active": active,
-            "epoch": 5,
-            "auto": auto,
-            "policy_version": 2,
-            "outcomes": [{"id": "old", "pnl": -1}],
-        },
-    )
-    store.put("manual_lock", True)
-    store.put("risk_lock", {"reason": "daily_loss"})
-    store.put("simple_positions", {"SOLUSDT": {"stop_price": 99}})
-    rotation.initialize(store, "base", 100)
-    state = rotation.selection(store)
-    assert state["active"] == active and state["auto"] is True
-    assert state["epoch"] == 5
-    assert state["outcomes"] == [] and state["loss_streak"] == 0
-    rotation.initialize(store, "base", 200)
-    assert rotation.selection(store) == state
-    assert not store.get("simple_strategy_history")
-    assert store.get(rotation.RESULT_PREFIX + "old") is not None
-    rotation.closed(store, {"id": "old", "strategy_epoch": 5, "strategy_choice": active}, -1, 201)
-    assert rotation.selection(store)["loss_streak"] == 0
-    assert store.get("manual_lock") is True
-    assert store.get("risk_lock") == {"reason": "daily_loss"}
-    assert store.get("simple_positions") == {"SOLUSDT": {"stop_price": 99}}
-
-
-@pytest.mark.parametrize("choice", ["current", "opposite"])
-def test_losses_never_switch_manually_selected_strategy(store, choice):
-    rotation.initialize(store, "base", 0)
-    rotation.configure(store, choice, 1)
-    initial = rotation.selection(store)
-    for i in range(30):
-        rotation.closed(store, {"id": str(i), "strategy_epoch": initial["epoch"], "strategy_choice": choice}, -1, i)
-    assert rotation.selection(store)["active"] == choice
-    assert rotation.selection(store)["auto"] is False
-    for invalid in ("live", "unknown"):
+    for choice in ("auto", "unknown", "live"):
         with pytest.raises(SafeError, match="/strategy opposite"):
-            rotation.configure(store, invalid, 100)
-    assert "Automatic switching paused" in rotation.describe(store, "UTC")
+            rotation.configure(store, choice, 105)
+    assert "Automatic switching is disabled" in rotation.describe(store, "UTC")
 
 
 async def test_engine_records_net_loss_and_bootstrap_after_restart(settings, store, filters):
@@ -206,7 +95,7 @@ async def test_engine_records_net_loss_and_bootstrap_after_restart(settings, sto
     assert len(rotation.selection(store)["outcomes"]) == 1
 
 
-async def test_two_complete_net_losses_switch_the_next_executed_entry(settings, store, filters):
+async def test_two_complete_net_losses_leave_next_entry_in_selected_strategy(settings, store, filters):
     s = settings.model_copy(update={"max_entries_per_symbol_per_day": 4})
     engine = await engine_fixture(s, store, filters)
     rotation.initialize(store, engine.strategy, 0)
@@ -217,13 +106,13 @@ async def test_two_complete_net_losses_switch_the_next_executed_entry(settings, 
         assert engine.positions()["SOLUSDT"]["side"] == 1
         await engine.close("SOLUSDT", now + 1, "flat price; fees make this a net loss")
         assert store.get("simple_closed")[-1]["pnl"] < 0
-    assert rotation.selection(store)["active"] == "opposite"
-    assert rotation.selection(store)["loss_streak"] == 0
+    assert rotation.selection(store)["active"] == "current"
+    assert rotation.selection(store)["loss_streak"] == 2
     assert store.get("consecutive_losses") == 2  # Financial breaker history is preserved.
     now = 200 * 900000 + 8 * 3600000
     await engine.quote(quote(now_ms=now), now)
     await engine.enter("SOLUSDT", row(now), now)
-    assert engine.positions()["SOLUSDT"]["side"] == -1
+    assert engine.positions()["SOLUSDT"]["side"] == 1
     assert engine.positions()["SOLUSDT"]["decision_side"] == 1
 
 
@@ -242,10 +131,10 @@ async def test_partial_live_exits_count_only_when_the_whole_position_is_closed(s
         sim.reduce_fraction = Decimal(1)
         await engine.close("SOLUSDT", engine.broker.now_ms(), "final exit")
         assert not engine.positions() and sim.quantity == 0
-        assert rotation.selection(store)["active"] == "opposite"
-        assert rotation.selection(store)["loss_streak"] == 0
+        assert rotation.selection(store)["active"] == "current"
+        assert rotation.selection(store)["loss_streak"] == 2
         await engine.restore()
-        assert len(store.get("simple_strategy_history")) == 1
+        assert not store.get("simple_strategy_history")
     finally:
         await adapter.close()
 
@@ -292,7 +181,7 @@ def test_order_permissions_remain_exact_and_stale_epochs_fail_closed(store):
     rotation.require_order(store, order.model_copy(update={"reduce_only": True}))
 
 
-def test_automatic_switch_invalidates_entry_permission_but_preserves_exits(store):
+def test_manual_switch_invalidates_entry_permission_but_preserves_exits(store):
     rotation.initialize(store, "base", 0)
     order = Order(client_id="pf-auto", symbol="SOLUSDT", side=1,
                   quantity=Decimal(1), limit_price=Decimal(100))
@@ -302,6 +191,8 @@ def test_automatic_switch_invalidates_entry_permission_but_preserves_exits(store
     rotation.require_order(store, order)
     settle_result(store, "first", -1)
     settle_result(store, "second", -1)
+    rotation.require_order(store, order)
+    rotation.configure(store, "opposite", 100)
     with pytest.raises(EntryVeto, match="strategy selection changed"):
         rotation.require_order(store, order)
     rotation.require_order(store, order.model_copy(update={"reduce_only": True}))
@@ -318,22 +209,21 @@ async def test_service_exposes_strategy_choices_and_confidence(settings):
         response = await service.strategy_control("opposite")
         assert "Strategy: opposite" in response
         assert "LONG → SHORT" in response and "SHORT → LONG" in response
-        response = await service.strategy_control("auto")
-        assert "Strategy: opposite · AUTO" in response
-        assert "Consecutive losses: 0/2" in response
+        with pytest.raises(SafeError, match="switching is disabled"):
+            await service.strategy_control("auto")
     finally:
         await service.exchange.close()
 
 
 @pytest.mark.parametrize("decision", [1, -1])
-async def test_opposite_reverses_paper_entries_and_retains_original_exit_thesis(
+async def test_opposite_confirms_paper_entries_and_retains_recorded_exit_thesis(
     settings, store, filters, decision
 ):
     engine = await engine_fixture(settings, store, filters)
     rotation.initialize(store, engine.strategy, 0)
     rotation.configure(store, "opposite", 1)
     now = 200 * 900000
-    obs = row(direction=decision)
+    obs = confirmed_row(direction=decision)
     await engine.enter("SOLUSDT", obs, now)
     trade = engine.positions()["SOLUSDT"]
     assert trade["side"] == -decision
@@ -357,8 +247,10 @@ async def test_opposite_dispatches_reversed_live_order_and_matching_hosted_stop(
     try:
         rotation.initialize(store, engine.strategy, now)
         rotation.configure(store, "opposite", now + 1)
-        if decision < 0:
-            obs.update(trend_atr=-2, flow=-0.4, prior_low=101)
+        obs.update(confirmed_row(now, decision))
+        # Real frames contain optional NaN features. Journal only the finite
+        # confirmation evidence so an irrelevant indicator cannot break entry.
+        obs.update(rejection_level=float("nan"), optional_indicator=float("nan"))
         await engine.enter("SOLUSDT", obs, now)
         trade = engine.positions()["SOLUSDT"]
         actual = -decision
@@ -388,7 +280,7 @@ async def test_opposite_requires_original_decision_to_pass_market_gate(settings,
     engine = await engine_fixture(s, store, filters)
     rotation.initialize(store, engine.strategy, 0)
     rotation.configure(store, "opposite", 1)
-    obs = {**market(side=decision).iloc[-1].to_dict(), **day(side=decision)}
+    obs = {**confirmed_row(BOUNDARY, decision), **day(side=decision)}
     breadth(store, s, side=decision)
     assert engine.entry_signal(obs, BOUNDARY + 1000, 0)[0] == -decision
     breadth(store, s, side=-decision)
@@ -441,7 +333,44 @@ async def test_strategy_commands_are_authenticated_durable_and_leave_risk_state_
         assert await service.controls.handle(update("/strategy auto", uid=99)) is None
         assert rotation.selection(service.store)["auto"] is False
         response = await service.controls.handle(update("/strategy auto"))
-        assert "Strategy: current · AUTO" in response[1]
+        assert "switching is disabled" in response[1]
+        assert rotation.selection(service.store)["auto"] is False
         assert {key: service.store.get(key) for key in preserved} == preserved
     finally:
         await service.exchange.close()
+
+
+@pytest.mark.parametrize("side", [1, -1])
+@pytest.mark.parametrize("damage", ["missing", "flow", "expired", "future", "level", "price"])
+def test_opposite_exact_order_permission_revalidates_confirmation_and_live_price(store, side, damage):
+    from paperfrog.simple.strategy import BAR_MS, RULES, opposite_entry
+
+    rotation.configure(store, "opposite", 0)
+    now = 200 * BAR_MS
+    obs = confirmed_row(now, side)
+    level = opposite_entry(obs, .0007)[2]
+    order = Order(client_id="pf-confirm", symbol="SOLUSDT", side=-side,
+                  quantity=Decimal(1), limit_price=Decimal(100))
+    permission = {"order": order.model_dump(mode="json"), "active": "opposite",
+                  "epoch": rotation.selection(store)["epoch"], "decision_side": side,
+                  "opposite_level": level,
+                  "opposite_evidence": {"row": obs, "one_way_cost": .0007, "rules": RULES.public()}}
+    store.put("simple_strategy_order:" + order.client_id, permission)
+    q = quote(now_ms=now)
+    rotation.require_order(store, order, now, q)
+    if damage == "missing":
+        permission.pop("opposite_evidence")
+    elif damage == "flow":
+        obs["flow"] = side * .4
+    elif damage == "expired":
+        now += BAR_MS
+    elif damage == "future":
+        now -= 1
+    elif damage == "level":
+        permission["opposite_level"] = 0
+    else:
+        q = quote(price=100 + side, now_ms=now)
+    store.put("simple_strategy_order:" + order.client_id, permission)
+    with pytest.raises(EntryVeto, match="failed-breakout or reversal evidence"):
+        rotation.require_order(store, order, now, q)
+    rotation.require_order(store, order.model_copy(update={"reduce_only": True}), now, q)

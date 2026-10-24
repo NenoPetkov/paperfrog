@@ -38,6 +38,7 @@ from .strategy import (
     entry,
     execution_rules,
     exit_reason,
+    opposite_entry,
     require_execution,
     require_paper,
     strategy_name,
@@ -510,6 +511,9 @@ class Engine:
             "timestamp_ms": now_ms,
             "confidence_version": trade.get("confidence_version"),
             "profit_target_fraction": trade.get("profit_target_fraction"),
+            "profit_runner": trade.get("profit_runner"),
+            "opposite_confirmation_version": trade.get("opposite_confirmation_version"),
+            "opposite_level": trade.get("opposite_level"),
             "entry_exchange_id": trade.get("entry_exchange_id"),
             "exit_exchange_id": fill.exchange_id,
             "exit_exchange_ids": [f.exchange_id for f in exits],
@@ -708,25 +712,26 @@ class Engine:
                 )
             ):
                 reason = reason or "closed-candle monitoring data unavailable"
-            profit_target = None
             if not reason and self.s.simple_confidence_enabled:
-                profit_target = min(
+                activation = min(
                     float(trade.get("profit_target_fraction") or confidence.SMALL),
                     confidence.target(self.store),
                 )
-                if trade.get("profit_target_fraction") != profit_target:
-                    positions = self.positions()
-                    positions[symbol]["profit_target_fraction"] = profit_target
-                    self.store.put("simple_positions", positions)
-                if confidence.net_return(self.s, trade, q) >= profit_target:
-                    reason = f"confidence net profit target {profit_target:.2%} reached"
-                else:
-                    profit_target = None
+                trade["profit_target_fraction"] = activation
+                if confidence.update_runner(
+                    trade, confidence.net_return(self.s, trade, q), activation, now_ms
+                ):
+                    reason = (
+                        "profit runner retracement: net return reached trailing floor "
+                        f"{trade['profit_runner']['floor_net_return']:.2%}"
+                    )
+                positions = self.positions()
+                positions[symbol] = trade
+                self.store.put("simple_positions", positions)
             if reason:
-                if profit_target is None:
-                    await self.close(symbol, now_ms, reason)
-                else:
-                    await self.close(symbol, now_ms, reason, profit_target=profit_target)
+                # A gap can cross the floor. A marketable reduction takes priority
+                # over an unreachable profit IOC limit; hosted protection remains.
+                await self.close(symbol, now_ms, reason)
             elif row is not None:
                 stop = tighten_stop(trade, float(q.mark), float(row["atr"]), self.rules)
                 if stop != trade["stop_price"]:
@@ -740,29 +745,42 @@ class Engine:
 
     def entry_signal(self, row: dict[str, Any], now_ms: int, spread: float) -> tuple[int, str]:
         one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
-        minute_side, minute_reason = (0, "")
-        if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-            if row.get("entry_timeframe") != self.s.simple_entry_timeframe:
-                return 0, "entry candle timeframe does not match configuration"
-            minute_side, minute_reason = minute_direction(row, self.rules)
-            if not minute_side:
-                return 0, minute_reason
-        direction, reason = (
-            adaptive_signal(self.s, self.store, row, now_ms, self.rules, one_way_cost)
-            if self.s.simple_ai_enabled
-            else entry(
-                row,
-                one_way_cost,
-                self.s.simple_entry_mode,
-                replace(self.rules, entry_style="trend_follow")
-                if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
-                else self.rules,
+        opposite = rotation.selection(self.store)["active"] == "opposite"
+        if opposite:
+            if self.s.simple_entry_mode != "trend":
+                return 0, "confirmed opposite strategy requires normal trend mode"
+            actual, reason, _ = opposite_entry(row, one_way_cost, self.rules)
+            direction = -actual  # Existing broad trend/BTC gates check the old setup.
+            if direction and self.s.simple_ai_enabled:
+                allowed, ai_reason = adaptive_signal(
+                    self.s, self.store, row, now_ms, self.rules, one_way_cost
+                )
+                if allowed != direction:
+                    return 0, "opposite confirmation lacks matching AI permission; " + ai_reason
+        else:
+            minute_side, minute_reason = (0, "")
+            if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
+                if row.get("entry_timeframe") != self.s.simple_entry_timeframe:
+                    return 0, "entry candle timeframe does not match configuration"
+                minute_side, minute_reason = minute_direction(row, self.rules)
+                if not minute_side:
+                    return 0, minute_reason
+            direction, reason = (
+                adaptive_signal(self.s, self.store, row, now_ms, self.rules, one_way_cost)
+                if self.s.simple_ai_enabled
+                else entry(
+                    row,
+                    one_way_cost,
+                    self.s.simple_entry_mode,
+                    replace(self.rules, entry_style="trend_follow")
+                    if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
+                    else self.rules,
+                )
             )
-        )
-        if self.s.simple_entry_timeframe in {"1m", "5m", "8m"} and direction:
-            if direction != minute_side:
-                return 0, "AI entry direction conflicts with the closed short-interval slope"
-            reason = minute_reason + "; " + reason
+            if self.s.simple_entry_timeframe in {"1m", "5m", "8m"} and direction:
+                if direction != minute_side:
+                    return 0, "AI entry direction conflicts with the closed short-interval slope"
+                reason = minute_reason + "; " + reason
         if direction and self.s.simple_btc_reference_enabled:
             btc_reason = btc_entry_gate(self.s, self.store, row, direction, now_ms)
             if btc_reason:
@@ -773,7 +791,6 @@ class Engine:
                 return 0, market_reason
         if direction and rotation.selection(self.store)["active"] == "opposite":
             direction = -direction
-            reason = "Opposite execution of normal decision; " + reason
         return direction, reason
 
     async def enter(
@@ -1091,16 +1108,30 @@ class Engine:
                     "order": order.model_dump(mode="json"),
                 },
             )
-        self.store.put(
-            "simple_strategy_order:" + order.client_id,
-            {
-                "active": selected_strategy["active"],
-                "epoch": selected_strategy["epoch"],
-                "order": order.model_dump(mode="json"),
-                "decision_side": normal_direction,
-            },
-        )
-        rotation.require_order(self.store, order)
+        permission = {
+            "active": selected_strategy["active"],
+            "epoch": selected_strategy["epoch"],
+            "order": order.model_dump(mode="json"),
+            "decision_side": normal_direction,
+        }
+        if selected_strategy["active"] == "opposite":
+            one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
+            confirmed_side, _, level = opposite_entry(row, one_way_cost, self.rules)
+            if confirmed_side != direction or level is None:
+                raise SafeError("opposite confirmation changed before entry")
+            intent.update(opposite_confirmation_version=1, opposite_level=level)
+            intent["entry_context"].update(opposite_confirmation_version=1, opposite_level=level)
+            permission.update(
+                opposite_level=level,
+                opposite_evidence={
+                    "row": {**indicators(row), "entry_timeframe": row.get("entry_timeframe", "15m")},
+                    "one_way_cost": one_way_cost,
+                    "rules": self.rules.public(),
+                },
+            )
+        self.store.put("simple_strategy_order:" + order.client_id, permission)
+        current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
+        rotation.require_order(self.store, order, current_ms, q)
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
         if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
@@ -1159,6 +1190,8 @@ class Engine:
             "confidence_version": intent.get("confidence_version"),
             "profit_target_fraction": intent.get("profit_target_fraction"),
             "entry_exchange_id": fill.exchange_id,
+            "opposite_confirmation_version": intent.get("opposite_confirmation_version"),
+            "opposite_level": intent.get("opposite_level"),
             "strategy_choice": intent.get("strategy_choice", "current"),
             "strategy_epoch": intent.get("strategy_epoch", 0),
             "side": direction,

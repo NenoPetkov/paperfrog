@@ -138,6 +138,8 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         )
 
     strategy = (values[rotation.KEY] or {}).get("active", "current")
+    if strategy == "opposite":
+        lines.append("Opposite entries require a completed failed breakout or structure reversal with reversed flow; a trend signal alone is insufficient.")
     market = values["simple_market_trend"]
     fresh_market = False
     if s.simple_market_trend_enabled:

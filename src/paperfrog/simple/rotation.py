@@ -9,14 +9,15 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import Connection
 
-from paperfrog.domain.types import EntryVeto, Order, SafeError
+from paperfrog.domain.types import EntryVeto, Order, Quote, SafeError
 from paperfrog.storage.database import Store
+
+from .strategy import BAR_MS, Rules, opposite_entry
 
 KEY = "simple_strategy_rotation"
 CHOICES = {"current", "opposite"}
-VERSION = "+opposite-v1"
-POLICY_VERSION = 5
-LOSSES_TO_SWITCH = 2
+VERSION = "+confirmed-opposite-v2"
+POLICY_VERSION = 6
 RESULT_PREFIX = "simple_strategy_result:"
 
 
@@ -38,7 +39,7 @@ def selection(store: Store, conn: Connection | None = None) -> dict[str, Any]:
     return dict(
         store.get(
             KEY,
-            {"active": "current", "epoch": 0, "auto": True, "outcomes": [], "loss_streak": 0},
+            {"active": "current", "epoch": 0, "auto": False, "outcomes": [], "loss_streak": 0},
             conn,
         )
     )
@@ -63,18 +64,6 @@ def switch(
     store.audit("simple_strategy_changed", event, conn)
 
 
-def evaluate(store: Store, state: dict[str, Any], now_ms: int, conn: Connection) -> None:
-    if state["auto"] and state["loss_streak"] >= LOSSES_TO_SWITCH:
-        switch(
-            store,
-            state,
-            "opposite" if state["active"] == "current" else "current",
-            now_ms,
-            "automatic: two consecutive net losses",
-            conn,
-        )
-
-
 def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
     with store.transaction() as conn:
         previous = store.get(KEY, None, conn)
@@ -82,7 +71,7 @@ def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
             previous is not None
             and previous.get("policy_version") == POLICY_VERSION
             and previous.get("active") in CHOICES
-            and isinstance(previous.get("auto"), bool)
+            and previous.get("auto") is False
             and isinstance(previous.get("loss_streak"), int)
             and previous["loss_streak"] >= 0
         ):
@@ -94,7 +83,7 @@ def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
         state: dict[str, Any] = {
             "active": "current",
             "epoch": 0,
-            "auto": True,
+            "auto": False,
             "outcomes": [],
             "loss_streak": 0,
             "policy_version": POLICY_VERSION,
@@ -104,21 +93,20 @@ def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
             state.update(previous)
             if state["active"] not in CHOICES:
                 raise SafeError("invalid saved strategy selection; local review required")
-            # The operator requested this new automatic policy. Start counting
-            # future closures without reusing historical losses or changing side.
-            # Keep the epoch so existing positions in this stint can count once.
+            # Disable the previous automatic policy, retaining manual selection,
+            # position epochs and durable historical outcome deduplication.
             for outcome in state["outcomes"]:
                 store.put(
                     RESULT_PREFIX + outcome["id"],
                     {"strategy": state["active"], "epoch": state["epoch"], "pnl": outcome["pnl"]},
                     conn,
                 )
-            state.update(auto=True, outcomes=[], loss_streak=0, changed_ms=now_ms)
+            state.update(auto=False, outcomes=[], loss_streak=0, changed_ms=now_ms)
             state["policy_version"] = POLICY_VERSION
         store.put(KEY, state, conn)
         store.audit(
             "simple_strategy_policy_changed",
-            {"active": state["active"], "auto": True, "losses_to_switch": LOSSES_TO_SWITCH},
+            {"active": state["active"], "auto": False, "policy_version": POLICY_VERSION},
             conn,
         )
 
@@ -149,47 +137,34 @@ def closed(
         {"strategy": state["active"], "epoch": state["epoch"], "pnl": pnl},
         conn,
     )
-    evaluate(store, state, now_ms, conn)
     store.put(KEY, state, conn)
 
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
-    if choice not in CHOICES | {"auto"}:
-        raise SafeError("use /strategy current, /strategy opposite or /strategy auto")
+    if choice == "auto":
+        raise SafeError("Automatic strategy switching is disabled; use /strategy current or /strategy opposite")
+    if choice not in CHOICES:
+        raise SafeError("use /strategy current or /strategy opposite")
     initialize(store, "current", now_ms)
     with store.transaction() as conn:
         state = selection(store, conn)
-        automatic = choice == "auto"
-        target = state["active"] if automatic else choice
-        if state["active"] != target:
-            state["auto"] = False
-            switch(store, state, target, now_ms, "manual selection via /strategy", conn)
+        if state["active"] != choice:
+            switch(store, state, choice, now_ms, "manual selection via /strategy", conn)
             store.put(KEY, state, conn)
-        elif state["auto"] != automatic:
-            state.update(auto=automatic, outcomes=[], loss_streak=0, changed_ms=now_ms)
-            store.put(KEY, state, conn)
-            store.audit(
-                "simple_strategy_mode_changed",
-                {"active": state["active"], "auto": automatic, "reason": "manual selection via /strategy"},
-                conn,
-            )
 
 
 def describe(store: Store, timezone: str) -> str:
     state = selection(store)
     outcomes = state["outcomes"]
     lines = [
-        f"Strategy: {state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
+        f"Strategy: {state['active']} · MANUAL",
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
-        f"Consecutive losses: {state.get('loss_streak', 0)}/{LOSSES_TO_SWITCH}.",
-        "AUTO: switch current ↔ opposite after two consecutive net losses; a win or breakeven resets the streak."
-        if state["auto"]
-        else "Automatic switching paused by manual selection.",
-        "/strategy auto — enable automatic switching from the selected strategy.",
-        "/strategy current — manual normal execution: LONG → LONG, SHORT → SHORT.",
-        "/strategy opposite — manual reverse execution: LONG → SHORT, SHORT → LONG.",
-        "Opposite also permits MIXED markets; current requires BULL/BEAR alignment.",
-        "Mode, strategy and loss streak survive restarts. Switches apply to new entries; existing positions keep their exits.",
+        f"Consecutive losses: {state.get('loss_streak', 0)} (reporting only).",
+        "Automatic switching is disabled; losses never change the strategy.",
+        "/strategy current — normal trend execution.",
+        "/strategy opposite — LONG → SHORT / SHORT → LONG only after a failed breakout or confirmed structure reversal.",
+        "Opposite also permits verified MIXED markets; current requires BULL/BEAR alignment.",
+        "Selection survives restarts. Manual switches apply to new entries; existing positions keep their exits.",
         "Recent switches:",
     ]
     for event in reversed(store.get("simple_strategy_history", [])[-8:]):
@@ -201,7 +176,9 @@ def describe(store: Store, timezone: str) -> str:
     return "\n".join(lines)
 
 
-def require_order(store: Store, order: Order) -> None:
+def require_order(
+    store: Store, order: Order, now_ms: int | None = None, quote: Quote | None = None
+) -> None:
     if order.reduce_only or store.get(KEY) is None:
         return
     state = selection(store)
@@ -215,3 +192,26 @@ def require_order(store: Store, order: Order) -> None:
     original = permission.get("decision_side")
     if original not in {-1, 1} or execution_side(original, state) != order.side:
         raise EntryVeto("strategy order direction does not match the normal decision")
+    if state["active"] == "opposite":
+        try:
+            evidence = permission["opposite_evidence"]
+            row = evidence["row"]
+            cost = float(evidence["one_way_cost"])
+            if not math.isfinite(cost) or cost < 0:
+                raise ValueError("invalid cost")
+            side, _, level = opposite_entry(row, cost, Rules(**evidence["rules"]))
+            if side != order.side or level != permission.get("opposite_level"):
+                raise ValueError("confirmation does not match order")
+            if now_ms is not None and not 0 <= now_ms - int(row["timestamp_ms"]) < BAR_MS:
+                raise ValueError("confirmation expired")
+            if quote is not None:
+                touch = quote.ask if side > 0 else quote.bid
+                if (
+                    quote.symbol != order.symbol
+                    or level is None
+                    or side * (float(quote.mark) - level) <= 0
+                    or side * (float(touch) - level) <= 0
+                ):
+                    raise ValueError("live price reclaimed confirmation level")
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            raise EntryVeto("opposite entry requires fresh failed-breakout or reversal evidence") from None

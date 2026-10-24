@@ -88,7 +88,7 @@ def test_executable_profit_includes_fees_funding_spread_and_slippage(settings, s
 
 
 @pytest.mark.parametrize("side", [1, -1])
-async def test_monitor_takes_small_profit_without_waiting_for_candle(
+async def test_monitor_runs_winners_past_target_then_exits_on_retracement(
     settings, store, filters, side
 ):
     s = settings.model_copy(update={"simple_confidence_enabled": True})
@@ -100,21 +100,36 @@ async def test_monitor_takes_small_profit_without_waiting_for_candle(
     assert trade["profit_target_fraction"] == confidence.SMALL
     await engine.quote(quote(price=100 + side * 0.6, now_ms=now + 5000), now + 5000)
     await engine.monitor(now + 5000, {"SOLUSDT": obs})
-    assert not engine.positions()
-    assert "confidence net profit" in store.get("simple_closed")[-1]["reason"]
+    assert engine.positions()  # The old target arms a runner instead of selling.
+    first = engine.positions()["SOLUSDT"]["profit_runner"]
+    await engine.quote(quote(price=100 + side * 1.2, now_ms=now + 10000), now + 10000)
+    await engine.monitor(now + 10000, {"SOLUSDT": obs})
+    assert engine.positions()
+    high = engine.positions()["SOLUSDT"]["profit_runner"]
+    assert high["floor_net_return"] > first["floor_net_return"]
+    # Restore the engine to prove the earned floor survives a restart.
+    restored = Engine(s, store, filters)
+    await restored.restore()
+    await restored.quote(quote(price=100 + side * .6, now_ms=now + 15000), now + 15000)
+    await restored.monitor(now + 15000, {"SOLUSDT": obs})
+    assert not restored.positions()
+    closed = store.get("simple_closed")[-1]
+    assert "profit runner retracement" in closed["reason"]
+    assert closed["pnl"] > 0 and closed["profit_runner"]["peak_net_return"] > .006
     assert confidence.state(store)["wins"] == 1
     assert confidence.state(store)["pending"] == []
-    Engine(s, store, filters)
-    assert confidence.state(store)["wins"] == 1
 
 
-async def test_existing_position_gets_small_exit_but_not_new_sample(settings, store, filters):
+async def test_existing_position_gets_profit_runner_but_not_new_sample(settings, store, filters):
     engine = await engine_fixture(settings, store, filters)
     now = 200 * 900000
     await engine.enter("SOLUSDT", row(), now)
     engine.s = settings.model_copy(update={"simple_confidence_enabled": True})
     await engine.quote(quote(price=100.6, now_ms=now + 5000), now + 5000)
     await engine.monitor(now + 5000, {"SOLUSDT": row()})
+    assert engine.positions()["SOLUSDT"]["profit_runner"]
+    await engine.quote(quote(price=100.3, now_ms=now + 10000), now + 10000)
+    await engine.monitor(now + 10000, {"SOLUSDT": row()})
     assert not engine.positions()
     assert confidence.state(store)["wins"] == 0
 
@@ -131,6 +146,9 @@ async def test_unfilled_profit_order_retries_without_counting(settings, store, f
     assert confidence.state(store)["wins"] == 0
     await engine.quote(quote(price=100.6, now_ms=now + 5000), now + 5000)
     await engine.monitor(now + 5000, {"SOLUSDT": row()})
+    assert engine.positions()["SOLUSDT"]["profit_runner"]
+    await engine.quote(quote(price=100.3, now_ms=now + 10000), now + 10000)
+    await engine.monitor(now + 10000, {"SOLUSDT": row()})
     assert not engine.positions()
 
 
@@ -205,10 +223,25 @@ async def test_live_profit_exit_is_reduce_only_and_waits_for_actual_accounting(
         filters,
         simple_confidence_enabled=True,
     )
+    # This simulation normally fills at the submitted limit, even when a much
+    # better touch is available. For a marketable runner exit, simulate matching
+    # at the executable touch rather than the 2% emergency price boundary.
+    original_result = simulation.order_result
+
+    def execute_touch(key, direction, qty, price, status="FILLED"):
+        if simulation.quantity and (direction == "SELL") == (simulation.quantity > 0):
+            q = engine.broker.quotes["SOLUSDT"]
+            price = q.bid if direction == "SELL" else q.ask
+        return original_result(key, direction, qty, price, status)
+
+    simulation.order_result = execute_touch
     try:
         await engine.enter("SOLUSDT", row(now, direction=side), now)
         assert simulation.quantity * side > 0
         await engine.quote(quote(price=100 + side * 0.8, now_ms=now), now)
+        await engine.monitor(now, {"SOLUSDT": row(now, direction=side)})
+        assert engine.positions()["SOLUSDT"]["profit_runner"]
+        await engine.quote(quote(price=100 + side * .4, now_ms=now), now)
         await engine.monitor(now, {"SOLUSDT": row(now, direction=side)})
         assert not engine.positions()
         assert simulation.quantity == 0
@@ -297,3 +330,51 @@ async def test_actual_fill_times_bound_funding_and_duplicate_income_counts_once(
     assert saved["verified_entry_ms"] == 1000 and saved["verified_exit_ms"] == 2000
     params = exchange.request.call_args.args[2]
     assert params["startTime"] == 1000 and params["endTime"] == 2000
+
+
+def test_runner_floor_never_loosens_when_confidence_or_price_falls():
+    trade = {}
+    assert not confidence.update_runner(trade, .006, .006, 1)
+    assert not confidence.update_runner(trade, .012, .006, 2)
+    assert trade["profit_runner"]["floor_net_return"] == .006
+    assert not confidence.update_runner(trade, .009, .003, 3)
+    assert trade["profit_runner"]["floor_net_return"] == .006
+    assert confidence.update_runner(trade, .005, .003, 4)
+    assert trade["profit_runner"]["floor_net_return"] == .006
+
+
+@pytest.mark.parametrize("side", [1, -1])
+async def test_runner_gap_exits_even_below_earned_floor(settings, store, filters, side):
+    engine = await engine_fixture(settings.model_copy(update={"simple_confidence_enabled": True}), store, filters)
+    now = 200 * 900000
+    await engine.enter("SOLUSDT", row(now, side), now)
+    await engine.quote(quote(price=100 + side * .8, now_ms=now + 5000), now + 5000)
+    await engine.monitor(now + 5000, {"SOLUSDT": row(now, side)})
+    assert engine.positions()
+    await engine.quote(quote(price=100 - side * .2, now_ms=now + 10000), now + 10000)
+    await engine.monitor(now + 10000, {"SOLUSDT": row(now, side)})
+    assert not engine.positions()  # An unreachable profit limit must not trap the exit.
+    assert "profit runner retracement" in store.get("simple_closed")[-1]["reason"]
+
+
+async def test_runner_partial_exit_preserves_floor_until_fully_closed(settings, store, filters):
+    from test_simple_live import setup_engine
+
+    engine, sim, adapter, obs, now = await setup_engine(settings, store, filters, simple_confidence_enabled=True)
+    try:
+        await engine.enter("SOLUSDT", obs, now)
+        await engine.quote(quote(price=100.8, now_ms=now), now)
+        await engine.monitor(now, {"SOLUSDT": obs})
+        floor = engine.positions()["SOLUSDT"]["profit_runner"]["floor_net_return"]
+        sim.reduce_fraction = Decimal(".5")
+        await engine.quote(quote(price=100.3, now_ms=now), now)
+        await engine.monitor(now, {"SOLUSDT": obs})
+        assert engine.positions()["SOLUSDT"]["profit_runner"]["floor_net_return"] == floor
+        assert confidence.state(store)["pending"] == []
+        assert store.get("live_stops")["SOLUSDT"]["state"] == "CONFIRMED"
+        sim.reduce_fraction = Decimal(1)
+        await engine.monitor(now + 1, {"SOLUSDT": obs})
+        assert not engine.positions() and sim.quantity == 0
+        assert len(confidence.state(store)["pending"]) == 1
+    finally:
+        await adapter.close()

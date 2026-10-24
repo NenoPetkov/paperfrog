@@ -237,7 +237,8 @@ async def test_ai_receives_strategy_and_leaves_inversion_to_executor(settings, s
     assert snapshot["entry_policy"]["execution_direction"] == (
         "reverse_normal" if strategy == "opposite" else "normal"
     )
-    assert "executor alone reverses" in messages[0]["content"][0]["text"]
+    assert "later completed failed" in messages[0]["content"][0]["text"]
+    assert "A trend continuation alone never qualifies" in messages[0]["content"][0]["text"]
     assert "dip_peak" not in snapshot["markets"][0]
 
 

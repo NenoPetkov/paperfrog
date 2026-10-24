@@ -1,31 +1,29 @@
 # paperfrog
 
-The simple service switches automatically between `current` (normal execution)
-and `opposite` (LONG becomes SHORT; SHORT becomes LONG) after **two consecutive
-net losing positions**. A win or breakeven resets the loss streak. Switching resets
-the streak to zero: win, win, loss, loss → switch; loss, loss → switch again.
-Each complete position counts once, including all partial exit fills, estimated
-fees and recorded funding. Trades from an earlier strategy stint do not count
-toward the new stint. Existing open positions keep their recorded direction and exits.
-Automatic mode, selected strategy, streak and switch history survive restarts.
-Installing this policy enables automatic mode on the existing strategy and starts
-a fresh streak from future closures, without seeding historical losses.
+Strategy selection is manual: `/strategy current` uses normal trend execution;
+`/strategy opposite` waits for a **completed failed breakout or structure reversal**.
+Automatic switching after losses is disabled, including after upgrade/restart.
+`/strategy auto` is rejected. Loss outcomes remain visible for reporting; financial
+loss breakers, account authorization and manual/risk locks remain independent.
+The selected strategy and historical switches are retained during the upgrade.
 
-The normal signal, AI, slope, BTC and market direction checks run on the original
-decision. Opposite mode reverses it exactly once before sizing and execution.
-No signal and AI pauses still produce no entry. Stops, trailing stops, prices,
-liquidity, exposure and PnL use the actual executed side. Trend exits track the
-original decision so a reversed position is not immediately closed on entry.
-AI is explicitly instructed to produce normal decisions without compensating for
-opposite execution. Exact order permissions bind both directions and the current
-strategy epoch; a strategy change before dispatch rejects the entry.
+Opposite requires a previous completed directional setup and a later candle with
+reversed taker flow and a confirming body. A failed breakout must close back
+through the previous breakout level. Alternatively, the new close must break the
+prior range against the old trend and cross the fast average. A continuing trend
+signal alone cannot open an opposite position. Confirmation currently requires
+15-minute candles and normal trend mode; missing evidence blocks entry.
+The old setup's direction must still pass the independent BTC and coin/market
+trend gates; verified MIXED breadth is permitted for opposite. Optional AI
+permission must also agree. Exact order permissions bind the confirmation,
+executed direction and strategy epoch, and recheck freshness before dispatch.
 
-`/strategy` shows the mode, selected strategy, consecutive loss streak, confidence,
-profit targets and recent switches. `/strategy auto` enables automatic switching
-from the selected strategy with a fresh streak. `/strategy current` and
-`/strategy opposite` select manually and pause automatic switching. Repeating the
-current mode/selection leaves its streak and history intact. A strategy switch
-never arms LIVE, resumes trading, resets financial loss counters or clears locks.
+New confirmed opposite trades exit if a completed candle reclaims their
+confirmation level. The old trend ending does not itself close a successful
+reversal. Legacy positions retain their recorded exit thesis. Both strategies
+use the actual execution side for stops, liquidity, exposure and PnL.
+Manual changes apply to new entries and never resume trading or clear risk locks.
+
 The production operator configuration uses `SIMPLE_ENTRY_TIMEFRAME=15m`,
 `SIMPLE_AI_REVIEW_MINUTES=15`, and `MAX_CONCURRENT_STRATEGY_TRADES=4`.
 Portfolio risk and margin limits still apply. Defaults remain PAPER.
@@ -879,35 +877,34 @@ Legacy code below is retained for existing safety/operations and reproducible re
 Legacy research/account commands and the earlier architecture are retained in [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md). They require the legacy profile and do not validate or authorize the simple strategy.
 
 
-### Confidence exits (October 2026)
+### Confidence profit runners (October 2026)
 
-The runtime strategy controller is locked to `current`; `opposite` and `auto`
-commands are rejected, including after a restart. Historical switch records remain.
-Set `SIMPLE_AI_ENABLED=false` to disable both entry AI and OpenAI daily reviews.
-The daily summary can still run without OpenAI.
+Set `SIMPLE_AI_ENABLED=false` to disable entry AI and OpenAI daily reviews.
+Set `SIMPLE_CONFIDENCE_ENABLED=true` to enable a net-profit runner. The former
+**0.30% net** take-profit (or **0.60% after three verified consecutive wins**) now
+**activates trailing protection instead of closing the winner**. There is no fixed
+profit ceiling. The bot retains 50% of the highest observed net gain: a 0.30%
+peak sets a 0.15% floor; 1.00% sets a 0.50% floor. Net observations use executable
+bid/ask, entry/exit fees, slippage reserve, recorded funding and partial exits.
+The earned floor never decreases and survives restarts and partial fills.
 
-Set `SIMPLE_CONFIDENCE_ENABLED=true` to use early profit exits. The initial target
-is **0.30% net of entry notional**, rising to **0.60% after three consecutive wins**.
-A loss or breakeven resets the streak. Position sizing, leverage, stops, risk locks
-and maximum holding time do not change. Targets are sampled every monitor cycle,
-using bid for longs / ask for shorts, estimated exit fees and a slippage reserve.
-Profit IOC limits protect the estimated net target; an unfilled IOC retries later.
-Partial executions retain the existing reconciliation lock. Emergency exits keep
-priority and their existing execution policy.
+Activation is fixed at entry and can decrease when confidence falls, never increase
+for an existing trade. Confidence losses/breakeven reset its win streak without
+changing the selected strategy. Protective stops, reversal invalidation, stale
+data, portfolio limits, crisis exits and the existing maximum hold keep priority.
+Position sizing, leverage and risk limits do not change.
 
-Targets are fixed at entry and may decrease when confidence falls; an open trade's
-target never increases. Existing positions receive the small target but do not
-contribute to the new confidence sample. Only positions entered under this policy
-count. Paper outcomes use simulated net PnL. Live outcomes wait for complete
-exchange fills for both order IDs and funding income over the holding interval.
-Actual commissions and realized PnL come from Binance's `/fapi/v1/userTrades` API;
-unsupported fee currencies or incomplete records leave accounting pending.
-Records retain original estimated PnL and add `verified_net_pnl`, `verified_fees`
-and `verified_funding`. Confidence uses the verified result exclusively.
+Runner retracements submit marketable reduce-only IOC exits. A gap below the floor
+still exits; the floor is monitored every five seconds and cannot guarantee the
+realized return. Hosted initial stops remain active; unfilled/partial reductions
+retain protection and are reconciled/retried without double-counting outcomes.
+Existing positions can receive a runner, but only confidence-tagged positions
+contribute to its sample.
 
-One fully closed position counts once, in closure order, with durable deduplication
-and atomic ledger writes. A pending result holds the small target, never blocks
-protective exits, and is retried once per minute. Breakeven tolerance is 0.000001%
-of entry notional (minimum 1e-8 account units). `/strategy` and `/simple` expose
-wins, losses, breakevens, streak, pending accounting and the current target.
-This is an execution policy; software checks do not establish profitability.
+Live confidence waits for complete exchange fills and funding over the holding
+interval. Records retain estimated PnL and add `verified_net_pnl`, `verified_fees`
+and `verified_funding`. One full position counts once, in closure order. Pending
+accounting holds the smaller activation level without blocking protective exits.
+`/strategy` and `/simple` expose confidence, activation and runner policy; position
+journals retain the earned peak and floor. Software checks verify behavior and
+safety, not profitability.

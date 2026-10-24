@@ -253,6 +253,15 @@ def test_mixed_order_permission_is_revoked_after_switching_to_current(settings, 
         "order": order.model_dump(mode="json"), "active": "opposite",
         "epoch": rotation.selection(store)["epoch"], "decision_side": side,
     })
+    from test_opposite_confirmation import confirmed_row
+
+    from paperfrog.simple.strategy import RULES, opposite_entry
+
+    permission = store.get("simple_strategy_order:" + order.client_id)
+    evidence_row = confirmed_row(BOUNDARY, side)
+    permission.update(opposite_level=opposite_entry(evidence_row, .0007)[2],
+                      opposite_evidence={"row": evidence_row, "one_way_cost": .0007, "rules": RULES.public()})
+    store.put("simple_strategy_order:" + order.client_id, permission)
     require_order(s, store, order, BOUNDARY + 1000)
     rotation.configure(store, "current", 1)
     with pytest.raises(SafeError, match="strategy selection changed"):
@@ -564,6 +573,7 @@ async def test_opposite_fifteen_minute_live_entry_trades_mixed_with_stop_and_exi
 ):
     import time
 
+    from test_opposite_confirmation import confirmed_row
     from test_simple_live import setup_engine
 
     fixed_now = int(time.time() * 1000) // 7_200_000 * 7_200_000 + 1000
@@ -572,9 +582,8 @@ async def test_opposite_fifteen_minute_live_entry_trades_mixed_with_stop_and_exi
         settings, store, filters, simple_market_trend_enabled=True,
     )
     rotation.configure(store, "opposite", now)
+    obs.update(confirmed_row(now, side))
     obs.update(day(now, side))
-    if side < 0:
-        obs.update(trend_atr=-2, flow=-0.4, prior_low=101)
     mixed_breadth(store, engine.s, now, side)
     try:
         await engine.enter("SOLUSDT", obs, now)

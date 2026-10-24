@@ -205,6 +205,10 @@ def indicators(raw: pd.DataFrame, rules: Rules = RULES) -> pd.DataFrame:
     x["rejection_level"] = np.where(
         previous_up, x.prior_high.shift(1), np.where(previous_down, x.prior_low.shift(1), np.nan)
     )
+    # Previous completed observations allow a later bar to confirm a reversal.
+    # No future bar or intrabar high/low is used to authorize an entry.
+    for key in ("trend_atr", "close", "fast", "flow", "atr_fraction", "prior_high", "prior_low"):
+        x["previous_" + key] = x[key].shift(1)
     return x
 
 
@@ -311,6 +315,50 @@ def entry(
     return 0, "waiting for a trend breakout confirmed by trading flow"
 
 
+def opposite_entry(
+    row: dict[str, Any], one_way_cost: float, rules: Rules = RULES
+) -> tuple[int, str, float | None]:
+    """Fade a completed failed breakout or confirmed break of the old trend's structure."""
+    waiting = "opposite waiting for a failed breakout or confirmed structure reversal"
+    keys = (
+        "open", "close", "fast", "flow", "atr_fraction", "trend_atr", "prior_high", "prior_low",
+        "previous_trend_atr", "previous_close", "previous_fast", "previous_flow",
+        "previous_atr_fraction", "previous_prior_high", "previous_prior_low",
+    )
+    if row.get("entry_timeframe", "15m") != "15m":
+        return 0, "opposite confirmation requires completed 15-minute candles", None
+    if not all(math.isfinite(float(row.get(key, math.nan))) for key in keys):
+        return 0, waiting + "; completed setup history missing", None
+    if not rules.min_atr_fraction <= row["atr_fraction"] <= rules.max_atr_fraction:
+        return 0, "volatility outside the permitted range", None
+    if min(rules.maximum_stop_fraction, rules.stop_atr * row["atr_fraction"]) <= 2 * one_way_cost + 0.0035:
+        return 0, "price range too small relative to assumed trading costs", None
+    if not rules.min_atr_fraction <= row["previous_atr_fraction"] <= rules.max_atr_fraction:
+        return 0, waiting, None
+    for old_side in (1, -1):
+        side = -old_side
+        if (
+            old_side * row["previous_trend_atr"] < rules.minimum_trend_atr
+            or old_side * row["previous_flow"] < rules.minimum_flow
+            or side * row["flow"] < rules.minimum_flow
+            or side * (row["close"] - row["open"]) <= 0
+            or (side > 0 and rules.allowed_side == "short")
+            or (side < 0 and rules.allowed_side == "long")
+        ):
+            continue
+        breakout = row["previous_prior_high" if old_side > 0 else "previous_prior_low"]
+        if old_side * (row["previous_close"] - breakout) > 0 and side * (row["close"] - breakout) > 0:
+            return side, "Opposite: previous completed breakout failed; closed rejection and reversed flow confirm", float(breakout)
+        structure = row["prior_low" if old_side > 0 else "prior_high"]
+        if (
+            old_side * (row["previous_close"] - row["previous_fast"]) > 0
+            and side * (row["close"] - structure) > 0
+            and side * (row["close"] - row["fast"]) > 0
+        ):
+            return side, "Opposite: closed break of prior range and fast average confirms structure reversal with reversed flow", float(structure)
+    return 0, waiting, None
+
+
 def exit_reason(
     position: dict[str, Any],
     mark: float,
@@ -326,7 +374,12 @@ def exit_reason(
     if row is not None and math.isfinite(float(row.get("trend_atr", math.nan))):
         decision = int(position.get("decision_side", side))
         mode = position.get("entry_mode", "trend")
-        if mode == "failed_breakout":
+        if position.get("opposite_confirmation_version") == 1:
+            # The confirmed reversal is the thesis. Its old trend ending is
+            # favorable and must not close the new opposite position.
+            if side * (float(row["close"]) - float(position["opposite_level"])) <= 0:
+                return "opposite reversal invalidated: price reclaimed the confirmation level"
+        elif mode == "failed_breakout":
             if decision * (float(row["close"]) - float(position["rejection_level"])) <= 0:
                 return "failed-breakout thesis invalidated: price reclaimed the breakout level"
         elif (decision if mode == "trend" else -decision) * float(row["trend_atr"]) < 0:

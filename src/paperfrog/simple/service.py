@@ -143,7 +143,7 @@ class SimpleService:
                 description += (
                     f"\nConfidence: {result['wins']} wins / {result['losses']} losses / "
                     f"{result['breakevens']} breakevens; win streak {result['streak']}."
-                    f"\nNet target: {confidence.target(self.store):.2%} of entry notional. "
+                    f"\nProfit runner activates at {confidence.target(self.store):.2%} net of entry notional; retains 50% of peak net gain. "
                     f"Awaiting verified accounting: {len(result['pending'])}."
                 )
             return description
@@ -194,6 +194,8 @@ class SimpleService:
                     **confidence.state(self.store),
                     "enabled": self.s.simple_confidence_enabled,
                     "target_fraction": confidence.target(self.store),
+                    "exit_policy": "net_profit_runner",
+                    "retained_peak_fraction": 0.5,
                 },
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,

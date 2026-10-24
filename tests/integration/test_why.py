@@ -74,6 +74,7 @@ def test_opposite_mixed_reports_permission_and_preserves_risk_blockers(settings,
     assert "MIXED permits neither" not in output
     assert "coin trend, BTC and risk checks still apply" in output
     assert "loss streak cooldown, until" in output
+    assert "a trend signal alone is insufficient" in output
 
 
 @pytest.mark.parametrize("side,label", [(1, "LONG"), (-1, "SHORT")])

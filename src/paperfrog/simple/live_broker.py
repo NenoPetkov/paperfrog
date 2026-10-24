@@ -163,7 +163,12 @@ class LiveBroker:
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
                     raise EntryVeto("simple spread veto at short-interval dispatch")
             require_market_order(self.s, self.store, order, self.now_ms())
-            require_strategy_order(self.store, order)
+            strategy_permission = self.store.get("simple_strategy_order:" + order.client_id, {})
+            if strategy_permission.get("active") == "opposite":
+                quote = await self.refresh_quote(order.symbol)
+                if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
+                    raise EntryVeto("simple spread veto at opposite dispatch")
+            require_strategy_order(self.store, order, self.now_ms(), self.quotes.get(order.symbol))
             self.exchange.entry_authorized = True
         return await self.exchange.submit(order)
 

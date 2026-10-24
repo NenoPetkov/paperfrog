@@ -89,6 +89,30 @@ def net_return(s: Settings, trade: dict[str, Any], quote: Quote) -> float:
     return net / (entry * float(trade.get("initial_quantity", trade["quantity"])))
 
 
+def update_runner(trade: dict[str, Any], net: float, activation: float, now_ms: int) -> bool:
+    """Arm at the former take-profit; retain half the highest observed net gain.
+
+    State stays on the position across restart/partial fills. The floor never
+    decreases. This is a monitored exit, not a guaranteed exchange fill price.
+    """
+    if not math.isfinite(net) or not math.isfinite(activation) or activation <= 0:
+        raise SafeError("finite profit runner observation and positive activation required")
+    runner = trade.get("profit_runner")
+    if runner is None:
+        if net < activation:
+            return False
+        runner = {"version": 1, "armed_ms": now_ms, "activation_fraction": activation,
+                  "peak_net_return": net, "floor_net_return": net / 2}
+        trade["profit_runner"] = runner
+    else:
+        peak, floor = float(runner["peak_net_return"]), float(runner["floor_net_return"])
+        if runner.get("version") != 1 or not all(math.isfinite(x) and x > 0 for x in (peak, floor)):
+            raise SafeError("invalid saved profit runner state")
+        runner["peak_net_return"] = max(peak, net)
+        runner["floor_net_return"] = max(floor, runner["peak_net_return"] / 2)
+    return net <= float(runner["floor_net_return"])
+
+
 def partial_accounting(trade: dict[str, Any]) -> tuple[Decimal, Decimal]:
     gross, fees = Decimal(0), Decimal(0)
     for part in trade.get("partial_exit_fills", []):

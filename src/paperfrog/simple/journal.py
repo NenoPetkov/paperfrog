@@ -10,6 +10,15 @@ from paperfrog.domain.types import Fill, Quote
 # Explicit numeric allowlist: never persist arbitrary row text, settings or credentials.
 INDICATORS = (
     "timestamp_ms",
+    "open",
+    "fast",
+    "previous_trend_atr",
+    "previous_close",
+    "previous_fast",
+    "previous_flow",
+    "previous_atr_fraction",
+    "previous_prior_high",
+    "previous_prior_low",
     "close",
     "trend_atr",
     "flow",

@@ -266,7 +266,9 @@ Keep explanation to two short sentences (at most 350 characters). Return at most
 lessons, only when new evidence supports them; an empty lessons list is fine.
 entry_policy.strategy identifies current or opposite execution. Always produce the
 NORMAL strategy's LONG/SHORT conditions, regardless of execution mode. Do not invert
-or compensate for opposite mode: the executor alone reverses a qualifying decision.
+or compensate for opposite mode: the executor requires a later completed failed
+breakout or structure reversal with reversed flow before taking the opposite side.
+A trend continuation alone never qualifies for opposite execution.
 No signal or a pause remains no trade in either mode.
 Prefer two or three meaningful distinct features per group when sufficient;
 all independent trend, flow, cost, BTC, market and risk gates still apply.
