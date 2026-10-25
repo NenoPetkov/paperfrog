@@ -13,7 +13,7 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
 from .data import normalize
-from .rotation import decision_side
+from .rotation import decision_side, selection, timeframe
 from .strategy import BAR_MS, Rules
 
 MINUTE_MS = 60_000
@@ -94,20 +94,40 @@ def frame(
     for key, value in context.items():
         if key.startswith(("btc_", "day_")):
             x[key] = value
+    x = timing_indicators(x, minutes, minute_closes)
+    x["previous_atr_fraction"] = x.atr_fraction.shift(1)
+    if boundary == int(context["timestamp_ms"]) and "previous_atr_fraction" in context:
+        x.loc[x.index[-1], "previous_atr_fraction"] = context["previous_atr_fraction"]
+    x["entry_timeframe"] = timeframe
+    # Keep a distinct copy for older positions' original trend-reversal exit.
+    x.attrs["risk_context"] = context
+    return x
+
+
+
+def timing_indicators(x: pd.DataFrame, minutes: int, minute_closes: dict[int, float] | None = None) -> pd.DataFrame:
+    """Shared closed-bar timing features for execution and chronological research."""
+    minute_closes = minute_closes or {}
     previous = x.close.shift(1)
     tr = pd.concat(
         [x.high - x.low, (x.high - previous).abs(), (x.low - previous).abs()], axis=1
     ).max(axis=1)
     x["minute_atr"] = tr.rolling(14).mean()
-    x["fast"] = x.close.ewm(span=5, adjust=False).mean()
-    x["slow"] = x.close.ewm(span=20, adjust=False).mean()
+    # A bounded EMA gives replay and rolling live windows exactly the same value.
+    # Keep 119 prices so the previous value exists in the 120-bar live payload.
+    for name, span in (("fast", 5), ("slow", 20)):
+        weights = (1 - 2 / (span + 1)) ** np.arange(HISTORY_BARS - 2, -1, -1)
+        weights /= weights.sum()
+        x[name] = x.close.rolling(HISTORY_BARS - 1).apply(
+            lambda prices, w=weights: float(np.dot(prices, w)), raw=True
+        )
     x["fast_change"] = x.fast.diff()
     x["trend_atr"] = (x.fast - x.slow) / x.minute_atr.replace(0, np.nan)
     x["prior_high"] = x.high.shift(1).rolling(5).max()
     x["prior_low"] = x.low.shift(1).rolling(5).min()
     for bars in (1, 3, 5):
         x[f"return_{bars * minutes}m"] = x.close.pct_change(bars)
-    if timeframe == "8m":
+    if minutes == 8:
         # Sixty minutes is 7.5 eight-minute bars. Use exact closed minute prices.
         x["return_1h"] = [
             close / minute_closes[int(ts) - 60 * MINUTE_MS] - 1
@@ -130,10 +150,10 @@ def frame(
     x["breakout_down_atr"] = (x.prior_low - x.close) / x.minute_atr.replace(0, np.nan)
     low, high = x.low.rolling(24).min(), x.high.rolling(24).max()
     x["range_position"] = (x.close - low) / (high - low).replace(0, np.nan)
-    x["score"] = x.trend_atr.abs().clip(upper=5) * np.sqrt(x.daily_volume / 10_000_000)
-    x["entry_timeframe"] = timeframe
-    # Keep a distinct copy for older positions' original trend-reversal exit.
-    x.attrs["risk_context"] = context
+    if "daily_volume" in x:
+        x["score"] = x.trend_atr.abs().clip(upper=5) * np.sqrt(x.daily_volume / 10_000_000)
+    for key in ("trend_atr", "close", "fast", "flow", "prior_high", "prior_low"):
+        x["previous_" + key] = x[key].shift(1)
     return x
 
 
@@ -199,7 +219,7 @@ def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules)
 
 
 def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Quote) -> None:
-    if order.reduce_only or s.simple_entry_timeframe not in {"1m", "5m", "8m"}:
+    if order.reduce_only or timeframe(store, s) not in {"1m", "5m", "8m"}:
         return
     from .strategy import execution_rules
 
@@ -210,7 +230,7 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Q
     ):
         raise EntryVeto("short-interval permission is not bound to this order")
     row = permission.get("row", {})
-    if not isinstance(row, dict) or row.get("entry_timeframe") != s.simple_entry_timeframe:
+    if not isinstance(row, dict) or row.get("entry_timeframe") != timeframe(store, s):
         raise EntryVeto("short-interval entry context unavailable")
     latest = store.get("simple_minute:" + order.symbol, {})
     if latest != row:
@@ -220,6 +240,10 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Q
         or not 0 <= now_ms - quote.timestamp_ms <= s.market_stale_seconds * 1000
     ):
         raise EntryVeto("fresh short-interval execution quote required")
+    if selection(store)["active"] == "opposite":
+        from .rotation import require_order as require_strategy_order
+        require_strategy_order(store, order, now_ms, quote)
+        return
     reason = veto(row, decision_side(store, order), now_ms, float(quote.mark), execution_rules(s))
     if reason:
         raise EntryVeto(reason)

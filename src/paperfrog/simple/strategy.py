@@ -325,8 +325,8 @@ def opposite_entry(
         "previous_trend_atr", "previous_close", "previous_fast", "previous_flow",
         "previous_atr_fraction", "previous_prior_high", "previous_prior_low",
     )
-    if row.get("entry_timeframe", "15m") != "15m":
-        return 0, "opposite confirmation requires completed 15-minute candles", None
+    if row.get("entry_timeframe", "15m") not in {"5m", "15m"}:
+        return 0, "opposite confirmation requires completed 5- or 15-minute candles", None
     if not all(math.isfinite(float(row.get(key, math.nan))) for key in keys):
         return 0, waiting + "; completed setup history missing", None
     if not rules.min_atr_fraction <= row["atr_fraction"] <= rules.max_atr_fraction:
@@ -369,8 +369,9 @@ def exit_reason(
     side = int(position["side"])
     if side * (mark - float(position["stop_price"])) <= 0:
         return "protective stop or volatility trailing stop reached"
-    if now_ms - int(position["opened_ms"]) >= rules.maximum_hold_bars * BAR_MS:
-        return f"{rules.maximum_hold_bars / 4:g}-hour holding limit reached"
+    hold = min(float(position.get("max_hold_hours", rules.maximum_hold_bars / 4)), rules.maximum_hold_bars / 4)
+    if now_ms - int(position["opened_ms"]) >= hold * 3_600_000:
+        return f"{hold:g}-hour holding limit reached"
     if row is not None and math.isfinite(float(row.get("trend_atr", math.nan))):
         decision = int(position.get("decision_side", side))
         mode = position.get("entry_mode", "trend")

@@ -1,18 +1,23 @@
 # paperfrog
 
-Strategy selection is manual: `/strategy current` uses normal trend execution;
-`/strategy opposite` waits for a **completed failed breakout or structure reversal**.
-Automatic switching after losses is disabled, including after upgrade/restart.
-`/strategy auto` is rejected. Loss outcomes remain visible for reporting; financial
-loss breakers, account authorization and manual/risk locks remain independent.
-The selected strategy and historical switches are retained during the upgrade.
+`/strategy auto` learns a joint choice of **current/opposite, 5m/15m candles and
+1/2/4/8-hour holding limits** from closed historical results in the current market
+pattern. It checks costs, chronological validation, sample size and uncertainty;
+without a validated edge it waits for new entries. Changes require two agreeing
+reviews and a one-hour minimum dwell. Research refreshes hourly, decisions every
+15 minutes. `/strategy current` and `/strategy opposite` retain manual control.
+Loss streaks never flip strategy or clear financial/manual locks.
+
+See [automatic policy and reproduction](docs/HISTORICAL_AUTO.md) and the
+[25 October history analysis](docs/STRATEGY_REVIEW_2026-10-25.md). Defaults remain
+PAPER; local account authorization and risk limits remain independent.
 
 Opposite requires a previous completed directional setup and a later candle with
 reversed taker flow and a confirming body. A failed breakout must close back
 through the previous breakout level. Alternatively, the new close must break the
 prior range against the old trend and cross the fast average. A continuing trend
 signal alone cannot open an opposite position. Confirmation currently requires
-15-minute candles and normal trend mode; missing evidence blocks entry.
+5- or 15-minute candles and normal trend mode; missing evidence blocks entry.
 The old setup's direction must still pass the independent BTC and coin/market
 trend gates; verified MIXED breadth is permitted for opposite. Optional AI
 permission must also agree. Exact order permissions bind the confirmation,

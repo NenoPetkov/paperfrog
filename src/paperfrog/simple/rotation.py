@@ -17,7 +17,7 @@ from .strategy import BAR_MS, Rules, opposite_entry
 KEY = "simple_strategy_rotation"
 CHOICES = {"current", "opposite"}
 VERSION = "+confirmed-opposite-v2"
-POLICY_VERSION = 6
+POLICY_VERSION = 7
 RESULT_PREFIX = "simple_strategy_result:"
 
 
@@ -71,7 +71,7 @@ def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
             previous is not None
             and previous.get("policy_version") == POLICY_VERSION
             and previous.get("active") in CHOICES
-            and previous.get("auto") is False
+            and isinstance(previous.get("auto"), bool)
             and isinstance(previous.get("loss_streak"), int)
             and previous["loss_streak"] >= 0
         ):
@@ -141,26 +141,36 @@ def closed(
 
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
-    if choice == "auto":
-        raise SafeError("Automatic strategy switching is disabled; use /strategy current or /strategy opposite")
-    if choice not in CHOICES:
-        raise SafeError("use /strategy current or /strategy opposite")
+    if choice not in CHOICES | {"auto"}:
+        raise SafeError("use /strategy current, /strategy opposite or /strategy auto")
     initialize(store, "current", now_ms)
     with store.transaction() as conn:
         state = selection(store, conn)
-        if state["active"] != choice:
-            switch(store, state, choice, now_ms, "manual selection via /strategy", conn)
-            store.put(KEY, state, conn)
+        if choice == "auto":
+            if not state["auto"]:
+                state.update(auto=True, epoch=state["epoch"] + 1, changed_ms=now_ms)
+                store.put("simple_learning", {}, conn)
+        else:
+            was_auto = state["auto"]
+            state["auto"] = False
+            if state["active"] != choice or was_auto:
+                switch(store, state, choice, now_ms, "manual selection via /strategy", conn)
+            state.pop("timeframe", None)
+            state.pop("hold_hours", None)
+        store.put(KEY, state, conn)
 
 
 def describe(store: Store, timezone: str) -> str:
     state = selection(store)
     outcomes = state["outcomes"]
     lines = [
-        f"Strategy: {state['active']} · MANUAL",
+        f"Strategy: {state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
         f"Consecutive losses: {state.get('loss_streak', 0)} (reporting only).",
-        "Automatic switching is disabled; losses never change the strategy.",
+        "Auto uses validated net results by market pattern, with confirmation and minimum dwell.",
+        "/strategy auto — choose current/opposite, 5m/15m and holding limit; wait without validated evidence.",
+        f"Candles: {state.get('timeframe', 'configured')}; hold cap: {state.get('hold_hours', 'configured')} hours.",
+        store.get("simple_learning", {}).get("reason", "Historical review pending."),
         "/strategy current — normal trend execution.",
         "/strategy opposite — LONG → SHORT / SHORT → LONG only after a failed breakout or confirmed structure reversal.",
         "Opposite also permits verified MIXED markets; current requires BULL/BEAR alignment.",
@@ -202,7 +212,7 @@ def require_order(
             side, _, level = opposite_entry(row, cost, Rules(**evidence["rules"]))
             if side != order.side or level != permission.get("opposite_level"):
                 raise ValueError("confirmation does not match order")
-            if now_ms is not None and not 0 <= now_ms - int(row["timestamp_ms"]) < BAR_MS:
+            if now_ms is not None and not 0 <= now_ms - int(row["timestamp_ms"]) < (300_000 if row.get("entry_timeframe") == "5m" else BAR_MS):
                 raise ValueError("confirmation expired")
             if quote is not None:
                 touch = quote.ask if side > 0 else quote.bid
@@ -215,3 +225,19 @@ def require_order(
                     raise ValueError("live price reclaimed confirmation level")
         except (KeyError, TypeError, ValueError, ArithmeticError):
             raise EntryVeto("opposite entry requires fresh failed-breakout or reversal evidence") from None
+
+
+def timeframe(store: Store, s: Any) -> str:
+    state = selection(store)
+    value = state.get("timeframe", s.simple_entry_timeframe) if state["auto"] else s.simple_entry_timeframe
+    if value not in {"1m", "5m", "8m", "15m"}:
+        raise SafeError("invalid saved entry timeframe")
+    return str(value)
+
+
+def hold_hours(store: Store, s: Any) -> int:
+    state = selection(store)
+    value = state.get("hold_hours", s.simple_max_hold_hours) if state["auto"] else s.simple_max_hold_hours
+    if not isinstance(value, int) or not 1 <= value <= s.simple_max_hold_hours:
+        raise SafeError("invalid saved holding limit")
+    return value

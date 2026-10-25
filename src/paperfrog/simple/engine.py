@@ -19,7 +19,7 @@ from paperfrog.risk.sizing import equity_margin_bounds, require_equity_margin_al
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
-from . import confidence, rotation
+from . import confidence, learning, rotation
 from .adaptive import active_plan
 from .adaptive import signal as adaptive_signal
 from .authorization import verify_simple_arm
@@ -118,6 +118,14 @@ class Engine:
         self.store.put("simple_rules", public_rules)
         self.store.put("simple_entry_mode", s.simple_entry_mode)
         self.store.put("simple_entry_profile", s.simple_entry_profile)
+
+    @property
+    def entry_timeframe(self) -> str:
+        return rotation.timeframe(self.store, self.s)
+
+    @property
+    def entry_bar_ms(self) -> int:
+        return {"1m": 60_000, "5m": 300_000, "8m": 480_000, "15m": BAR_MS}[self.entry_timeframe]
 
     def positions(self) -> dict[str, dict[str, Any]]:
         return dict(self.store.get("simple_positions", {}))
@@ -701,7 +709,7 @@ class Engine:
                 if self.store.get("risk_lock")
                 else "BTC market crisis detected"
                 if crisis
-                else exit_reason(trade, float(q.mark), now_ms, row, self.rules)
+                else exit_reason(learning.position_budget(trade, self.store.get("simple_market_trend"), now_ms, self.s.simple_max_hold_hours), float(q.mark), now_ms, row, self.rules)
             )
             if not awaiting_initial_scan and (
                 row is None
@@ -744,6 +752,11 @@ class Engine:
         self.risk.anchors(float(self.broker.equity()), now)
 
     def entry_signal(self, row: dict[str, Any], now_ms: int, spread: float) -> tuple[int, str]:
+        if row.get("entry_timeframe", "15m") != self.entry_timeframe:
+            return 0, "entry candle timeframe does not match selected policy"
+        learned_veto = learning.veto(self.store, self.s, now_ms)
+        if learned_veto:
+            return 0, learned_veto
         one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
         opposite = rotation.selection(self.store)["active"] == "opposite"
         if opposite:
@@ -759,8 +772,8 @@ class Engine:
                     return 0, "opposite confirmation lacks matching AI permission; " + ai_reason
         else:
             minute_side, minute_reason = (0, "")
-            if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-                if row.get("entry_timeframe") != self.s.simple_entry_timeframe:
+            if self.entry_timeframe in {"1m", "5m", "8m"}:
+                if row.get("entry_timeframe") != self.entry_timeframe:
                     return 0, "entry candle timeframe does not match configuration"
                 minute_side, minute_reason = minute_direction(row, self.rules)
                 if not minute_side:
@@ -773,11 +786,11 @@ class Engine:
                     one_way_cost,
                     self.s.simple_entry_mode,
                     replace(self.rules, entry_style="trend_follow")
-                    if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
+                    if self.entry_timeframe in {"1m", "5m", "8m"}
                     else self.rules,
                 )
             )
-            if self.s.simple_entry_timeframe in {"1m", "5m", "8m"} and direction:
+            if self.entry_timeframe in {"1m", "5m", "8m"} and direction:
                 if direction != minute_side:
                     return 0, "AI entry direction conflicts with the closed short-interval slope"
                 reason = minute_reason + "; " + reason
@@ -796,6 +809,10 @@ class Engine:
     async def enter(
         self, symbol: str, row: dict[str, Any], now_ms: int, maximum_signal_age_ms: int = BAR_MS
     ) -> None:
+        if rotation.selection(self.store)["auto"]:
+            researched = self.store.get("simple_learning_research", {}).get("symbols", [])
+            if symbol not in researched:
+                return
         if symbol == BTC:
             raise SafeError("BTC is reference-only; new BTC positions are forbidden")
         if symbol in self.positions() or symbol not in self.store.get("simple_selected", []):
@@ -806,8 +823,8 @@ class Engine:
         q = self.broker.quotes.get(symbol)
         if not BAR_MS <= maximum_signal_age_ms <= 2 * BAR_MS:
             raise SafeError("invalid experimental signal delay")
-        if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-            maximum_signal_age_ms = self.s.simple_entry_bar_ms
+        if self.entry_timeframe in {"1m", "5m", "8m"}:
+            maximum_signal_age_ms = self.entry_bar_ms
         if (
             row["timestamp_ms"] > now_ms
             or now_ms - row["timestamp_ms"] >= maximum_signal_age_ms
@@ -836,8 +853,8 @@ class Engine:
             rotation.VERSION if selected_strategy["active"] == "opposite" else ""
         )
         signal_key = f"{strategy_label}:{symbol}:{int(row['timestamp_ms'])}"
-        if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-            signal_key += ":" + self.s.simple_entry_timeframe
+        if self.entry_timeframe in {"1m", "5m", "8m"}:
+            signal_key += ":" + self.entry_timeframe
         trade_id = hashlib.sha256(signal_key.encode()).hexdigest()[:24]
         if self.store.get("simple_signal:" + trade_id):
             return
@@ -873,8 +890,9 @@ class Engine:
             )
         normal_direction = rotation.execution_side(direction, selected_strategy)
         assert q is not None
-        if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-            reason_veto = minute_veto(row, normal_direction, now_ms, float(q.mark), self.rules)
+        if self.entry_timeframe in {"1m", "5m", "8m"}:
+            reason_veto = (minute_veto(row, normal_direction, now_ms, float(q.mark), self.rules)
+                           if selected_strategy["active"] != "opposite" else None)
             if reason_veto:
                 raise SafeError(reason_veto)
             if self.store.get("simple_minute:" + symbol) != row:
@@ -1028,7 +1046,7 @@ class Engine:
         intent: dict[str, Any] = {
             "id": trade_id,
             "confidence_version": confidence.VERSION if self.s.simple_confidence_enabled else None,
-            "profit_target_fraction": confidence.target(self.store)
+            "profit_target_fraction": (confidence.SMALL if selected_strategy["auto"] else confidence.target(self.store))
             if self.s.simple_confidence_enabled
             else None,
             "strategy_choice": selected_strategy["active"],
@@ -1036,7 +1054,9 @@ class Engine:
             "side": direction,
             "decision_side": normal_direction,
             "entry_mode": self.s.simple_entry_mode,
-            "entry_timeframe": self.s.simple_entry_timeframe,
+            "entry_timeframe": self.entry_timeframe,
+            "max_hold_hours": rotation.hold_hours(self.store, self.s),
+            "adaptive_holding": selected_strategy["auto"],
             "opened_ms": now_ms,
             "stop_fraction": stop,
             "journal_version": 1,
@@ -1051,7 +1071,9 @@ class Engine:
                 "currency": "BNFCR" if self.s.futures_account_mode == "credits" else "USDT",
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
-                "entry_timeframe": self.s.simple_entry_timeframe,
+                "entry_timeframe": self.entry_timeframe,
+                "max_hold_hours": rotation.hold_hours(self.store, self.s),
+                "learning_decision": self.store.get(learning.KEY) if selected_strategy["auto"] else None,
                 "ai_enabled": self.s.simple_ai_enabled,
                 "reason": reason,
                 "indicators": indicators(row),
@@ -1134,7 +1156,7 @@ class Engine:
         rotation.require_order(self.store, order, current_ms, q)
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
-        if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
+        if self.entry_timeframe in {"1m", "5m", "8m"}:
             self.store.put(
                 "simple_minute_order:" + order.client_id,
                 {
@@ -1177,7 +1199,7 @@ class Engine:
         self.record_entry(symbol, fill, intent)
         self.notice(
             trade_id + "-open",
-            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Why: {reason}. Entry candles {self.s.simple_entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
+            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Why: {reason}. Entry candles {self.entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
         )
 
     def record_entry(self, symbol: str, fill: Fill, intent: dict[str, Any]) -> None:
@@ -1198,6 +1220,8 @@ class Engine:
             "decision_side": intent.get("decision_side", direction),
             "entry_mode": intent.get("entry_mode", self.s.simple_entry_mode),
             "entry_timeframe": intent.get("entry_timeframe", "15m"),
+            "max_hold_hours": intent.get("max_hold_hours", self.s.simple_max_hold_hours),
+            "adaptive_holding": intent.get("adaptive_holding", False),
             "quantity": str(fill.quantity),
             "entry_price": float(fill.price),
             "entry_fee": float(fill.fee),

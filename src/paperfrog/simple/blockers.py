@@ -13,7 +13,7 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 from paperfrog.telegram.formatting import state_label
 
-from . import rotation
+from . import learning, rotation
 from .adaptive import active_plan, request_limit
 from .bitcoin import direction_gate
 from .market_trend import (
@@ -38,6 +38,8 @@ READINGS = (
 
 def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -> str:
     """No API requests, generated advice, order actions or risk resets."""
+    timeframe = rotation.timeframe(store, s)
+    bar_ms = {"1m": 60_000, "5m": 300_000, "8m": 480_000, "15m": BAR_MS}[timeframe]
     try:
         zone = ZoneInfo(s.display_timezone)
     except ZoneInfoNotFoundError:
@@ -137,6 +139,11 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
             f"Daily entry limit reached: {sum(counts.values())}/{s.max_strategy_entries_per_day} (resets 00:00 UTC)."
         )
 
+    learned_veto = learning.veto(store, s, now_ms)
+    if learned_veto:
+        blockers.append(learned_veto)
+    if rotation.selection(store)["auto"]:
+        lines.append(f"Historical auto: {store.get(learning.KEY, {}).get('pattern', 'pending')}; holding cap {rotation.hold_hours(store, s)} hours.")
     strategy = (values[rotation.KEY] or {}).get("active", "current")
     if strategy == "opposite":
         lines.append("Opposite entries require a completed failed breakout or structure reversal with reversed flow; a trend signal alone is insufficient.")
@@ -208,10 +215,10 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
 
     selected = values["simple_selected"] or []
     current_scan = (
-        selection.get("entry_timeframe", "15m") == s.simple_entry_timeframe
+        selection.get("entry_timeframe", "15m") == timeframe
         and selection.get("trend_hours") == TREND_HOURS
         and selection.get("confirmation_hours") == CONFIRMATION_HOURS
-        and 0 <= now_ms - int(selection.get("asof_ms", 0)) < s.simple_entry_bar_ms
+        and 0 <= now_ms - int(selection.get("asof_ms", 0)) < bar_ms
     )
     if s.simple_market_trend_enabled:
         current_scan = (
@@ -226,7 +233,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         blockers.append("No coin passed the entry and trend filters in the latest scan.")
     if current_scan:
         lines.append(
-            f"Last {s.simple_entry_timeframe} scan: {stamp(selection['asof_ms'])}; {selection.get('usable_size', 0)}/{selection.get('pool_size', 0)} coins usable."
+            f"Last {timeframe} scan: {stamp(selection['asof_ms'])}; {selection.get('usable_size', 0)}/{selection.get('pool_size', 0)} coins usable."
         )
         rejected = selection.get("day_trend_blocks") or {}
         if rejected:
@@ -276,7 +283,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         lines.append("AI: disabled; deterministic entries apply.")
 
     last = values["last_signal"] or {}
-    if 0 <= now_ms - int(last.get("timestamp_ms", 0)) < s.simple_entry_bar_ms:
+    if 0 <= now_ms - int(last.get("timestamp_ms", 0)) < bar_ms:
         lines.append(
             f"Latest evaluated signal · {last.get('symbol', 'coin')}: {str(last.get('reason', 'waiting'))[:250]}"
         )
@@ -291,6 +298,6 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
     lines += notes
     lines += [
         "",
-        f"Market refresh: 15 minutes. Entry candles: {s.simple_entry_timeframe}. AI review schedule: {s.simple_ai_review_minutes} minutes.",
+        f"Market refresh: 15 minutes. Entry candles: {timeframe}. AI review schedule: {s.simple_ai_review_minutes} minutes.",
     ]
     return "\n".join(lines)

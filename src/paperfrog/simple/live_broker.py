@@ -12,6 +12,7 @@ from paperfrog.risk.sizing import require_equity_margin_allocation
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from . import learning, rotation
 from .adaptive import active_plan
 from .authorization import verify_simple_arm
 from .bitcoin import require_order as require_btc_order
@@ -157,7 +158,7 @@ class LiveBroker:
                 ):
                     raise SafeError("adaptive AI order permission missing or expired")
             require_btc_order(self.s, self.store, order, self.now_ms())
-            if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
+            if rotation.timeframe(self.store, self.s) in {"1m", "5m", "8m"}:
                 quote = await self.refresh_quote(order.symbol)
                 require_minute_order(self.s, self.store, order, self.now_ms(), quote)
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
@@ -168,6 +169,9 @@ class LiveBroker:
                 quote = await self.refresh_quote(order.symbol)
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
                     raise EntryVeto("simple spread veto at opposite dispatch")
+            learned_veto = learning.veto(self.store, self.s, self.now_ms())
+            if learned_veto:
+                raise EntryVeto(learned_veto)
             require_strategy_order(self.store, order, self.now_ms(), self.quotes.get(order.symbol))
             self.exchange.entry_authorized = True
         return await self.exchange.submit(order)

@@ -95,7 +95,7 @@ class Controls:
                     "\n/summary shows the previous 24h: wins, losses, PnL, errors and locks."
                 )
                 response += "\n/why explains entry blockers and the 4h/1h market readings."
-                response += "\n/strategy shows manual selection and profit runners. /strategy current selects normal execution; /strategy opposite requires a failed breakout or confirmed reversal. Automatic strategy switching is disabled."
+                response += "\n/strategy shows manual selection and profit runners. /strategy current selects normal execution; /strategy opposite requires a failed breakout or confirmed reversal. Use /strategy auto for historical selection of current/opposite, 5m/15m and holding limits; entries wait without validated evidence."
                 response += "\n/resume resets financial locks and cooldowns after execution and health checks."
                 response += "\n/refuse_force resets the same locks despite resume-time scan/crisis checks. Local authorization, reconciliation and order-execution gates still apply."
             elif command == "/summary":

@@ -65,7 +65,7 @@ def test_unconfirmed_or_invalid_rejections_cannot_trade(side, damage):
     elif damage == "cost":
         cost = .01
     else:
-        obs["entry_timeframe"] = "5m"
+        obs["entry_timeframe"] = "1m"
     assert opposite_entry(obs, cost)[0] == 0
 
 

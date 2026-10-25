@@ -55,7 +55,7 @@ async def test_menu_registration_failure_still_allows_command_polling(settings, 
         await telegram.client.aclose()
 
 
-async def test_help_explains_manual_strategies_without_advertising_auto(settings):
+async def test_help_explains_manual_and_historical_auto_strategies(settings):
     from test_controls import update
 
     from paperfrog.simple.service import SimpleService
@@ -64,7 +64,7 @@ async def test_help_explains_manual_strategies_without_advertising_auto(settings
     service = SimpleService(s)
     try:
         response = await service.controls.handle(update("/help"))
-        assert "Automatic strategy switching is disabled" in response[1]
+        assert "/strategy auto" in response[1] and "historical selection" in response[1]
         assert "/strategy auto switches" not in response[1]
         assert "failed breakout or confirmed reversal" in response[1]
     finally:

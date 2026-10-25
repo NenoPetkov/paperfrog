@@ -22,7 +22,7 @@ from paperfrog.telegram.control import Controls, Telegram
 from paperfrog.telegram.events import EventNotifications
 from paperfrog.telegram.formatting import positions_text, status_text
 
-from . import confidence, rotation
+from . import confidence, learning, learning_replay, rotation
 from .adaptive import Advisor, enrich, request_limit
 from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
@@ -80,6 +80,14 @@ class SimpleService:
         )
         self.auto_start = True
 
+    @property
+    def entry_timeframe(self) -> str:
+        return rotation.timeframe(self.store, self.s)
+
+    @property
+    def entry_bar_ms(self) -> int:
+        return {"1m": 60_000, "5m": 300_000, "8m": 480_000, "15m": BAR_MS}[self.entry_timeframe]
+
     def now_ms(self) -> int:
         """Use Binance's synchronized UTC clock when checking exchange timestamps."""
         return int(time.time() * 1000) + self.exchange.offset_ms
@@ -95,7 +103,7 @@ class SimpleService:
         if any(
             not 0
             <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0)
-            < self.s.simple_entry_bar_ms
+            < self.entry_bar_ms
             for symbol in self.selected
         ):
             raise SafeError("closed-candle scan is missing, expired or future-dated")
@@ -136,6 +144,8 @@ class SimpleService:
             if choice is not None:
                 if self.engine is None:
                     raise SafeError("execution engine is not ready")
+                if choice == "auto" and (self.s.simple_ai_enabled or self.s.simple_entry_mode != "trend" or not self.s.simple_market_trend_enabled):
+                    raise SafeError("historical auto requires trend mode, market context and AI disabled")
                 rotation.configure(self.store, choice, self.now_ms())
             description = rotation.describe(self.store, self.s.display_timezone)
             if self.s.simple_confidence_enabled:
@@ -190,6 +200,9 @@ class SimpleService:
                     else ""
                 ),
                 "strategy_rotation": rotation.selection(self.store),
+                "historical_learning": self.store.get(learning.KEY, {}),
+                "learning_research": self.store.get("simple_learning_research", {}),
+                "holding_limit_hours": rotation.hold_hours(self.store, self.s),
                 "confidence": {
                     **confidence.state(self.store),
                     "enabled": self.s.simple_confidence_enabled,
@@ -199,12 +212,12 @@ class SimpleService:
                 },
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
-                "entry_timeframe": self.s.simple_entry_timeframe,
+                "entry_timeframe": self.entry_timeframe,
                 "ai_review_minutes": self.s.simple_ai_review_minutes,
                 "risk_context_timeframe": "15m",
                 "loaded_settings": self.s.simple_parameters(),
-                "breakout_minutes": 5 * self.s.simple_entry_bar_ms // MINUTE_MS
-                if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}
+                "breakout_minutes": 5 * self.entry_bar_ms // MINUTE_MS
+                if self.entry_timeframe in {"1m", "5m", "8m"}
                 else self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
@@ -288,7 +301,7 @@ class SimpleService:
                                 ),
                                 self.rules,
                             )
-                            if self.advisor is not None or self.s.simple_entry_timeframe in {
+                            if rotation.selection(self.store)["auto"] or self.advisor is not None or self.entry_timeframe in {
                                 "1m",
                                 "5m",
                                 "8m",
@@ -344,6 +357,16 @@ class SimpleService:
                         if symbol != BTC:
                             row.update(pairs.get(symbol, {"btc_pair_valid": False}))
                 async with self.mutex:
+                    previous_timeframe = self.entry_timeframe
+                    if rotation.selection(self.store)["auto"]:
+                        learning.review(self.store, self.s, market, self.now_ms())
+                    if previous_timeframe != self.entry_timeframe:
+                        self.held_rows.update({symbol: row for symbol, row in self.rows.items()
+                                               if self.engine and symbol in self.engine.positions()
+                                               and row.get("entry_timeframe") == self.engine.positions()[symbol].get("entry_timeframe")})
+                        self.rows, self.minute_frames, self.selected = {}, {}, []
+                        self.store.put("simple_selected", [])
+                        self.scan_complete = False
                     if self.s.simple_market_trend_enabled:
                         self.store.put("simple_market_trend", market)
                         self.store.audit(
@@ -362,16 +385,18 @@ class SimpleService:
                         )
                         self.store.put("simple_btc_pairs", pairs)
                     self.context_rows = rows
-                    if self.s.simple_entry_timeframe == "15m":
+                    if self.entry_timeframe == "15m":
                         self.rows = rows
                     self.crisis = "BTCUSDT" not in rows or any(
                         blocked for _, _, blocked, _ in observations
                     )
+                    automatic = rotation.selection(self.store)["auto"]
                     context_selected = choose(
                         {
                             symbol: rows[symbol]
                             for symbol in snapshot["symbols"]
                             if symbol in rows
+                            and (not automatic or symbol in learning_replay.SYMBOLS)
                             and (
                                 not self.s.simple_market_trend_enabled
                                 or any(
@@ -386,14 +411,14 @@ class SimpleService:
                         self.s,
                         self.rules,
                     )
-                    if self.s.simple_entry_timeframe == "15m":
+                    if self.entry_timeframe == "15m":
                         self.selected = context_selected
                         self.store.put("simple_selected", self.selected)
                     self.store.put("simple_pool", snapshot["symbols"])
                     self.store.put("simple_scan_at_ms", int(time.time() * 1000))
                     self.store.audit(
                         "simple_selection"
-                        if self.s.simple_entry_timeframe == "15m"
+                        if self.entry_timeframe == "15m"
                         else "simple_risk_context",
                         {
                             "asof_ms": boundary,
@@ -407,10 +432,10 @@ class SimpleService:
                             "execution_mode": self.s.trading_mode,
                         },
                     )
-                    if self.s.simple_entry_timeframe == "15m":
+                    if self.entry_timeframe == "15m":
                         self.scan_complete = True
                 last_boundary = boundary
-                if self.advisor is not None and self.s.simple_entry_timeframe == "15m":
+                if self.advisor is not None and self.entry_timeframe == "15m":
                     await self.advisor.review(
                         {
                             symbol: frame
@@ -480,7 +505,7 @@ class SimpleService:
             symbol: trade
             for symbol, trade in positions.items()
             if trade.get("entry_timeframe") in {"1m", "5m", "8m"}
-            and trade["entry_timeframe"] != self.s.simple_entry_timeframe
+            and trade["entry_timeframe"] != self.entry_timeframe
         }
         self.held_rows = {symbol: row for symbol, row in self.held_rows.items() if symbol in held}
 
@@ -532,7 +557,9 @@ class SimpleService:
 
     async def refresh_minutes(self, boundary: int) -> None:
         """Rank the liquid pool on each configured entry-candle boundary."""
-        interval_ms = self.s.simple_entry_bar_ms
+        interval_ms = self.entry_bar_ms
+        timeframe = self.entry_timeframe
+        strategy_epoch = rotation.selection(self.store)["epoch"]
         if not self.context_rows:
             return
         pool = list(
@@ -543,9 +570,12 @@ class SimpleService:
                 ]
             )
         )
+        if rotation.selection(self.store)["auto"]:
+            held = self.engine.positions() if self.engine else {}
+            pool = [symbol for symbol in pool if symbol in learning_replay.SYMBOLS or symbol in held]
         contexts = self.context_rows
         context_at = int(contexts.get(BTC, {}).get("timestamp_ms", 0))
-        if self.s.simple_entry_timeframe == "8m" and boundary < context_at <= self.now_ms():
+        if self.entry_timeframe == "8m" and boundary < context_at <= self.now_ms():
             # On a late start, the newest completed 15m context can be newer
             # than the last 8m bar. Wait for the next bar without using future
             # context or reporting ordinary readiness as an operational error.
@@ -561,7 +591,7 @@ class SimpleService:
             async with semaphore:
                 try:
                     data = await self.entry_frame(
-                        symbol, self.s.simple_entry_timeframe, boundary, context
+                        symbol, timeframe, boundary, context
                     )
                     return symbol, data
                 except (SafeError, ValueError, TypeError, KeyError, IndexError, TimeoutError):
@@ -575,7 +605,12 @@ class SimpleService:
         eligible = {}
         trend_blocks = {}
         for symbol, row in rows.items():
-            side, _ = minute_direction(row, self.rules)
+            if rotation.selection(self.store)["active"] == "opposite":
+                from .strategy import opposite_entry
+                actual, _, _ = opposite_entry(row, self.s.fee_rate + self.s.slippage_bps / 10000, self.rules)
+                side = -actual
+            else:
+                side, _ = minute_direction(row, self.rules)
             if not side:
                 continue
             reason = market_entry_gate(self.s, self.store, row, side, self.now_ms())
@@ -585,6 +620,8 @@ class SimpleService:
                 eligible[symbol] = row
         async with self.mutex:
             strategy = rotation.selection(self.store)
+            if self.entry_timeframe != timeframe or strategy["epoch"] != strategy_epoch:
+                return
             selected = choose(eligible, self.s, self.rules)
             self.rows, self.minute_frames, self.selected = rows, frames, selected
             # Missing observations immediately revoke dispatch permission for that symbol.
@@ -596,13 +633,13 @@ class SimpleService:
                 "simple_selection",
                 {
                     "asof_ms": boundary,
-                    "entry_timeframe": self.s.simple_entry_timeframe,
+                    "entry_timeframe": self.entry_timeframe,
                     "trend_hours": 4,
                     "confirmation_hours": 1,
                     "pool_size": len(pool),
                     "usable_size": len(rows),
                     "selected": selected,
-                    "selection": f"closed {self.s.simple_entry_timeframe} EMA 5/20, aligned 1/3/5-bar slope and flow",
+                    "selection": f"closed {self.entry_timeframe} EMA 5/20, aligned 1/3/5-bar slope and flow",
                     "execution_mode": self.s.trading_mode,
                     "market_trend": self.store.get("simple_market_trend")
                     if self.s.simple_market_trend_enabled
@@ -631,8 +668,12 @@ class SimpleService:
 
     async def minute_research(self) -> None:
         last_boundary = -1
-        interval_ms = self.s.simple_entry_bar_ms
         while not self.stop.is_set():
+            interval_ms = self.entry_bar_ms
+            if self.entry_timeframe == "15m":
+                last_boundary = -1
+                await asyncio.sleep(1)
+                continue
             boundary = self.now_ms() // interval_ms * interval_ms
             if boundary == last_boundary or not self.context_rows:
                 await asyncio.sleep(1)
@@ -778,7 +819,7 @@ class SimpleService:
                         )
                         pending_original = any(
                             trade.get("entry_timeframe") in {"1m", "5m", "8m"}
-                            and trade["entry_timeframe"] != self.s.simple_entry_timeframe
+                            and trade["entry_timeframe"] != self.entry_timeframe
                             and self.held_rows.get(symbol, {}).get("entry_timeframe")
                             != trade["entry_timeframe"]
                             for symbol, trade in engine.positions().items()
@@ -812,7 +853,7 @@ class SimpleService:
                         and all(
                             0
                             <= now - self.rows.get(symbol, {}).get("timestamp_ms", 0)
-                            < self.s.simple_entry_bar_ms
+                            < self.entry_bar_ms
                             for symbol in self.selected
                         )
                         and all(
@@ -888,6 +929,19 @@ class SimpleService:
         while True:
             if self.telegram:
                 await EventNotifications(self.s, self.store, self.telegram).deliver()
+            await asyncio.sleep(5)
+
+    async def learning_research(self) -> None:
+        last_refresh = 0
+        while not self.stop.is_set():
+            now = self.now_ms()
+            if rotation.selection(self.store)["auto"] and now - last_refresh >= 3_600_000:
+                try:
+                    await learning_replay.refresh(self.exchange, self.store, self.s, now)
+                    last_refresh = now
+                except (SafeError, OSError, ValueError, KeyError) as exc:
+                    self.store.audit("simple_learning_unavailable", {"error_type": type(exc).__name__})
+                    last_refresh = now - 3_300_000
             await asyncio.sleep(5)
 
     async def daily_analysis(self) -> None:
@@ -981,24 +1035,11 @@ class SimpleService:
                     tasks.append(
                         asyncio.create_task(self.bitcoin_reference(), name="BTC minute reference")
                     )
-                if self.s.simple_entry_timeframe in {"1m", "5m", "8m"}:
-                    tasks.append(
-                        asyncio.create_task(self.minute_research(), name="short-interval entries")
-                    )
-                    if self.advisor is not None:
-                        tasks.append(
-                            asyncio.create_task(self.minute_ai_reviews(), name="AI entry policy")
-                        )
-                if any(
-                    trade.get("entry_timeframe") in {"1m", "5m", "8m"}
-                    and trade["entry_timeframe"] != self.s.simple_entry_timeframe
-                    for trade in self.engine.positions().values()
-                ):
-                    tasks.append(
-                        asyncio.create_task(
-                            self.held_research(), name="original-timeframe monitoring"
-                        )
-                    )
+                tasks.append(asyncio.create_task(self.minute_research(), name="short-interval entries"))
+                tasks.append(asyncio.create_task(self.held_research(), name="original-timeframe monitoring"))
+                tasks.append(asyncio.create_task(self.learning_research(), name="historical strategy research"))
+                if self.advisor is not None and self.entry_timeframe != "15m":
+                    tasks.append(asyncio.create_task(self.minute_ai_reviews(), name="AI entry policy"))
                 if self.telegram:
                     tasks.append(
                         asyncio.create_task(self.telegram.poll(), name="Telegram commands")

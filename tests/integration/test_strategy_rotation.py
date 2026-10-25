@@ -78,10 +78,10 @@ def test_manual_switch_dedup_and_transaction_rollback(store):
     assert rotation.selection(store)["epoch"] == 2
     rotation.closed(store, first, -1, 104)
     assert rotation.selection(store)["loss_streak"] == 0
-    for choice in ("auto", "unknown", "live"):
+    for choice in ("unknown", "live"):
         with pytest.raises(SafeError, match="/strategy opposite"):
             rotation.configure(store, choice, 105)
-    assert "Automatic switching is disabled" in rotation.describe(store, "UTC")
+    assert "/strategy auto" in rotation.describe(store, "UTC")
 
 
 async def test_engine_records_net_loss_and_bootstrap_after_restart(settings, store, filters):
@@ -199,7 +199,7 @@ def test_manual_switch_invalidates_entry_permission_but_preserves_exits(store):
 
 
 async def test_service_exposes_strategy_choices_and_confidence(settings):
-    service = SimpleService(settings.model_copy(update={"simple_confidence_enabled": True}))
+    service = SimpleService(settings.model_copy(update={"simple_confidence_enabled": True, "simple_market_trend_enabled": True}))
     try:
         rotation.initialize(service.store, "base", 0)
         service.engine = object()
@@ -209,8 +209,8 @@ async def test_service_exposes_strategy_choices_and_confidence(settings):
         response = await service.strategy_control("opposite")
         assert "Strategy: opposite" in response
         assert "LONG → SHORT" in response and "SHORT → LONG" in response
-        with pytest.raises(SafeError, match="switching is disabled"):
-            await service.strategy_control("auto")
+        response = await service.strategy_control("auto")
+        assert "AUTO" in response and rotation.selection(service.store)["auto"]
     finally:
         await service.exchange.close()
 
@@ -276,7 +276,7 @@ async def test_opposite_keeps_no_signal_as_no_trade(settings, store, filters):
 
 @pytest.mark.parametrize("decision", [1, -1])
 async def test_opposite_requires_original_decision_to_pass_market_gate(settings, store, filters, decision):
-    s = guarded(settings)
+    s = guarded(settings, simple_entry_timeframe="15m", simple_ai_review_minutes=15)
     engine = await engine_fixture(s, store, filters)
     rotation.initialize(store, engine.strategy, 0)
     rotation.configure(store, "opposite", 1)
@@ -299,7 +299,7 @@ def test_manual_selection_survives_reopened_database(store):
 
 
 async def test_strategy_commands_are_authenticated_durable_and_leave_risk_state_untouched(settings):
-    s = settings.model_copy(update={"telegram_allowed_user_ids": (1,), "telegram_allowed_chat_ids": (2,)})
+    s = settings.model_copy(update={"telegram_allowed_user_ids": (1,), "telegram_allowed_chat_ids": (2,), "simple_market_trend_enabled": True})
     service = SimpleService(s)
     try:
         rotation.initialize(service.store, "base", 0)
@@ -333,8 +333,8 @@ async def test_strategy_commands_are_authenticated_durable_and_leave_risk_state_
         assert await service.controls.handle(update("/strategy auto", uid=99)) is None
         assert rotation.selection(service.store)["auto"] is False
         response = await service.controls.handle(update("/strategy auto"))
-        assert "switching is disabled" in response[1]
-        assert rotation.selection(service.store)["auto"] is False
+        assert "AUTO" in response[1]
+        assert rotation.selection(service.store)["auto"] is True
         assert {key: service.store.get(key) for key in preserved} == preserved
     finally:
         await service.exchange.close()
