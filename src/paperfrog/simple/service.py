@@ -144,7 +144,7 @@ class SimpleService:
             if choice is not None:
                 if self.engine is None:
                     raise SafeError("execution engine is not ready")
-                if choice == "auto" and (self.s.simple_ai_enabled or self.s.simple_entry_mode != "trend" or not self.s.simple_market_trend_enabled):
+                if choice in {"auto", "auto-active"} and (self.s.simple_ai_enabled or self.s.simple_entry_mode != "trend" or not self.s.simple_market_trend_enabled):
                     raise SafeError("historical auto requires trend mode, market context and AI disabled")
                 rotation.configure(self.store, choice, self.now_ms())
             description = rotation.describe(self.store, self.s.display_timezone)

@@ -7,6 +7,7 @@ from collections import defaultdict
 from statistics import mean, stdev
 from typing import Any
 
+from paperfrog.risk import activity
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
@@ -14,6 +15,7 @@ from . import rotation
 from .strategy import BAR_MS
 
 VERSION = 1
+POLICY_VERSION = 2
 KEY = "simple_learning"
 EVIDENCE = "simple_learning_outcomes"
 TIMEFRAMES = ("5m", "15m")
@@ -108,7 +110,8 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
     """Review once per closed 15m context, with confirmation and minimum dwell."""
     boundary = now_ms // BAR_MS * BAR_MS
     old = store.get(KEY, {})
-    if old.get("asof_ms") == boundary and old.get("config_hash") == s.config_hash:
+    if (old.get("asof_ms") == boundary and old.get("config_hash") == s.config_hash
+            and old.get("policy_version") == POLICY_VERSION):
         return old
     context = pattern(market)
     fresh = (
@@ -123,10 +126,23 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
     ranking = score(store.get(EVIDENCE, []), boundary, context) if fresh and evidence_fresh else []
     candidates = [r for r in ranking if r["eligible"] and r["hold_hours"] <= s.simple_max_hold_hours]
     winner = candidates[0] if candidates else None
+    selection = rotation.selection(store)
+    probe = (
+        winner is None and selection.get("activity_mode") == "active"
+        and fresh and evidence_fresh and s.simple_market_trend_enabled
+        and not s.simple_ai_enabled and s.simple_entry_mode == "trend"
+        and context in {"BULL:persistent", "BEAR:persistent"}
+        and s.simple_max_hold_hours >= 1
+    )
+    candidate_policy = "probe" if probe else "validated"
     wanted = [winner["strategy"], winner["timeframe"], winner["hold_hours"]] if winner else None
+    if probe:
+        wanted = ["current", "15m", 1]
     consecutive = (
         old.get("confirmations", 0) + 1
-        if wanted and old.get("candidate") == wanted and old.get("asof_ms") == boundary - BAR_MS
+        if (wanted and old.get("candidate") == wanted
+            and old.get("candidate_policy", "validated") == candidate_policy
+            and old.get("pattern") == context and old.get("asof_ms") == boundary - BAR_MS)
         else 1 if wanted else 0
     )
     reason = "No validated net edge for this market pattern; collecting shadow evidence."
@@ -136,26 +152,36 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
         current = [state["active"], state.get("timeframe", s.simple_entry_timeframe), state.get("hold_hours", s.simple_max_hold_hours)]
         current_score = next((r for r in candidates if [r["strategy"], r["timeframe"], r["hold_hours"]] == current), None)
         if state["auto"] and wanted:
-            if wanted == current:
+            if (wanted == current and state.get("entry_policy", "validated") == candidate_policy
+                    and (not probe or consecutive >= 2)):
                 allowed = True
                 reason = "Selected variant retains positive purged holdout and cost-stressed evidence."
             elif consecutive >= 2 and now_ms - state.get("changed_ms", 0) >= DWELL_MS:
-                improvement = winner["lower_bound"] - current_score["lower_bound"] if current_score else math.inf
+                improvement = winner["lower_bound"] - current_score["lower_bound"] if winner and current_score else math.inf
                 if improvement >= 0.0005:
-                    rotation.switch(store, state, winner["strategy"], now_ms,
-                                    f"Historical {context} edge; {winner['timeframe']}; lower bound {winner['lower_bound']:.5f}", conn)
-                    state["timeframe"] = winner["timeframe"]
-                    state["hold_hours"] = winner["hold_hours"]
+                    switch_reason = (f"Limited trend probe in {context}; historical edge unvalidated"
+                                     if probe else f"Historical {context} edge; {wanted[1]}")
+                    rotation.switch(store, state, wanted[0], now_ms, switch_reason, conn)
+                    state["timeframe"] = wanted[1]
+                    state["hold_hours"] = wanted[2]
+                    state["entry_policy"] = candidate_policy
                     store.put(rotation.KEY, state, conn)
                     allowed = True
                     reason = "Changed after two agreeing reviews and at least one hour dwell."
-            if not allowed and current_score:
+            if not allowed and current_score and state.get("entry_policy", "validated") == "validated":
                 allowed = True
                 reason = "Retaining validated incumbent while challenger awaits confirmation/dwell."
+        if probe:
+            reason = ("Limited trend probe; historical edge unvalidated. Half size; one position; one per hour; six per rolling 24h."
+                      if allowed else "Limited trend probe waiting for two same-pattern reviews and one-hour dwell.")
         result = {
-            "version": VERSION, "asof_ms": boundary, "expires_ms": boundary + BAR_MS,
+            "version": VERSION, "policy_version": POLICY_VERSION,
+            "asof_ms": boundary, "expires_ms": boundary + BAR_MS,
             "config_hash": s.config_hash, "pattern": context, "candidate": wanted,
             "confirmations": consecutive, "allowed": allowed, "reason": reason,
+            "candidate_policy": candidate_policy,
+            "entry_policy": state.get("entry_policy", "validated"),
+            "activity_mode": state.get("activity_mode", "strict"),
             "ranking": ranking, "active": state["active"], "epoch": state["epoch"],
             "timeframe": state.get("timeframe", s.simple_entry_timeframe),
             "hold_hours": state.get("hold_hours", s.simple_max_hold_hours),
@@ -166,7 +192,12 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
     return result
 
 
-def veto(store: Store, s: Settings, now_ms: int) -> str | None:
+def is_probe(store: Store) -> bool:
+    state = rotation.selection(store)
+    return bool(state["auto"] and state.get("entry_policy") == "probe")
+
+
+def veto(store: Store, s: Settings, now_ms: int, trade_id: str | None = None) -> str | None:
     state = rotation.selection(store)
     if not state["auto"]:
         return None
@@ -184,6 +215,17 @@ def veto(store: Store, s: Settings, now_ms: int) -> str | None:
         and r.get("asof_ms", 0) <= now_ms < r.get("expires_ms", 0)
     ):
         return "automatic strategy waiting for fresh validated historical net edge"
+    if is_probe(store):
+        if not (
+            state.get("activity_mode") == "active" and state["active"] == "current"
+            and r.get("entry_policy") == "probe" and r.get("policy_version") == POLICY_VERSION
+            and r.get("pattern") in {"BULL:persistent", "BEAR:persistent"}
+            and r.get("timeframe") == "15m" and r.get("hold_hours") == 1
+            and s.simple_market_trend_enabled and not s.simple_ai_enabled
+            and s.simple_entry_mode == "trend"
+        ):
+            return "active auto probe policy missing or incompatible"
+        return activity.blocker(store, now_ms, trade_id)
     return None
 
 

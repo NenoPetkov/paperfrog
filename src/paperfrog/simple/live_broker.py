@@ -8,6 +8,7 @@ from typing import Any
 from paperfrog.domain.types import EntryVeto, Fill, Order, OrderNotFound, Quote, SafeError
 from paperfrog.exchange.binance import BinanceAdapter
 from paperfrog.reporting.readiness import credential_binding
+from paperfrog.risk import activity
 from paperfrog.risk.sizing import require_equity_margin_allocation
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
@@ -102,6 +103,14 @@ class LiveBroker:
                 raise SafeError("BTC is reference-only; new BTC positions are forbidden")
             self.require_authorization()
             await self.refresh()
+            permission = self.store.get("simple_strategy_order:" + order.client_id, {})
+            probe = permission.get("activity_probe", False)
+            if probe != learning.is_probe(self.store):
+                raise EntryVeto("automatic entry policy changed before dispatch")
+            if probe:
+                require_strategy_order(self.store, order, self.now_ms())
+                if not permission.get("trade_id"):
+                    raise EntryVeto("active auto probe reservation missing")
             size_error = EntryVeto if self.s.simple_sizing_mode == "equity_range" else SafeError
             if order.quantity * order.limit_price / 2 > self.available:
                 raise size_error("available margin insufficient")
@@ -141,6 +150,7 @@ class LiveBroker:
                             float(order.quantity * allocation_price),
                             float(self.available),
                             float(filters.step * allocation_price),
+                            activity.SIZE_SCALE if probe else 1.0,
                         )
                     except SafeError as exc:
                         raise EntryVeto(str(exc)) from None
@@ -169,7 +179,11 @@ class LiveBroker:
                 quote = await self.refresh_quote(order.symbol)
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
                     raise EntryVeto("simple spread veto at opposite dispatch")
-            learned_veto = learning.veto(self.store, self.s, self.now_ms())
+            if probe != learning.is_probe(self.store):
+                raise EntryVeto("automatic entry policy changed before dispatch")
+            learned_veto = learning.veto(
+                self.store, self.s, self.now_ms(), permission.get("trade_id") if probe else None
+            )
             if learned_veto:
                 raise EntryVeto(learned_veto)
             require_strategy_order(self.store, order, self.now_ms(), self.quotes.get(order.symbol))

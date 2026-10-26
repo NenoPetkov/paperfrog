@@ -40,7 +40,14 @@ def require_equity_margin_allocation(
     notional: float,
     available_margin: float,
     quantity_step_notional: float,
+    allocation_scale: float = 1.0,
 ) -> EquityMarginBounds:
+    if not math.isfinite(allocation_scale) or not 0 < allocation_scale <= 1:
+        raise SafeError("allocation scale must reduce or preserve position size")
+    # Validate reduced orders against the same unscaled allocation, including
+    # the available-balance rule. Never round a small probe up to the normal floor.
+    notional /= allocation_scale
+    quantity_step_notional /= allocation_scale
     bounds = equity_margin_bounds(s, equity, available_margin)
     if (
         not all(math.isfinite(v) for v in (notional, quantity_step_notional))

@@ -47,6 +47,7 @@ def strategy_hash(s: Settings) -> str:
         "execution/coordinator.py",
         "risk/engine.py",
         "risk/sizing.py",
+        "risk/activity.py",
     ):
         digest.update((root / name).read_bytes())
     return digest.hexdigest()

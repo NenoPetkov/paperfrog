@@ -62,6 +62,35 @@ research also blocks automatic entry. Every permission expires at the next
 Selection, evidence, reasons and epochs persist in SQLite and appear in `/strategy`
 and `/simple`. No loss streak automatically flips direction or clears risk locks.
 
+## Optional active automatic mode
+
+`/strategy auto-active` explicitly enables a limited exploration fallback.
+`/strategy auto` keeps the original strict historical screening and disables
+the fallback. Both choices persist across restarts; neither clears risk locks.
+Validated historical variants still take priority and retain all their original
+eligibility rules. A probe is explicitly **not** a validated historical edge.
+
+When no historical variant qualifies, active mode can select normal `current`
+trend execution on 15-minute candles with a one-hour holding cap. This requires
+fresh, successful research and a persistent BULL or BEAR pattern, two consecutive
+reviews of the same pattern, and one hour since the previous strategy switch.
+MIXED, fading, missing and stale conditions do not permit probes. The normal
+coin, BTC, breadth, spread, liquidity, risk, authorization and hosted-stop checks
+still apply to every order. Failed research cannot be bypassed by active mode.
+
+Probe orders use half the normally computed notional, rounded down. Equity-range
+allocation checks use the same scale, so a probe is never rounded back up to the
+normal minimum. Exchange minimum quantities and notionals still apply. A probe
+requires an empty portfolio; no other position can open while it remains open.
+An atomic ledger reservation limits probes to one attempt per rolling hour and
+six attempts per rolling 24 hours, including aborted attempts. Restarting,
+changing modes and resuming do not reset this budget. A dispatch-time veto
+rechecks the policy, reservation, research freshness and order binding.
+
+`/strategy`, `/why`, `/simple` and entry journals distinguish probes from validated
+entries. More entry opportunities do not establish profitability or guarantee a
+particular number of trades.
+
 ## Existing positions and holding periods
 
 Every new position records its entry interval and selected holding cap. Existing

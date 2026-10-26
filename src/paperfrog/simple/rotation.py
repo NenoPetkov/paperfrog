@@ -141,14 +141,17 @@ def closed(
 
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
-    if choice not in CHOICES | {"auto"}:
-        raise SafeError("use /strategy current, /strategy opposite or /strategy auto")
+    if choice not in CHOICES | {"auto", "auto-active"}:
+        raise SafeError("use /strategy current, /strategy opposite, /strategy auto or /strategy auto-active")
     initialize(store, "current", now_ms)
     with store.transaction() as conn:
         state = selection(store, conn)
-        if choice == "auto":
-            if not state["auto"]:
-                state.update(auto=True, epoch=state["epoch"] + 1, changed_ms=now_ms)
+        if choice in {"auto", "auto-active"}:
+            activity_mode = "active" if choice == "auto-active" else "strict"
+            if not state["auto"] or state.get("activity_mode", "strict") != activity_mode:
+                if not state["auto"]:
+                    state["changed_ms"] = now_ms
+                state.update(auto=True, epoch=state["epoch"] + 1, activity_mode=activity_mode)
                 store.put("simple_learning", {}, conn)
         else:
             was_auto = state["auto"]
@@ -157,7 +160,10 @@ def configure(store: Store, choice: str, now_ms: int) -> None:
                 switch(store, state, choice, now_ms, "manual selection via /strategy", conn)
             state.pop("timeframe", None)
             state.pop("hold_hours", None)
+            state.pop("entry_policy", None)
+            state.pop("activity_mode", None)
         store.put(KEY, state, conn)
+        store.audit("simple_strategy_configured", {"choice": choice, "epoch": state["epoch"]}, conn)
 
 
 def describe(store: Store, timezone: str) -> str:
@@ -169,6 +175,9 @@ def describe(store: Store, timezone: str) -> str:
         f"Consecutive losses: {state.get('loss_streak', 0)} (reporting only).",
         "Auto uses validated net results by market pattern, with confirmation and minimum dwell.",
         "/strategy auto — choose current/opposite, 5m/15m and holding limit; wait without validated evidence.",
+        "/strategy auto-active — same research plus limited trend probes when no variant qualifies.",
+        f"Activity: {state.get('activity_mode', 'strict')}; entry policy: {state.get('entry_policy', 'validated')}.",
+        "Probes: half normal size, empty portfolio, one per hour, six per rolling 24h, one-hour holding cap. No historical edge is claimed.",
         f"Candles: {state.get('timeframe', 'configured')}; hold cap: {state.get('hold_hours', 'configured')} hours.",
         store.get("simple_learning", {}).get("reason", "Historical review pending."),
         "/strategy current — normal trend execution.",

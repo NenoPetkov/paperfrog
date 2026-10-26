@@ -11,6 +11,7 @@ from paperfrog.domain.types import SafeError, State
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
+from . import activity
 from .sizing import require_equity_margin_allocation
 
 
@@ -28,6 +29,7 @@ class Proposal:
     participation: float
     available_margin: float | None = None
     quantity_step_notional: float = 0.0
+    activity_probe: bool = False
 
 
 @dataclass(frozen=True)
@@ -157,11 +159,12 @@ class RiskEngine:
             raise SafeError("UTC clock required")
         now = now.astimezone(UTC)
         day = now.date().isoformat()
-        if p.target > p.equity * self.s.max_target_notional + 1e-9 or p.gross < p.target:
+        scale = activity.SIZE_SCALE if p.activity_probe else 1.0
+        if p.target > p.equity * self.s.max_target_notional * scale + 1e-9 or p.gross < p.target:
             raise SafeError("target cap exceeded")
         if self.s.simple_sizing_mode in {"margin", "equity_range"} and (
             p.target
-            > p.equity * self.s.simple_position_margin_cap * self.s.exchange_leverage + 1e-9
+            > p.equity * self.s.simple_position_margin_cap * self.s.exchange_leverage * scale + 1e-9
         ):
             raise SafeError("position margin cap exceeded")
         if abs(p.net_beta) > self.s.max_net_beta or (
@@ -173,7 +176,8 @@ class RiskEngine:
             if p.available_margin is None:
                 raise SafeError("fresh available margin required for equity range sizing")
             require_equity_margin_allocation(
-                self.s, p.equity, p.target, p.available_margin, p.quantity_step_notional
+                self.s, p.equity, p.target, p.available_margin, p.quantity_step_notional,
+                activity.SIZE_SCALE if p.activity_probe else 1.0,
             )
         if p.liquidation_distance < max(0.25, 5 * p.stop_fraction):
             raise SafeError("liquidation buffer insufficient")
@@ -188,7 +192,7 @@ class RiskEngine:
                 raise SafeError("daily profit entry lock")
             if (
                 p.risk
-                > p.equity * self.s.risk_per_trade * self.store.get("risk_multiplier", 1.0, conn)
+                > p.equity * self.s.risk_per_trade * self.store.get("risk_multiplier", 1.0, conn) * scale
                 + 1e-9
             ):
                 raise SafeError("per trade risk exceeded")
@@ -222,6 +226,10 @@ class RiskEngine:
                 raise SafeError("total margin cap exceeded")
             if self.store.get("cooldown:" + p.symbol, 0, conn) > now.timestamp():
                 raise SafeError("symbol cooldown")
+            if p.activity_probe:
+                activity.reserve(self.store, p.trade_id, int(now.timestamp() * 1000), conn)
+            elif activity.has_open_probe(self.store, conn):
+                raise SafeError("active auto probe must close before another entry")
             conn.execute(
                 text("INSERT INTO entries(id,day,symbol,ts,risk,gross) VALUES (:i,:d,:s,:t,:r,:g)"),
                 {

@@ -14,6 +14,7 @@ from sqlalchemy import Connection
 from paperfrog.domain.types import Fill, Filters, Order, Quote, SafeError, State
 from paperfrog.execution.coordinator import Coordinator, client_id
 from paperfrog.paper.broker import PaperBroker
+from paperfrog.risk import activity
 from paperfrog.risk.engine import Health, Proposal, RiskEngine
 from paperfrog.risk.sizing import equity_margin_bounds, require_equity_margin_allocation
 from paperfrog.settings import Settings
@@ -889,6 +890,8 @@ class Engine:
                 },
             )
         normal_direction = rotation.execution_side(direction, selected_strategy)
+        activity_probe = learning.is_probe(self.store)
+        allocation_scale = activity.SIZE_SCALE if activity_probe else 1.0
         assert q is not None
         if self.entry_timeframe in {"1m", "5m", "8m"}:
             reason_veto = (minute_veto(row, normal_direction, now_ms, float(q.mark), self.rules)
@@ -966,6 +969,7 @@ class Engine:
                     notional,
                     float(self.broker.available) / (1 / self.s.exchange_leverage + self.s.fee_rate),
                 )
+        notional *= allocation_scale
         if not math.isfinite(notional) or notional <= 0:
             raise SafeError("simple exposure budget exhausted")
         f = self.filters[symbol]
@@ -996,7 +1000,8 @@ class Engine:
             allocated = float(quantity * allocation_price)
             try:
                 bounds = require_equity_margin_allocation(
-                    self.s, equity, allocated, available_margin, float(f.step * allocation_price)
+                    self.s, equity, allocated, available_margin, float(f.step * allocation_price),
+                    allocation_scale,
                 )
             except SafeError as exc:
                 self.store.audit("simple_entry_skipped", {"symbol": symbol, "reason": str(exc)})
@@ -1013,6 +1018,7 @@ class Engine:
                     "remaining_balance": bounds.remaining_balance,
                     "limiting_cap": min(caps, key=lambda key: caps[key]),
                     "caps": caps,
+                    "allocation_scale": allocation_scale,
                     "quote_asof_ms": q.timestamp_ms,
                 },
             )
@@ -1042,6 +1048,7 @@ class Engine:
             float(quantity / max(visible, Decimal(".00000001"))),
             available_margin,
             float(f.step * allocation_price),
+            activity_probe,
         )
         intent: dict[str, Any] = {
             "id": trade_id,
@@ -1057,6 +1064,7 @@ class Engine:
             "entry_timeframe": self.entry_timeframe,
             "max_hold_hours": rotation.hold_hours(self.store, self.s),
             "adaptive_holding": selected_strategy["auto"],
+            "activity_probe": activity_probe,
             "opened_ms": now_ms,
             "stop_fraction": stop,
             "journal_version": 1,
@@ -1074,6 +1082,8 @@ class Engine:
                 "entry_timeframe": self.entry_timeframe,
                 "max_hold_hours": rotation.hold_hours(self.store, self.s),
                 "learning_decision": self.store.get(learning.KEY) if selected_strategy["auto"] else None,
+                "activity_probe": activity_probe,
+                "allocation_scale": allocation_scale,
                 "ai_enabled": self.s.simple_ai_enabled,
                 "reason": reason,
                 "indicators": indicators(row),
@@ -1135,6 +1145,8 @@ class Engine:
             "epoch": selected_strategy["epoch"],
             "order": order.model_dump(mode="json"),
             "decision_side": normal_direction,
+            "activity_probe": activity_probe,
+            "trade_id": trade_id,
         }
         if selected_strategy["active"] == "opposite":
             one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
@@ -1222,6 +1234,7 @@ class Engine:
             "entry_timeframe": intent.get("entry_timeframe", "15m"),
             "max_hold_hours": intent.get("max_hold_hours", self.s.simple_max_hold_hours),
             "adaptive_holding": intent.get("adaptive_holding", False),
+            "activity_probe": intent.get("activity_probe", False),
             "quantity": str(fill.quantity),
             "entry_price": float(fill.price),
             "entry_fee": float(fill.fee),
