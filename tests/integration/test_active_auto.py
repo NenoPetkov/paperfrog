@@ -53,7 +53,7 @@ def test_active_mode_requires_confirmation_preserves_locks_and_survives_restart(
         reopened.engine.dispose()
 
 
-@pytest.mark.parametrize("damage", ["mixed", "fading", "missing", "stale", "failed", "future", "ai", "disabled"])
+@pytest.mark.parametrize("damage", ["missing", "stale", "failed", "future", "ai", "disabled"])
 def test_active_mode_never_bypasses_missing_research_or_market_protection(settings, store, damage):
     s = active_settings(settings)
     rotation.configure(store, "auto-active", NOW - 2 * learning.DWELL_MS)
@@ -183,7 +183,8 @@ async def test_live_probe_half_size_stop_and_exit_despite_expired_permission(
     )
     try:
         sim.available = available
-        row.update(day(NOW))
+        row.update(day(NOW), path_efficiency_1h=.8, direction_changes_1h=0,
+                   previous_trend_atr=1., previous_flow=.4)
         breadth(store, engine.s, NOW)
         assert select_probe(store, engine.s)["allowed"]
         assert engine.entry_signal(row, now, .001)[0] == 1
@@ -208,7 +209,8 @@ async def test_probe_mode_change_at_dispatch_rejects_without_order(settings, sto
         settings, store, filters, **equity_range_options(simple_market_trend_enabled=True)
     )
     try:
-        row.update(day(NOW))
+        row.update(day(NOW), path_efficiency_1h=.8, direction_changes_1h=0,
+                   previous_trend_atr=1., previous_flow=.4)
         breadth(store, engine.s, NOW)
         select_probe(store, engine.s)
         original = engine.broker.submit

@@ -209,6 +209,16 @@ def indicators(raw: pd.DataFrame, rules: Rules = RULES) -> pd.DataFrame:
     # No future bar or intrabar high/low is used to authorize an entry.
     for key in ("trend_atr", "close", "fast", "flow", "atr_fraction", "prior_high", "prior_low"):
         x["previous_" + key] = x[key].shift(1)
+    return path_features(x, 4)
+
+
+def path_features(x: pd.DataFrame, bars: int) -> pd.DataFrame:
+    """One-hour path efficiency and direction changes from completed candles."""
+    delta = x.close.diff()
+    travel = delta.abs().rolling(bars).sum()
+    x["path_efficiency_1h"] = (x.close - x.close.shift(bars)).abs() / travel.replace(0, np.nan)
+    x.loc[travel == 0, "path_efficiency_1h"] = 0.0
+    x["direction_changes_1h"] = (delta * delta.shift(1) < 0).astype(float).rolling(bars - 1).sum()
     return x
 
 

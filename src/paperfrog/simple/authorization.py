@@ -28,6 +28,7 @@ def strategy_hash(s: Settings) -> str:
     for name in (
         "strategy.py",
         "rotation.py",
+        "routing.py",
         "learning.py",
         "learning_replay.py",
         "confidence.py",

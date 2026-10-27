@@ -123,7 +123,7 @@ def closed(
         return  # Offline replay has no runtime strategy controller.
     if (
         trade.get("strategy_epoch", 0) != state["epoch"]
-        or trade.get("strategy_choice", "current") != state["active"]
+        or (not state["auto"] and trade.get("strategy_choice", "current") != state["active"])
         or any(x["id"] == trade["id"] for x in state["outcomes"])
         or store.get(RESULT_PREFIX + trade["id"], None, conn) is not None
     ):
@@ -134,7 +134,7 @@ def closed(
     state["loss_streak"] = state.get("loss_streak", 0) + 1 if pnl < 0 else 0
     store.put(
         RESULT_PREFIX + trade["id"],
-        {"strategy": state["active"], "epoch": state["epoch"], "pnl": pnl},
+        {"strategy": trade.get("strategy_choice", state["active"]), "epoch": state["epoch"], "pnl": pnl},
         conn,
     )
     store.put(KEY, state, conn)
@@ -170,12 +170,12 @@ def describe(store: Store, timezone: str) -> str:
     state = selection(store)
     outcomes = state["outcomes"]
     lines = [
-        f"Strategy: {state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
+        f"Strategy: {'per trade current/opposite' if state['auto'] else state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
         f"Consecutive losses: {state.get('loss_streak', 0)} (reporting only).",
-        "Auto uses validated net results by market pattern, with confirmation and minimum dwell.",
+        "Auto routes each trade: stable trend → current; dynamic trend or similar losses → confirmed opposite.",
         "/strategy auto — choose current/opposite, 5m/15m and holding limit; wait without validated evidence.",
-        "/strategy auto-active — same research plus limited trend probes when no variant qualifies.",
+        "/strategy auto-active — same per-trade routing plus limited probes when no variant qualifies.",
         f"Activity: {state.get('activity_mode', 'strict')}; entry policy: {state.get('entry_policy', 'validated')}.",
         "Probes: half normal size, empty portfolio, one per hour, six per rolling 24h, one-hour holding cap. No historical edge is claimed.",
         f"Candles: {state.get('timeframe', 'configured')}; hold cap: {state.get('hold_hours', 'configured')} hours.",
@@ -204,14 +204,23 @@ def require_order(
     permission = store.get("simple_strategy_order:" + order.client_id, {})
     if (
         permission.get("order") != order.model_dump(mode="json")
-        or permission.get("active") != state["active"]
+        or (not state["auto"] and permission.get("active") != state["active"])
         or permission.get("epoch") != state["epoch"]
     ):
         raise EntryVeto("strategy selection changed or order permission missing")
+    chosen = permission.get("active")
+    if chosen not in CHOICES:
+        raise EntryVeto("invalid per-trade strategy")
+    if state["auto"]:
+        from . import routing
+        route, row = permission.get("auto_route", {}), permission.get("route_row", {})
+        check_ms = now_ms if now_ms is not None else route.get("asof_ms", 0)
+        if not routing.valid(store, route, row, check_ms, chosen):
+            raise EntryVeto("per-trade auto route missing, changed or expired")
     original = permission.get("decision_side")
-    if original not in {-1, 1} or execution_side(original, state) != order.side:
+    if original not in {-1, 1} or execution_side(original, {"active": chosen}) != order.side:
         raise EntryVeto("strategy order direction does not match the normal decision")
-    if state["active"] == "opposite":
+    if chosen == "opposite":
         try:
             evidence = permission["opposite_evidence"]
             row = evidence["row"]

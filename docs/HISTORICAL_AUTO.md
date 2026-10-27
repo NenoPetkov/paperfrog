@@ -1,8 +1,16 @@
 # Historical automatic strategy selection
 
-`/strategy auto` jointly selects `current` or confirmed `opposite`, `5m` or `15m`
-entry candles, and a holding cap of 1, 2, 4 or 8 hours (never above the configured
-maximum). `/strategy current` and `/strategy opposite` restore manual selection
+Both automatic modes choose `current` or confirmed `opposite` separately for each
+new trade. Stable, aligned trends favor current; changing flow, weak/unestablished
+breakouts, choppy paths, mixed/fading trends or a matched loss pattern favor
+opposite. Opposite still waits for a completed failed breakout or structure
+reversal; a preference alone never submits a reversed order.
+
+The historical controller chooses `5m` or `15m` entry candles and a holding cap
+of 1, 2, 4 or 8 hours (never above the configured maximum). These are controller
+settings, while strategy direction is per trade. In strict `/strategy auto`, the
+actual chosen strategy/candle/holding combination must itself be eligible; evidence
+for current cannot authorize opposite, or vice versa. `/strategy current` and `/strategy opposite` restore manual selection
 and the configured candle/holding settings. Automatic mode requires the normal
 trend profile, broad-market protection and AI disabled; two independent policy
 controllers must not compete for entry permission.
@@ -70,11 +78,12 @@ the fallback. Both choices persist across restarts; neither clears risk locks.
 Validated historical variants still take priority and retain all their original
 eligibility rules. A probe is explicitly **not** a validated historical edge.
 
-When no historical variant qualifies, active mode can select normal `current`
-trend execution on 15-minute candles with a one-hour holding cap. This requires
-fresh, successful research and a persistent BULL or BEAR pattern, two consecutive
-reviews of the same pattern, and one hour since the previous strategy switch.
-MIXED, fading, missing and stale conditions do not permit probes. The normal
+When no historical variant qualifies, active mode prepares per-trade probes on
+15-minute candles in persistent markets and 5-minute candles in mixed/fading
+markets, with a one-hour holding cap. Both current and opposite use the same
+probe limits. This requires fresh, successful research, two consecutive reviews
+of the same pattern, and one hour since the previous controller change. Missing
+or stale conditions do not permit probes. The normal
 coin, BTC, breadth, spread, liquidity, risk, authorization and hosted-stop checks
 still apply to every order. Failed research cannot be bypassed by active mode.
 
@@ -90,6 +99,33 @@ rechecks the policy, reservation, research freshness and order binding.
 `/strategy`, `/why`, `/simple` and entry journals distinguish probes from validated
 entries. More entry opportunities do not establish profitability or guarantee a
 particular number of trades.
+
+## Per-trade route and loss memory
+
+The current preference requires aligned one-hour/four-hour returns, persistent
+market breadth, trend persistence over two completed candles, consistent flow,
+and a one-hour directional efficiency of at least 0.55. A 15-minute breakout less than
+0.15 ATR outside its old range, previous trend strength below 0.3 ATR, or a flow
+sign change is treated as unstable. These are initial, interpretable heuristics,
+not statistically validated thresholds. Path efficiency is absolute net movement
+divided by the sum of absolute candle moves; no future candle is included.
+
+Loss memory compares the candidate with up to 20 closest current-strategy trades
+closed before the decision, from the last 30 days and the same configuration and
+candle interval. Seven direction-normalized features describe trend strength,
+previous strength, current/previous flow, one-hour/four-hour return in ATR units,
+and breakout depth. Similar winners remain in the sample. At least three matches
+across two four-hour blocks, a two-thirds loss share, negative mean net return,
+and a positive same-exit inverse estimate are needed to favor opposite from memory.
+The inverse estimate is a diagnostic, not a simulated opposite strategy result.
+Monitoring failures and other operational exits cannot teach a reversal pattern.
+
+The full route, matching trade IDs and reason are recorded with each order and
+position. Entry permissions bind the exact order, chosen strategy, epoch, closed
+candle and market context; routing is checked again at dispatch. Candidate choices
+do not mutate the global strategy or flip existing positions. Telegram entry and
+closed-trade messages display the strategy actually used, including AUTO on new
+automatic trades; entry messages include the routing reason.
 
 ## Existing positions and holding periods
 

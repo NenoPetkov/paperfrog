@@ -15,7 +15,7 @@ from . import rotation
 from .strategy import BAR_MS
 
 VERSION = 1
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 KEY = "simple_learning"
 EVIDENCE = "simple_learning_outcomes"
 TIMEFRAMES = ("5m", "15m")
@@ -131,13 +131,13 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
         winner is None and selection.get("activity_mode") == "active"
         and fresh and evidence_fresh and s.simple_market_trend_enabled
         and not s.simple_ai_enabled and s.simple_entry_mode == "trend"
-        and context in {"BULL:persistent", "BEAR:persistent"}
+        and context != "unknown"
         and s.simple_max_hold_hours >= 1
     )
     candidate_policy = "probe" if probe else "validated"
     wanted = [winner["strategy"], winner["timeframe"], winner["hold_hours"]] if winner else None
     if probe:
-        wanted = ["current", "15m", 1]
+        wanted = ["current", "15m" if context.endswith(":persistent") else "5m", 1]
     consecutive = (
         old.get("confirmations", 0) + 1
         if (wanted and old.get("candidate") == wanted
@@ -159,7 +159,7 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
             elif consecutive >= 2 and now_ms - state.get("changed_ms", 0) >= DWELL_MS:
                 improvement = winner["lower_bound"] - current_score["lower_bound"] if winner and current_score else math.inf
                 if improvement >= 0.0005:
-                    switch_reason = (f"Limited trend probe in {context}; historical edge unvalidated"
+                    switch_reason = (f"Limited per-trade probe in {context}; historical edge unvalidated"
                                      if probe else f"Historical {context} edge; {wanted[1]}")
                     rotation.switch(store, state, wanted[0], now_ms, switch_reason, conn)
                     state["timeframe"] = wanted[1]
@@ -172,10 +172,10 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
                 allowed = True
                 reason = "Retaining validated incumbent while challenger awaits confirmation/dwell."
         if probe:
-            reason = ("Limited trend probe; historical edge unvalidated. Half size; one position; one per hour; six per rolling 24h."
-                      if allowed else "Limited trend probe waiting for two same-pattern reviews and one-hour dwell.")
+            reason = ("Limited per-trade probe; historical edge unvalidated. Half size; one position; one per hour; six per rolling 24h."
+                      if allowed else "Limited per-trade probe waiting for two same-pattern reviews and one-hour dwell.")
         result = {
-            "version": VERSION, "policy_version": POLICY_VERSION,
+            "version": VERSION, "policy_version": POLICY_VERSION, "strategy_scope": "per_trade",
             "asof_ms": boundary, "expires_ms": boundary + BAR_MS,
             "config_hash": s.config_hash, "pattern": context, "candidate": wanted,
             "confirmations": consecutive, "allowed": allowed, "reason": reason,
@@ -217,10 +217,10 @@ def veto(store: Store, s: Settings, now_ms: int, trade_id: str | None = None) ->
         return "automatic strategy waiting for fresh validated historical net edge"
     if is_probe(store):
         if not (
-            state.get("activity_mode") == "active" and state["active"] == "current"
+            state.get("activity_mode") == "active"
             and r.get("entry_policy") == "probe" and r.get("policy_version") == POLICY_VERSION
-            and r.get("pattern") in {"BULL:persistent", "BEAR:persistent"}
-            and r.get("timeframe") == "15m" and r.get("hold_hours") == 1
+            and r.get("pattern") not in {None, "unknown"}
+            and r.get("timeframe") in TIMEFRAMES and r.get("hold_hours") == 1
             and s.simple_market_trend_enabled and not s.simple_ai_enabled
             and s.simple_entry_mode == "trend"
         ):

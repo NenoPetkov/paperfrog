@@ -154,7 +154,8 @@ def timing_indicators(x: pd.DataFrame, minutes: int, minute_closes: dict[int, fl
         x["score"] = x.trend_atr.abs().clip(upper=5) * np.sqrt(x.daily_volume / 10_000_000)
     for key in ("trend_atr", "close", "fast", "flow", "prior_high", "prior_low"):
         x["previous_" + key] = x[key].shift(1)
-    return x
+    from .strategy import path_features
+    return path_features(x, max(2, 60 // minutes))
 
 
 def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
@@ -240,7 +241,7 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Q
         or not 0 <= now_ms - quote.timestamp_ms <= s.market_stale_seconds * 1000
     ):
         raise EntryVeto("fresh short-interval execution quote required")
-    if selection(store)["active"] == "opposite":
+    if store.get("simple_strategy_order:" + order.client_id, {}).get("active", selection(store)["active"]) == "opposite":
         from .rotation import require_order as require_strategy_order
         require_strategy_order(store, order, now_ms, quote)
         return

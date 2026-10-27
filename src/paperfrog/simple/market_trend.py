@@ -126,7 +126,7 @@ def market_context(
 
 
 def entry_gate(
-    s: Settings, store: Store, row: dict[str, Any], side: int, now_ms: int
+    s: Settings, store: Store, row: dict[str, Any], side: int, now_ms: int, strategy: str | None = None
 ) -> str | None:
     if not s.simple_market_trend_enabled:
         return None
@@ -179,7 +179,7 @@ def entry_gate(
         or market.get("regime") != regime(*(float(market[key]) for key in fields[:7]))
     ):
         return "broad market trend invalid; new entries blocked"
-    if not regime_allows(market["regime"], side, selection(store)["active"]):
+    if not regime_allows(market["regime"], side, strategy or selection(store)["active"]):
         return f"market {market.get('regime', 'UNKNOWN')}; {label} requires aligned breadth and BTC/ETH over 4h and 1h"
     return None
 
@@ -193,6 +193,7 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int) -> None:
         or record.get("config_hash") != s.config_hash
     ):
         raise EntryVeto("day/market trend permission is not bound to this order")
-    reason = entry_gate(s, store, record.get("row", {}), decision_side(store, order), now_ms)
+    reason = entry_gate(s, store, record.get("row", {}), decision_side(store, order), now_ms,
+                        store.get("simple_strategy_order:" + order.client_id, {}).get("active"))
     if reason:
         raise EntryVeto(reason)

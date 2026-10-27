@@ -200,6 +200,7 @@ class SimpleService:
                     else ""
                 ),
                 "strategy_rotation": rotation.selection(self.store),
+                "strategy_scope": "per_trade" if rotation.selection(self.store)["auto"] else "manual",
                 "historical_learning": self.store.get(learning.KEY, {}),
                 "learning_research": self.store.get("simple_learning_research", {}),
                 "holding_limit_hours": rotation.hold_hours(self.store, self.s),
@@ -237,7 +238,7 @@ class SimpleService:
                     "enabled": self.s.simple_market_trend_enabled,
                     "context": self.store.get("simple_market_trend"),
                     "policy": "coin 4h return, regression, mean and 1h trend must align; current requires aligned market breadth and BTC/ETH; opposite also accepts a verified MIXED market",
-                    "mixed_entries_allowed": rotation.selection(self.store)["active"] == "opposite",
+                    "mixed_entries_allowed": rotation.selection(self.store)["auto"] or rotation.selection(self.store)["active"] == "opposite",
                 },
                 "daily_analysis": {
                     "directory": str(
@@ -401,7 +402,8 @@ class SimpleService:
                                 not self.s.simple_market_trend_enabled
                                 or any(
                                     market_entry_gate(
-                                        self.s, self.store, rows[symbol], side, self.now_ms()
+                                        self.s, self.store, rows[symbol], side, self.now_ms(),
+                                        "opposite" if automatic else None
                                     )
                                     is None
                                     for side in (-1, 1)
@@ -605,7 +607,8 @@ class SimpleService:
         eligible = {}
         trend_blocks = {}
         for symbol, row in rows.items():
-            if rotation.selection(self.store)["active"] == "opposite":
+            selected_strategy = self.engine.entry_selection(row, self.now_ms()) if self.engine else rotation.selection(self.store)
+            if selected_strategy["active"] == "opposite":
                 from .strategy import opposite_entry
                 actual, _, _ = opposite_entry(row, self.s.fee_rate + self.s.slippage_bps / 10000, self.rules)
                 side = -actual
@@ -613,7 +616,7 @@ class SimpleService:
                 side, _ = minute_direction(row, self.rules)
             if not side:
                 continue
-            reason = market_entry_gate(self.s, self.store, row, side, self.now_ms())
+            reason = market_entry_gate(self.s, self.store, row, side, self.now_ms(), selected_strategy["active"])
             if reason:
                 trend_blocks[symbol] = reason
             else:

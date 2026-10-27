@@ -64,7 +64,7 @@ async def test_help_explains_manual_and_historical_auto_strategies(settings):
     service = SimpleService(s)
     try:
         response = await service.controls.handle(update("/help"))
-        assert "/strategy auto" in response[1] and "historical selection" in response[1]
+        assert "/strategy auto" in response[1] and "per-trade current/opposite routing" in response[1]
         assert "/strategy auto switches" not in response[1]
         assert "failed breakout or confirmed reversal" in response[1]
     finally:

@@ -37,17 +37,30 @@ class EventNotifications:
                 if reducing is False
                 else ""
             )
+            permission = self.store.get("simple_strategy_order:" + payload["client_id"], {})
+            strategy_info = ""
+            if reducing is False and permission.get("active") in {"current", "opposite"}:
+                route = permission.get("auto_route") or {}
+                strategy_info = f"\nStrategy: {permission['active'].upper()} ({'AUTO' if route else 'MANUAL'})"
+                if route:
+                    strategy_info += f"\nWhy: {route['reason']}"
             return (
                 f"{'🛬' if reducing else '🐸'} {action} {payload['symbol']}{detail}\n"
-                f"{payload['quantity']} at {payload['price']}"
+                f"{payload['quantity']} at {payload['price']}{strategy_info}"
             )
         if kind == "trade_closed":
             pnl = float(payload["pnl"])
             label = "profit" if pnl > 0 else "loss" if pnl < 0 else "flat"
+            trade = next((r for r in reversed(self.store.get("simple_closed", []))
+                          if r.get("trade_id") == payload["id"]), {})
+            choice = trade.get("strategy_choice")
+            strategy_info = f"\nStrategy: {choice.upper()}" if choice in {"current", "opposite"} else ""
+            if strategy_info:
+                strategy_info += " (AUTO)" if (trade.get("entry_context") or {}).get("auto_route") else ""
             unit = "BNFCR" if self.s.futures_account_mode == "credits" else "USDT"
             return (
                 f"{'✅' if pnl >= 0 else '🧾'} {payload.get('symbol', payload['id'])} closed · {label}\n"
-                f"Net result: {pnl:+.6f} {unit} (estimated fees)."
+                f"Net result: {pnl:+.6f} {unit} (estimated fees).{strategy_info}"
             )
         if kind == "risk_lock":
             expiry = payload.get("until")
@@ -82,6 +95,10 @@ class EventNotifications:
                 "once execution and health checks pass."
             )
         if kind == "simple_strategy_changed":
+            if payload.get("auto"):
+                return ("🔄 AUTO controller updated\n"
+                        f"{payload['reason']}\n"
+                        "CURRENT or OPPOSITE is chosen separately for each new trade. /strategy")
             return (
                 f"🔄 Strategy: {payload['from']} → {payload['to']}\n"
                 f"{payload['reason']} ({payload['losses']}/{payload['sample']} losses).\n"

@@ -752,14 +752,30 @@ class Engine:
                     self.store.put("simple_positions", positions)
         self.risk.anchors(float(self.broker.equity()), now)
 
-    def entry_signal(self, row: dict[str, Any], now_ms: int, spread: float) -> tuple[int, str]:
+    def entry_selection(self, row: dict[str, Any], now_ms: int) -> dict[str, Any]:
+        from . import routing
+        state = rotation.selection(self.store)
+        if state["auto"]:
+            route = routing.choose(self.store, row, now_ms)
+            return {**state, "active": route["choice"], "auto_route": route}
+        return state
+
+    def entry_signal(self, row: dict[str, Any], now_ms: int, spread: float,
+                     selected_strategy: dict[str, Any] | None = None) -> tuple[int, str]:
         if row.get("entry_timeframe", "15m") != self.entry_timeframe:
             return 0, "entry candle timeframe does not match selected policy"
         learned_veto = learning.veto(self.store, self.s, now_ms)
         if learned_veto:
             return 0, learned_veto
         one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
-        opposite = rotation.selection(self.store)["active"] == "opposite"
+        from . import routing
+        selected_strategy = selected_strategy or self.entry_selection(row, now_ms)
+        if selected_strategy["auto"]:
+            if selected_strategy["active"] is None:
+                return 0, selected_strategy["auto_route"]["reason"]
+            if not routing.permitted(self.store, selected_strategy["active"]):
+                return 0, "chosen per-trade strategy lacks validated evidence in strict auto"
+        opposite = selected_strategy["active"] == "opposite"
         if opposite:
             if self.s.simple_entry_mode != "trend":
                 return 0, "confirmed opposite strategy requires normal trend mode"
@@ -800,11 +816,13 @@ class Engine:
             if btc_reason:
                 return 0, btc_reason
         if direction:
-            market_reason = market_entry_gate(self.s, self.store, row, direction, now_ms)
+            market_reason = market_entry_gate(self.s, self.store, row, direction, now_ms, selected_strategy["active"])
             if market_reason:
                 return 0, market_reason
-        if direction and rotation.selection(self.store)["active"] == "opposite":
+        if direction and opposite:
             direction = -direction
+        if selected_strategy["auto"]:
+            reason = f"AUTO {selected_strategy['active']}: {selected_strategy['auto_route']['reason']}; {reason}"
         return direction, reason
 
     async def enter(
@@ -842,14 +860,14 @@ class Engine:
             spread = float((q.ask - q.bid) / q.mid)
             if spread > self.s.max_spread:
                 raise SafeError("simple spread veto")
-        direction, reason = self.entry_signal(row, now_ms, spread)
+        selected_strategy = self.entry_selection(row, now_ms)
+        direction, reason = self.entry_signal(row, now_ms, spread, selected_strategy)
         self.store.put(
             "last_signal",
             {"symbol": symbol, "reason": reason, "timestamp_ms": int(row["timestamp_ms"])},
         )
         if not direction:
             return
-        selected_strategy = rotation.selection(self.store)
         strategy_label = self.strategy + (
             rotation.VERSION if selected_strategy["active"] == "opposite" else ""
         )
@@ -873,7 +891,12 @@ class Engine:
             spread = float((q.ask - q.bid) / q.mid)
             if spread > self.s.max_spread:
                 raise SafeError("simple spread veto")
-            direction, reason = self.entry_signal(row, now_ms, spread)
+            refreshed_selection = self.entry_selection(row, now_ms)
+            if (refreshed_selection["active"] != selected_strategy["active"]
+                    or refreshed_selection["epoch"] != selected_strategy["epoch"]):
+                return
+            selected_strategy = refreshed_selection
+            direction, reason = self.entry_signal(row, now_ms, spread, selected_strategy)
             self.store.put(
                 "last_signal",
                 {"symbol": symbol, "reason": reason, "timestamp_ms": int(row["timestamp_ms"])},
@@ -1082,6 +1105,7 @@ class Engine:
                 "entry_timeframe": self.entry_timeframe,
                 "max_hold_hours": rotation.hold_hours(self.store, self.s),
                 "learning_decision": self.store.get(learning.KEY) if selected_strategy["auto"] else None,
+                "auto_route": selected_strategy.get("auto_route"),
                 "activity_probe": activity_probe,
                 "allocation_scale": allocation_scale,
                 "ai_enabled": self.s.simple_ai_enabled,
@@ -1100,7 +1124,7 @@ class Engine:
         }
         if self.s.simple_market_trend_enabled:
             current_ms = self.broker.now_ms() if isinstance(self.broker, LiveBroker) else now_ms
-            market_reason = market_entry_gate(self.s, self.store, row, normal_direction, current_ms)
+            market_reason = market_entry_gate(self.s, self.store, row, normal_direction, current_ms, selected_strategy["active"])
             if market_reason:
                 raise SafeError(market_reason)
             self.store.put(
@@ -1148,6 +1172,9 @@ class Engine:
             "activity_probe": activity_probe,
             "trade_id": trade_id,
         }
+        if selected_strategy["auto"]:
+            permission.update(auto_route=selected_strategy["auto_route"],
+                              route_row={**indicators(row), "entry_timeframe": row.get("entry_timeframe", "15m")})
         if selected_strategy["active"] == "opposite":
             one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
             confirmed_side, _, level = opposite_entry(row, one_way_cost, self.rules)
@@ -1211,7 +1238,7 @@ class Engine:
         self.record_entry(symbol, fill, intent)
         self.notice(
             trade_id + "-open",
-            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Why: {reason}. Entry candles {self.entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
+            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Strategy: {selected_strategy['active'].upper()}. Why: {reason}. Entry candles {self.entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
         )
 
     def record_entry(self, symbol: str, fill: Fill, intent: dict[str, Any]) -> None:

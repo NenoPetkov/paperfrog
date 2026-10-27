@@ -166,7 +166,13 @@ async def test_auto_timeframe_and_budget_are_recorded_and_survive_restore(settin
     store.put(learning.KEY, {"allowed": True, "config_hash": settings.config_hash,
                             "epoch": state["epoch"], "active": "current", "timeframe": "5m", "hold_hours": 2,
                             "asof_ms": NOW, "expires_ms": NOW + BAR_MS})
+    store.put("simple_market_trend", market(settings))
+    permission = store.get(learning.KEY)
+    permission["ranking"] = [{"strategy": "current", "timeframe": "5m", "hold_hours": 2, "eligible": True}]
+    store.put(learning.KEY, permission)
     row = minute_row(NOW, timeframe="5m")
+    row.update(path_efficiency_1h=.8, direction_changes_1h=0, previous_trend_atr=1.,
+               previous_flow=.4, day_return_1h=.01, day_return_4h=.02)
     store.put("simple_minute:SOLUSDT", row)
     await engine.quote(quote(now_ms=NOW), NOW)
     await engine.enter("SOLUSDT", row, NOW)
@@ -217,7 +223,12 @@ async def test_auto_five_minute_opposite_dispatches_and_keeps_its_budget(setting
         store.put(learning.KEY, {"allowed": True, "config_hash": engine.s.config_hash,
                                 "epoch": state["epoch"], "active": "opposite", "timeframe": "5m", "hold_hours": 1,
                                 "asof_ms": now, "expires_ms": now + BAR_MS})
-        obs.update(confirmed_row(now, 1), entry_timeframe="5m")
+        store.put("simple_market_trend", market(engine.s, now))
+        permission = store.get(learning.KEY)
+        permission["ranking"] = [{"strategy": "opposite", "timeframe": "5m", "hold_hours": 1, "eligible": True}]
+        store.put(learning.KEY, permission)
+        obs.update(confirmed_row(now, 1), entry_timeframe="5m", path_efficiency_1h=.3,
+                   direction_changes_1h=3, day_return_1h=.01, day_return_4h=.02)
         store.put("simple_minute:SOLUSDT", obs)
         await engine.enter("SOLUSDT", obs, now)
         trade = engine.positions()["SOLUSDT"]
