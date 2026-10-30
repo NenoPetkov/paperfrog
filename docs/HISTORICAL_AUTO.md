@@ -62,7 +62,7 @@ be inferred about other coins. Software tests verify implementation only.
 The best eligible variant must win two consecutive quarter-hour reviews. Changes
 require at least one hour since the previous switch and a 5-basis-point improvement
 in the screening bound over an eligible incumbent. A validated incumbent remains
-active during confirmation. When no variant qualifies, new entries wait while
+active during confirmation. In strict mode, when no variant qualifies, new entries wait while
 research and position monitoring continue. Missing, failed or over-four-hour-old
 research also blocks automatic entry. Every permission expires at the next
 15-minute context boundary and is rechecked immediately before live dispatch.
@@ -81,20 +81,35 @@ eligibility rules. A probe is explicitly **not** a validated historical edge.
 When no historical variant qualifies, active mode prepares per-trade probes on
 15-minute candles in persistent markets and 5-minute candles in mixed/fading
 markets, with a one-hour holding cap. Both current and opposite use the same
-probe limits. This requires fresh, successful research, two consecutive reviews
-of the same pattern, and one hour since the previous controller change. Missing
-or stale conditions do not permit probes. The normal
+probe limits. Initial activation and changes of candle size require two consecutive
+reviews agreeing on the proposed interval and at least one hour since the previous
+controller change. A compatible, already active probe policy continues on its
+current interval during that confirmation/dwell period, using fresh market context
+and per-trade direction checks. Merely changing BULL/BEAR/MIXED or fading/persistent
+labels does not pause it. Missing or stale research/market context still blocks
+entries. The normal
 coin, BTC, breadth, spread, liquidity, risk, authorization and hosted-stop checks
 still apply to every order. Failed research cannot be bypassed by active mode.
 
 Probe orders use half the normally computed notional, rounded down. Equity-range
 allocation checks use the same scale, so a probe is never rounded back up to the
-normal minimum. Exchange minimum quantities and notionals still apply. A probe
-requires an empty portfolio; no other position can open while it remains open.
-An atomic ledger reservation limits probes to one attempt per rolling hour and
-six attempts per rolling 24 hours, including aborted attempts. Restarting,
-changing modes and resuming do not reset this budget. A dispatch-time veto
-rechecks the policy, reservation, research freshness and order binding.
+normal minimum. Exchange minimum quantities and notionals still apply. Probes can
+share the portfolio with other probes or validated positions, up to the lower of
+four positions and the configured concurrent-trade limit. Existing aggregate open
+risk, gross exposure, total margin, symbol cooldown, per-symbol daily and overall
+daily limits continue to apply across all positions.
+
+Atomic ledger reservations limit probes to four attempts per rolling 15 minutes
+and 24 per rolling 24 hours, including aborted attempts. Four different qualifying
+coins can therefore enter during the same scan. These are ceilings, not quotas.
+Restarting, changing modes and resuming do not reset the budget. A dispatch-time
+veto rechecks the policy, own reservation, portfolio count, research freshness and
+order binding; an order already reserved does not consume a second slot.
+
+Short-interval research retries the same candle while awaiting its closed
+quarter-hour risk context or when the controller changes during a fetch. Expected
+context synchronization is not logged as a scan failure and does not skip that
+candle. Freshness gates still reject genuinely stale entry observations.
 
 `/strategy`, `/why`, `/simple` and entry journals distinguish probes from validated
 entries. More entry opportunities do not establish profitability or guarantee a

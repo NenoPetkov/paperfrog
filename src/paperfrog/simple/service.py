@@ -557,13 +557,13 @@ class SimpleService:
                 self.store.audit("simple_held_data_degraded", {"error_type": type(exc).__name__})
             await asyncio.sleep(1)
 
-    async def refresh_minutes(self, boundary: int) -> None:
+    async def refresh_minutes(self, boundary: int) -> bool:
         """Rank the liquid pool on each configured entry-candle boundary."""
         interval_ms = self.entry_bar_ms
         timeframe = self.entry_timeframe
         strategy_epoch = rotation.selection(self.store)["epoch"]
         if not self.context_rows:
-            return
+            return False
         pool = list(
             dict.fromkeys(
                 [
@@ -581,9 +581,11 @@ class SimpleService:
             # On a late start, the newest completed 15m context can be newer
             # than the last 8m bar. Wait for the next bar without using future
             # context or reporting ordinary readiness as an operational error.
-            return
+            return False
         if context_at != boundary // BAR_MS * BAR_MS:
-            raise SafeError("waiting for current closed 15-minute risk context")
+            # The quarter-hour scan completes shortly after its boundary. This
+            # is normal synchronization, not a failed scan; retry the same bar.
+            return False
         semaphore = asyncio.Semaphore(5)
 
         async def one(symbol: str) -> tuple[str, Any]:
@@ -624,7 +626,7 @@ class SimpleService:
         async with self.mutex:
             strategy = rotation.selection(self.store)
             if self.entry_timeframe != timeframe or strategy["epoch"] != strategy_epoch:
-                return
+                return False
             selected = choose(eligible, self.s, self.rules)
             self.rows, self.minute_frames, self.selected = rows, frames, selected
             # Missing observations immediately revoke dispatch permission for that symbol.
@@ -668,6 +670,7 @@ class SimpleService:
                 },
             )
             self.scan_complete = True
+            return True
 
     async def minute_research(self) -> None:
         last_boundary = -1
@@ -682,8 +685,10 @@ class SimpleService:
                 await asyncio.sleep(1)
                 continue
             try:
-                await self.refresh_minutes(boundary)
-                last_boundary = boundary
+                if await self.refresh_minutes(boundary):
+                    last_boundary = boundary
+                else:
+                    await asyncio.sleep(1)
             except (SafeError, ValueError, OSError, KeyError) as exc:
                 self.store.audit("simple_minute_degraded", {"error_type": type(exc).__name__})
                 await asyncio.sleep(5)

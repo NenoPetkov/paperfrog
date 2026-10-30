@@ -15,7 +15,7 @@ from . import rotation
 from .strategy import BAR_MS
 
 VERSION = 1
-POLICY_VERSION = 3
+POLICY_VERSION = 4
 KEY = "simple_learning"
 EVIDENCE = "simple_learning_outcomes"
 TIMEFRAMES = ("5m", "15m")
@@ -142,7 +142,8 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
         old.get("confirmations", 0) + 1
         if (wanted and old.get("candidate") == wanted
             and old.get("candidate_policy", "validated") == candidate_policy
-            and old.get("pattern") == context and old.get("asof_ms") == boundary - BAR_MS)
+            and (probe or old.get("pattern") == context)
+            and old.get("asof_ms") == boundary - BAR_MS)
         else 1 if wanted else 0
     )
     reason = "No validated net edge for this market pattern; collecting shadow evidence."
@@ -152,8 +153,7 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
         current = [state["active"], state.get("timeframe", s.simple_entry_timeframe), state.get("hold_hours", s.simple_max_hold_hours)]
         current_score = next((r for r in candidates if [r["strategy"], r["timeframe"], r["hold_hours"]] == current), None)
         if state["auto"] and wanted:
-            if (wanted == current and state.get("entry_policy", "validated") == candidate_policy
-                    and (not probe or consecutive >= 2)):
+            if wanted == current and state.get("entry_policy", "validated") == candidate_policy:
                 allowed = True
                 reason = "Selected variant retains positive purged holdout and cost-stressed evidence."
             elif consecutive >= 2 and now_ms - state.get("changed_ms", 0) >= DWELL_MS:
@@ -172,8 +172,15 @@ def review(store: Store, s: Settings, market: dict[str, Any] | None, now_ms: int
                 allowed = True
                 reason = "Retaining validated incumbent while challenger awaits confirmation/dwell."
         if probe:
-            reason = ("Limited per-trade probe; historical edge unvalidated. Half size; one position; one per hour; six per rolling 24h."
-                      if allowed else "Limited per-trade probe waiting for two same-pattern reviews and one-hour dwell.")
+            # Candle-size hysteresis should not suspend a compatible active policy.
+            # Each candidate still chooses its side from the new market context.
+            if (state["auto"] and state.get("entry_policy") == "probe"
+                    and state.get("timeframe") in TIMEFRAMES and state.get("hold_hours") == 1):
+                allowed = True
+            reason = (f"Per-trade auto: {activity.DESCRIPTION}. Historical edge unvalidated."
+                      if allowed else "Per-trade auto waiting for initial policy confirmation.")
+            if allowed and [state["active"], state.get("timeframe"), state.get("hold_hours")] != wanted:
+                reason += " Current candle size remains active while its replacement awaits confirmation/dwell."
         result = {
             "version": VERSION, "policy_version": POLICY_VERSION, "strategy_scope": "per_trade",
             "asof_ms": boundary, "expires_ms": boundary + BAR_MS,
@@ -214,7 +221,9 @@ def veto(store: Store, s: Settings, now_ms: int, trade_id: str | None = None) ->
         and r.get("timeframe") == rotation.timeframe(store, s)
         and r.get("asof_ms", 0) <= now_ms < r.get("expires_ms", 0)
     ):
-        return "automatic strategy waiting for fresh validated historical net edge"
+        if r.get("allowed") is False and r.get("asof_ms") == now_ms // BAR_MS * BAR_MS:
+            return str(r.get("reason", "automatic strategy entry permission unavailable"))
+        return "automatic strategy waiting for fresh research and market permission"
     if is_probe(store):
         if not (
             state.get("activity_mode") == "active"
@@ -225,7 +234,7 @@ def veto(store: Store, s: Settings, now_ms: int, trade_id: str | None = None) ->
             and s.simple_entry_mode == "trend"
         ):
             return "active auto probe policy missing or incompatible"
-        return activity.blocker(store, now_ms, trade_id)
+        return activity.blocker(store, now_ms, trade_id, max_positions=s.max_concurrent_strategy_trades)
     return None
 
 

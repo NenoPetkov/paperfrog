@@ -103,13 +103,13 @@ def test_validated_variant_takes_priority_over_probe(settings, store):
     assert not learning.is_probe(store)
 
 
-def test_probe_requires_new_confirmation_when_market_direction_changes(settings, store):
+def test_active_probe_keeps_permission_when_market_direction_changes(settings, store):
     s = active_settings(settings)
     assert select_probe(store, s)["allowed"]
     bear = market(s, NOW + BAR_MS, regime="BEAR", median_return_4h=-.02,
                   median_return_1h=-.008, bull_index=25)
     result = learning.review(store, s, bear, NOW + BAR_MS)
-    assert result["confirmations"] == 1 and not result["allowed"]
+    assert result["allowed"] and result["entry_policy"] == "probe"
     result = learning.review(store, s, {**bear, "timestamp_ms": NOW + 2 * BAR_MS}, NOW + 2 * BAR_MS)
     assert result["allowed"] and result["entry_policy"] == "probe"
 
@@ -124,27 +124,29 @@ def close_reservation(store, identifier):
         conn.execute(text("UPDATE entries SET closed=1 WHERE id=:id"), {"id": identifier})
 
 
-def test_probe_reservation_is_atomic_and_rate_limit_survives_restart(settings, store, health, now):
-    risk = RiskEngine(settings, store)
-    risk.reserve(probe_proposal(), health, now)
-    assert len(store.get(activity.KEY)) == 1
-    with pytest.raises(SafeError, match="empty portfolio"):
-        risk.reserve(probe_proposal("other", "ETHUSDT"), health, now)
-    with pytest.raises(SafeError, match="probe must close"):
-        risk.reserve(replace(probe_proposal("normal", "ETHUSDT"), activity_probe=False), health, now)
-    close_reservation(store, "probe")
+def test_probe_reservation_limits_multiple_positions_and_survives_restart(settings, store, health, now):
+    s = settings.model_copy(update={"max_concurrent_strategy_trades": 4, "max_strategy_entries_per_day": 40})
+    risk = RiskEngine(s, store)
+    for i in range(4):
+        risk.reserve(probe_proposal(str(i), f"COIN{i}USDT"), health, now)
+    assert len(store.get(activity.KEY)) == 4
+    assert activity.blocker(store, int(now.timestamp()*1000), "3") is None
+    with pytest.raises(SafeError, match="concurrent trade cap"):
+        risk.reserve(probe_proposal("fifth", "COIN4USDT"), health, now)
+    for i in range(4):
+        close_reservation(store, str(i))
     reopened = Store(Path(store.engine.url.database))
     try:
-        risk = RiskEngine(settings, reopened)
-        with pytest.raises(SafeError, match="one attempt per hour"):
-            risk.reserve(probe_proposal("early"), health, now + timedelta(minutes=59))
-        for i in range(1, 6):
-            risk.reserve(probe_proposal(str(i), f"ALT{i}USDT"), health, now + timedelta(hours=i))
+        risk = RiskEngine(s, reopened)
+        with pytest.raises(SafeError, match="four attempts per rolling 15"):
+            risk.reserve(probe_proposal("early", "OTHERUSDT"), health, now + timedelta(minutes=14))
+        for i in range(4, 24):
+            risk.reserve(probe_proposal(str(i), f"ALT{i}USDT"), health, now + timedelta(minutes=(i//4)*15))
             close_reservation(reopened, str(i))
-        with pytest.raises(SafeError, match="six attempts"):
-            risk.reserve(probe_proposal("seventh", "ALT6USDT"), health, now + timedelta(hours=6))
-        risk.reserve(probe_proposal("next-day", "ALT7USDT"), health, now + timedelta(hours=24))
-        assert len(reopened.get(activity.KEY)) == 6
+        with pytest.raises(SafeError, match="24 attempts"):
+            risk.reserve(probe_proposal("twenty-fifth", "LASTUSDT"), health, now + timedelta(hours=2))
+        risk.reserve(probe_proposal("next-day", "NEXTUSDT"), health, now + timedelta(hours=24))
+        assert len(reopened.get(activity.KEY)) == 21
     finally:
         reopened.engine.dispose()
 
@@ -198,7 +200,7 @@ async def test_live_probe_half_size_stop_and_exit_despite_expired_permission(
         assert engine.entry_signal(row, now, .001)[0] == 0
         await engine.close("SOLUSDT", now + 1, "protective close despite expired probe")
         assert not engine.positions() and sim.quantity == 0
-        assert activity.blocker(store, now + 1) == "active auto probe cooldown: one attempt per hour"
+        assert activity.blocker(store, now + 1) is None  # Other symbols can still use free slots.
     finally:
         await adapter.close()
 

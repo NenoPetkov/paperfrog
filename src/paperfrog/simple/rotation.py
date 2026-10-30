@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Connection
 
 from paperfrog.domain.types import EntryVeto, Order, Quote, SafeError
+from paperfrog.risk import activity
 from paperfrog.storage.database import Store
 
 from .strategy import BAR_MS, Rules, opposite_entry
@@ -177,7 +178,7 @@ def describe(store: Store, timezone: str) -> str:
         "/strategy auto — choose current/opposite, 5m/15m and holding limit; wait without validated evidence.",
         "/strategy auto-active — same per-trade routing plus limited probes when no variant qualifies.",
         f"Activity: {state.get('activity_mode', 'strict')}; entry policy: {state.get('entry_policy', 'validated')}.",
-        "Probes: half normal size, empty portfolio, one per hour, six per rolling 24h, one-hour holding cap. No historical edge is claimed.",
+        f"Auto activity: {activity.DESCRIPTION}; one-hour holding cap for probes. No historical edge is claimed.",
         f"Candles: {state.get('timeframe', 'configured')}; hold cap: {state.get('hold_hours', 'configured')} hours.",
         store.get("simple_learning", {}).get("reason", "Historical review pending."),
         "/strategy current — normal trend execution.",

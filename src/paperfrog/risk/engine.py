@@ -227,9 +227,8 @@ class RiskEngine:
             if self.store.get("cooldown:" + p.symbol, 0, conn) > now.timestamp():
                 raise SafeError("symbol cooldown")
             if p.activity_probe:
-                activity.reserve(self.store, p.trade_id, int(now.timestamp() * 1000), conn)
-            elif activity.has_open_probe(self.store, conn):
-                raise SafeError("active auto probe must close before another entry")
+                activity.reserve(self.store, p.trade_id, int(now.timestamp() * 1000), conn,
+                                 max_positions=self.s.max_concurrent_strategy_trades)
             conn.execute(
                 text("INSERT INTO entries(id,day,symbol,ts,risk,gross) VALUES (:i,:d,:s,:t,:r,:g)"),
                 {

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import text
 
+from paperfrog.risk import activity
 from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 from paperfrog.telegram.formatting import state_label
@@ -147,7 +148,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         lines.append(f"Historical auto: {store.get(learning.KEY, {}).get('pattern', 'pending')}; holding cap {rotation.hold_hours(store, s)} hours.")
         lines.append(f"Activity: {rotation.selection(store).get('activity_mode', 'strict')}; policy: {rotation.selection(store).get('entry_policy', 'validated')}.")
         if learning.is_probe(store):
-            lines.append("Limited per-trade probe: half normal size, one position, one attempt per hour, six per rolling 24h. Historical edge unvalidated.")
+            lines.append(f"Auto activity: {activity.DESCRIPTION}. Historical edge unvalidated.")
     strategy = (values[rotation.KEY] or {}).get("active", "current")
     if strategy == "opposite" or rotation.selection(store)["auto"]:
         lines.append("Opposite entries require a completed failed breakout or structure reversal with reversed flow; a trend signal alone is insufficient.")
