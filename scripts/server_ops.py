@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -14,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +88,83 @@ def strict_auto(root: Path, s: Settings) -> None:
             raise DeploymentError("Strict reduction requires an existing automatic strategy.")
         rotation.configure(store, "auto", int(time.time() * 1000))
         store.audit("local_strict_auto_activation", {"reason": "unvalidated live probes disabled after holding/momentum review"})
+    finally:
+        store.engine.dispose()
+
+
+def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hold: int) -> None:
+    """Explicit operator-requested LIVE migration; no account, leverage or lock reset."""
+    from paperfrog.simple.momentum import PROFILES
+    from paperfrog.simple.strategy import require_execution
+    from paperfrog.storage.database import Store
+
+    assert_idle(root)
+    compare(s, previous)
+    require_execution(s)
+    if (s.trading_mode != "live" or s.simple_sizing_mode not in {"equity_range", "margin"}
+            or profile not in PROFILES or hold not in {1, 2, 4, 8}
+            or hold > s.simple_max_hold_hours):
+        raise DeploymentError("Momentum activation requires an existing authorized LIVE margin-sized account and bounded holding time.")
+    path = directory(s) / "paperfrog.sqlite"
+    if not path.exists():
+        raise DeploymentError("Existing reconciled ledger required.")
+    store = Store(path)
+    try:
+        if (store.get("reconciled") is not True or store.get("simple_positions")
+                or store.get("simple_pending") or store.get("simple_closing")
+                or store.unresolved_orders()
+                or any(Decimal(str(q)) != 0 for q in store.get("expected_positions", {}).values())):
+            raise DeploymentError("Momentum migration requires a flat reconciled account with no pending orders; existing positions are not altered.")
+        updates = {
+            "simple_entry_profile": profile, "simple_entry_mode": "trend",
+            "simple_entry_timeframe": "5m", "simple_ai_review_minutes": 15,
+            "simple_max_hold_hours": hold, "simple_selected_count": 10,
+            "simple_btc_reference_enabled": False, "simple_market_trend_enabled": False,
+            "simple_ai_enabled": False, "simple_confidence_enabled": False,
+            # A 10% ceiling cannot satisfy the old exact 10% floor after fees
+            # and lot rounding. Margin mode permits smaller allocations and
+            # restores the existing quote-liquidity cap; never round risk up.
+            "simple_sizing_mode": "margin",
+            "simple_position_margin_cap": min(s.simple_position_margin_cap, 0.1),
+            "max_concurrent_strategy_trades": min(s.max_concurrent_strategy_trades, 2),
+            "max_strategy_entries_per_day": min(s.max_strategy_entries_per_day, 12),
+            "max_entries_per_symbol_per_day": min(s.max_entries_per_symbol_per_day, 2),
+            "max_spread": min(s.max_spread, 0.0003),
+        }
+        target = Settings(_env_file=root / ".env", **{**s.public(), **updates})
+        if credential_binding(target) != credential_binding(s):
+            raise DeploymentError("Account binding changed; momentum migration refused.")
+        env = root / ".env"
+        original = env.read_bytes()
+        keys = {key.upper(): str(value).lower() if isinstance(value, bool) else str(value)
+                for key, value in updates.items()}
+        pattern = re.compile(r"^\s*(?:export\s+)?(" + "|".join(keys) + r")\s*=")
+        lines = [line for line in original.decode().splitlines() if not pattern.match(line)]
+        revised = "\n".join([*lines, *(f"{key}={value}" for key, value in keys.items())]) + "\n"
+
+        def write_env(content: bytes) -> None:
+            temporary = env.with_name(".env.momentum.tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(env)
+
+        write_env(revised.encode())
+        try:
+            loaded = load_settings()
+            if loaded.config_hash != target.config_hash or credential_binding(loaded) != credential_binding(s):
+                raise DeploymentError("Reloaded configuration differs from the reviewed momentum settings.")
+        except Exception:
+            write_env(original)
+            raise
+        # Source/account/configuration binding is renewed by the existing local
+        # arm command only after the exact reviewed change has been verified.
+        previous.write_text(json.dumps(context(loaded)))
+        store.audit("local_live_momentum_activation", {"parameters": updates, "profitability": "unproven",
+                                                       "authorization": "explicit operator LIVE request"})
     finally:
         store.engine.dispose()
 
@@ -232,6 +311,11 @@ def main() -> None:
     commands.add_parser("status")
     commands.add_parser("databases")
     commands.add_parser("strategy-strict")
+    momentum = commands.add_parser("activate-momentum")
+    momentum.add_argument("context", type=Path)
+    momentum.add_argument("--profile", required=True)
+    momentum.add_argument("--hold-hours", type=int, required=True)
+    momentum.add_argument("--confirm", required=True)
     commands.add_parser("context").add_argument("--require-arm", action="store_true")
     commands.add_parser("compare").add_argument("path", type=Path)
     commands.add_parser("rearm").add_argument("path", type=Path)
@@ -256,6 +340,10 @@ def main() -> None:
     s = settings()
     if args.command == "strategy-strict":
         strict_auto(root, s)
+    elif args.command == "activate-momentum":
+        if args.confirm != "ACTIVATE LIVE MOMENTUM":
+            raise DeploymentError("Explicit local momentum activation confirmation required.")
+        activate_momentum(root, s, args.context, args.profile, args.hold_hours)
     elif args.command == "context":
         if args.require_arm and s.trading_mode == "live":
             verify_simple_arm(s)

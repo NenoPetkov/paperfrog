@@ -1,0 +1,976 @@
+{
+  "periods": [
+    [
+      1786320000000,
+      1788912000000
+    ],
+    [
+      1788912000000,
+      1791504000000
+    ],
+    [
+      1791504000000,
+      1794096000000
+    ]
+  ],
+  "variants": [
+    {
+      "family": "hour_cross",
+      "hold_hours": 1,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 78,
+          "net": -488.28425950791024,
+          "win_rate": 0.2692307692307692,
+          "profit_factor": 0.3571657542583064,
+          "mean_net_return": -0.0031993220177775525,
+          "median_hold_minutes": 60.0,
+          "return": -0.04882842595079162,
+          "max_drawdown_conservative": 0.04931152084401891,
+          "exit_reasons": {
+            "time limit": 58,
+            "stop": 20
+          },
+          "positive_days": 4,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 64,
+          "net": -471.0711246432034,
+          "win_rate": 0.328125,
+          "profit_factor": 0.35110647457914795,
+          "mean_net_return": -0.003757082327664172,
+          "median_hold_minutes": 60.0,
+          "return": -0.047107112464319645,
+          "max_drawdown_conservative": 0.05225741403679229,
+          "exit_reasons": {
+            "time limit": 48,
+            "stop": 16
+          },
+          "positive_days": 7,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 84,
+        "net": -167.03216587000088,
+        "win_rate": 0.35714285714285715,
+        "profit_factor": 0.7461890342168331,
+        "mean_net_return": -0.0009890335306295534,
+        "median_hold_minutes": 60.0,
+        "return": -0.01670321658699958,
+        "max_drawdown_conservative": 0.0333914109670278,
+        "exit_reasons": {
+          "time limit": 73,
+          "stop": 11
+        },
+        "positive_days": 9,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "hour_cross",
+      "hold_hours": 4,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 72,
+          "net": -477.3894926220465,
+          "win_rate": 0.2916666666666667,
+          "profit_factor": 0.5037279983240321,
+          "mean_net_return": -0.003380943144947488,
+          "median_hold_minutes": 160.0,
+          "return": -0.04773894926220401,
+          "max_drawdown_conservative": 0.054824285325196676,
+          "exit_reasons": {
+            "stop": 48,
+            "time limit": 24
+          },
+          "positive_days": 7,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 62,
+          "net": -722.4108348595256,
+          "win_rate": 0.24193548387096775,
+          "profit_factor": 0.22054169057771422,
+          "mean_net_return": -0.006027609579636702,
+          "median_hold_minutes": 110.0,
+          "return": -0.07224108348595326,
+          "max_drawdown_conservative": 0.07951362550506613,
+          "exit_reasons": {
+            "stop": 45,
+            "time limit": 17
+          },
+          "positive_days": 7,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 73,
+        "net": -67.76093338772813,
+        "win_rate": 0.4657534246575342,
+        "profit_factor": 0.9115694577085881,
+        "mean_net_return": -0.00044465044500167667,
+        "median_hold_minutes": 200.0,
+        "return": -0.006776093338772271,
+        "max_drawdown_conservative": 0.0391437875627465,
+        "exit_reasons": {
+          "time limit": 28,
+          "stop": 45
+        },
+        "positive_days": 10,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "hour_cross",
+      "hold_hours": 8,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 70,
+          "net": -571.1130708086414,
+          "win_rate": 0.32857142857142857,
+          "profit_factor": 0.4004868870438573,
+          "mean_net_return": -0.00418537263293367,
+          "median_hold_minutes": 160.0,
+          "return": -0.057111307080863316,
+          "max_drawdown_conservative": 0.06499590131452393,
+          "exit_reasons": {
+            "stop": 63,
+            "time limit": 7
+          },
+          "positive_days": 6,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 61,
+          "net": -834.3927467661416,
+          "win_rate": 0.2786885245901639,
+          "profit_factor": 0.18014891358943136,
+          "mean_net_return": -0.007121506067097928,
+          "median_hold_minutes": 110.0,
+          "return": -0.08343927467661472,
+          "max_drawdown_conservative": 0.0901863106637456,
+          "exit_reasons": {
+            "stop": 57,
+            "time limit": 4
+          },
+          "positive_days": 6,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 71,
+        "net": -77.4970505342906,
+        "win_rate": 0.4647887323943662,
+        "profit_factor": 0.9089777700031013,
+        "mean_net_return": -0.000517933887117858,
+        "median_hold_minutes": 190.0,
+        "return": -0.007749705053428979,
+        "max_drawdown_conservative": 0.04040909880783117,
+        "exit_reasons": {
+          "stop": 59,
+          "time limit": 12
+        },
+        "positive_days": 10,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "hour_sample",
+      "hold_hours": 1,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 84,
+          "net": -268.62618992220405,
+          "win_rate": 0.2976190476190476,
+          "profit_factor": 0.6749142291937374,
+          "mean_net_return": -0.001606207220116264,
+          "median_hold_minutes": 60.0,
+          "return": -0.02686261899222009,
+          "max_drawdown_conservative": 0.03612746392987132,
+          "exit_reasons": {
+            "stop": 21,
+            "time limit": 63
+          },
+          "positive_days": 11,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 63,
+          "net": -339.5814293253905,
+          "win_rate": 0.31746031746031744,
+          "profit_factor": 0.4654588013465709,
+          "mean_net_return": -0.002730477208429751,
+          "median_hold_minutes": 60.0,
+          "return": -0.03395814293253896,
+          "max_drawdown_conservative": 0.04335488044061897,
+          "exit_reasons": {
+            "time limit": 49,
+            "stop": 14
+          },
+          "positive_days": 9,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 57,
+        "net": -170.77240471027378,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.6188991955687522,
+        "mean_net_return": -0.0015004375775615226,
+        "median_hold_minutes": 60.0,
+        "return": -0.0170772404710271,
+        "max_drawdown_conservative": 0.026056412883668778,
+        "exit_reasons": {
+          "time limit": 49,
+          "stop": 8
+        },
+        "positive_days": 9,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "hour_sample",
+      "hold_hours": 4,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 75,
+          "net": -248.3292524828527,
+          "win_rate": 0.36,
+          "profit_factor": 0.7635817325822118,
+          "mean_net_return": -0.0016491672280527364,
+          "median_hold_minutes": 155.0,
+          "return": -0.02483292524828573,
+          "max_drawdown_conservative": 0.04687015996472055,
+          "exit_reasons": {
+            "stop": 50,
+            "time limit": 25
+          },
+          "positive_days": 9,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 59,
+          "net": -222.71912506679686,
+          "win_rate": 0.4915254237288136,
+          "profit_factor": 0.7071376184412392,
+          "mean_net_return": -0.0018832200929971494,
+          "median_hold_minutes": 170.0,
+          "return": -0.022271912506678704,
+          "max_drawdown_conservative": 0.03274820197190498,
+          "exit_reasons": {
+            "stop": 37,
+            "time limit": 22
+          },
+          "positive_days": 11,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 56,
+        "net": -69.99419007532885,
+        "win_rate": 0.4642857142857143,
+        "profit_factor": 0.8951766557405922,
+        "mean_net_return": -0.0006053608521770451,
+        "median_hold_minutes": 200.0,
+        "return": -0.006999419007533092,
+        "max_drawdown_conservative": 0.02622113609523491,
+        "exit_reasons": {
+          "time limit": 23,
+          "stop": 33
+        },
+        "positive_days": 10,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "hour_sample",
+      "hold_hours": 8,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 74,
+          "net": -338.02253436283223,
+          "win_rate": 0.35135135135135137,
+          "profit_factor": 0.6781420070277009,
+          "mean_net_return": -0.002298613180622046,
+          "median_hold_minutes": 152.5,
+          "return": -0.033802253436283514,
+          "max_drawdown_conservative": 0.05696853260437551,
+          "exit_reasons": {
+            "stop": 66,
+            "time limit": 8
+          },
+          "positive_days": 10,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 55,
+          "net": -205.7043622391264,
+          "win_rate": 0.45454545454545453,
+          "profit_factor": 0.734960224303255,
+          "mean_net_return": -0.001865813340467383,
+          "median_hold_minutes": 170.0,
+          "return": -0.02057043622391297,
+          "max_drawdown_conservative": 0.04312316072700251,
+          "exit_reasons": {
+            "stop": 46,
+            "time limit": 9
+          },
+          "positive_days": 10,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 53,
+        "net": -11.626022058607719,
+        "win_rate": 0.4528301886792453,
+        "profit_factor": 0.9825900789390156,
+        "mean_net_return": -7.515483108526111e-05,
+        "median_hold_minutes": 200.0,
+        "return": -0.001162602205860619,
+        "max_drawdown_conservative": 0.033417625589229005,
+        "exit_reasons": {
+          "time limit": 10,
+          "stop": 43
+        },
+        "positive_days": 10,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "rsi_recovery",
+      "hold_hours": 1,
+      "policy": "rsi",
+      "selection_periods": [
+        {
+          "trades": 360,
+          "net": -857.1100738382368,
+          "win_rate": 0.4527777777777778,
+          "profit_factor": 0.5095582674238494,
+          "mean_net_return": -0.0012399585714422544,
+          "median_hold_minutes": 30.0,
+          "return": -0.08571100738382553,
+          "max_drawdown_conservative": 0.09112515152804812,
+          "exit_reasons": {
+            "RSI returned to neutral": 264,
+            "time limit": 53,
+            "stop": 43
+          },
+          "positive_days": 10,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 360,
+          "net": -997.9550008531226,
+          "win_rate": 0.41944444444444445,
+          "profit_factor": 0.5450549734498789,
+          "mean_net_return": -0.0014548398387526822,
+          "median_hold_minutes": 35.0,
+          "return": -0.0997955000853119,
+          "max_drawdown_conservative": 0.1065310271448211,
+          "exit_reasons": {
+            "RSI returned to neutral": 247,
+            "time limit": 70,
+            "stop": 43
+          },
+          "positive_days": 8,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 360,
+        "net": -1755.7038758861024,
+        "win_rate": 0.3861111111111111,
+        "profit_factor": 0.31394812518001264,
+        "mean_net_return": -0.002674981798437729,
+        "median_hold_minutes": 35.0,
+        "return": -0.1755703875886102,
+        "max_drawdown_conservative": 0.17693252167269946,
+        "exit_reasons": {
+          "time limit": 80,
+          "RSI returned to neutral": 224,
+          "stop": 55,
+          "gap stop": 1
+        },
+        "positive_days": 3,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "rsi_recovery",
+      "hold_hours": 4,
+      "policy": "rsi",
+      "selection_periods": [
+        {
+          "trades": 360,
+          "net": -741.8027312939586,
+          "win_rate": 0.4666666666666667,
+          "profit_factor": 0.5553279498393577,
+          "mean_net_return": -0.001065983601848251,
+          "median_hold_minutes": 30.0,
+          "return": -0.07418027312939535,
+          "max_drawdown_conservative": 0.07980493930234422,
+          "exit_reasons": {
+            "RSI returned to neutral": 309,
+            "stop": 51
+          },
+          "positive_days": 11,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 360,
+          "net": -956.0896104166635,
+          "win_rate": 0.42777777777777776,
+          "profit_factor": 0.5680865715164991,
+          "mean_net_return": -0.0013893178709353069,
+          "median_hold_minutes": 35.0,
+          "return": -0.0956089610416655,
+          "max_drawdown_conservative": 0.10132331259746352,
+          "exit_reasons": {
+            "RSI returned to neutral": 297,
+            "stop": 63
+          },
+          "positive_days": 9,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 360,
+        "net": -1957.0593738412563,
+        "win_rate": 0.38055555555555554,
+        "profit_factor": 0.2847975967533533,
+        "mean_net_return": -0.0030163805670565687,
+        "median_hold_minutes": 35.0,
+        "return": -0.19570593738412323,
+        "max_drawdown_conservative": 0.1964602165750451,
+        "exit_reasons": {
+          "RSI returned to neutral": 274,
+          "stop": 85,
+          "gap stop": 1
+        },
+        "positive_days": 3,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "rsi_recovery",
+      "hold_hours": 8,
+      "policy": "rsi",
+      "selection_periods": [
+        {
+          "trades": 360,
+          "net": -741.8027312939586,
+          "win_rate": 0.4666666666666667,
+          "profit_factor": 0.5553279498393577,
+          "mean_net_return": -0.001065983601848251,
+          "median_hold_minutes": 30.0,
+          "return": -0.07418027312939535,
+          "max_drawdown_conservative": 0.07980493930234422,
+          "exit_reasons": {
+            "RSI returned to neutral": 309,
+            "stop": 51
+          },
+          "positive_days": 11,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 360,
+          "net": -956.0896104166635,
+          "win_rate": 0.42777777777777776,
+          "profit_factor": 0.5680865715164991,
+          "mean_net_return": -0.0013893178709353069,
+          "median_hold_minutes": 35.0,
+          "return": -0.0956089610416655,
+          "max_drawdown_conservative": 0.10132331259746352,
+          "exit_reasons": {
+            "RSI returned to neutral": 297,
+            "stop": 63
+          },
+          "positive_days": 9,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 360,
+        "net": -1957.0593738412563,
+        "win_rate": 0.38055555555555554,
+        "profit_factor": 0.2847975967533533,
+        "mean_net_return": -0.0030163805670565687,
+        "median_hold_minutes": 35.0,
+        "return": -0.19570593738412323,
+        "max_drawdown_conservative": 0.1964602165750451,
+        "exit_reasons": {
+          "RSI returned to neutral": 274,
+          "stop": 85,
+          "gap stop": 1
+        },
+        "positive_days": 3,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "rsi_exhaustion",
+      "hold_hours": 1,
+      "policy": "rsi",
+      "selection_periods": [
+        {
+          "trades": 360,
+          "net": -886.6415793855351,
+          "win_rate": 0.49444444444444446,
+          "profit_factor": 0.5714973226812096,
+          "mean_net_return": -0.0012840443244068957,
+          "median_hold_minutes": 40.0,
+          "return": -0.08866415793855253,
+          "max_drawdown_conservative": 0.10552511095612538,
+          "exit_reasons": {
+            "RSI returned to neutral": 215,
+            "time limit": 92,
+            "stop": 53
+          },
+          "positive_days": 5,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 360,
+          "net": -1193.7639181032894,
+          "win_rate": 0.4388888888888889,
+          "profit_factor": 0.5300761725168972,
+          "mean_net_return": -0.0017585624016355896,
+          "median_hold_minutes": 45.0,
+          "return": -0.11937639181032811,
+          "max_drawdown_conservative": 0.12953911708414,
+          "exit_reasons": {
+            "RSI returned to neutral": 191,
+            "stop": 61,
+            "time limit": 108
+          },
+          "positive_days": 7,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 360,
+        "net": -1458.8973577707984,
+        "win_rate": 0.42777777777777776,
+        "profit_factor": 0.4372803917953952,
+        "mean_net_return": -0.002182988089027257,
+        "median_hold_minutes": 40.0,
+        "return": -0.14588973577708042,
+        "max_drawdown_conservative": 0.14628187602911336,
+        "exit_reasons": {
+          "stop": 66,
+          "time limit": 106,
+          "RSI returned to neutral": 187,
+          "gap stop": 1
+        },
+        "positive_days": 5,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "rsi_exhaustion",
+      "hold_hours": 4,
+      "policy": "rsi",
+      "selection_periods": [
+        {
+          "trades": 360,
+          "net": -981.5782245958713,
+          "win_rate": 0.5055555555555555,
+          "profit_factor": 0.5519442963292954,
+          "mean_net_return": -0.0014279695314685541,
+          "median_hold_minutes": 45.0,
+          "return": -0.09815782245958637,
+          "max_drawdown_conservative": 0.11699025970218335,
+          "exit_reasons": {
+            "RSI returned to neutral": 286,
+            "stop": 74
+          },
+          "positive_days": 8,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 360,
+          "net": -1173.6357421448563,
+          "win_rate": 0.4777777777777778,
+          "profit_factor": 0.5363681090873967,
+          "mean_net_return": -0.0017267681139762861,
+          "median_hold_minutes": 45.0,
+          "return": -0.11736357421448573,
+          "max_drawdown_conservative": 0.1234566327170421,
+          "exit_reasons": {
+            "RSI returned to neutral": 280,
+            "stop": 80
+          },
+          "positive_days": 4,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 360,
+        "net": -1563.3008677166054,
+        "win_rate": 0.4388888888888889,
+        "profit_factor": 0.4263850518119076,
+        "mean_net_return": -0.002352158515539888,
+        "median_hold_minutes": 45.0,
+        "return": -0.15633008677166182,
+        "max_drawdown_conservative": 0.15714079864141173,
+        "exit_reasons": {
+          "stop": 95,
+          "RSI returned to neutral": 264,
+          "gap stop": 1
+        },
+        "positive_days": 5,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "rsi_exhaustion",
+      "hold_hours": 8,
+      "policy": "rsi",
+      "selection_periods": [
+        {
+          "trades": 360,
+          "net": -981.5782245958713,
+          "win_rate": 0.5055555555555555,
+          "profit_factor": 0.5519442963292954,
+          "mean_net_return": -0.0014279695314685541,
+          "median_hold_minutes": 45.0,
+          "return": -0.09815782245958637,
+          "max_drawdown_conservative": 0.11699025970218335,
+          "exit_reasons": {
+            "RSI returned to neutral": 286,
+            "stop": 74
+          },
+          "positive_days": 8,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 360,
+          "net": -1173.6357421448563,
+          "win_rate": 0.4777777777777778,
+          "profit_factor": 0.5363681090873967,
+          "mean_net_return": -0.0017267681139762861,
+          "median_hold_minutes": 45.0,
+          "return": -0.11736357421448573,
+          "max_drawdown_conservative": 0.1234566327170421,
+          "exit_reasons": {
+            "RSI returned to neutral": 280,
+            "stop": 80
+          },
+          "positive_days": 4,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 360,
+        "net": -1563.3008677166054,
+        "win_rate": 0.4388888888888889,
+        "profit_factor": 0.4263850518119076,
+        "mean_net_return": -0.002352158515539888,
+        "median_hold_minutes": 45.0,
+        "return": -0.15633008677166182,
+        "max_drawdown_conservative": 0.15714079864141173,
+        "exit_reasons": {
+          "stop": 95,
+          "RSI returned to neutral": 264,
+          "gap stop": 1
+        },
+        "positive_days": 5,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "inverse_diagnostic",
+      "hold_hours": 1,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 349,
+          "net": -782.9010644206974,
+          "win_rate": 0.4498567335243553,
+          "profit_factor": 0.6844110174824133,
+          "mean_net_return": -0.0011585943146689335,
+          "median_hold_minutes": 60.0,
+          "return": -0.07829010644207124,
+          "max_drawdown_conservative": 0.08559212116801274,
+          "exit_reasons": {
+            "time limit": 266,
+            "stop": 83
+          },
+          "positive_days": 8,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 353,
+          "net": -711.7965300543491,
+          "win_rate": 0.46742209631728043,
+          "profit_factor": 0.7564343472262913,
+          "mean_net_return": -0.001034317941214909,
+          "median_hold_minutes": 60.0,
+          "return": -0.07117965300543527,
+          "max_drawdown_conservative": 0.09286330457725778,
+          "exit_reasons": {
+            "time limit": 269,
+            "stop": 84
+          },
+          "positive_days": 12,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 356,
+        "net": -1377.5823706520246,
+        "win_rate": 0.3792134831460674,
+        "profit_factor": 0.4990903215755619,
+        "mean_net_return": -0.0020725519646153526,
+        "median_hold_minutes": 60.0,
+        "return": -0.13775823706520351,
+        "max_drawdown_conservative": 0.13954804038199764,
+        "exit_reasons": {
+          "time limit": 274,
+          "stop": 82
+        },
+        "positive_days": 8,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "inverse_diagnostic",
+      "hold_hours": 4,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 327,
+          "net": -1512.0677317250288,
+          "win_rate": 0.3853211009174312,
+          "profit_factor": 0.5959992386798172,
+          "mean_net_return": -0.0024896050727735894,
+          "median_hold_minutes": 150.0,
+          "return": -0.1512067731725023,
+          "max_drawdown_conservative": 0.16239057320669337,
+          "exit_reasons": {
+            "stop": 211,
+            "time limit": 116
+          },
+          "positive_days": 9,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 327,
+          "net": -1195.6213546873785,
+          "win_rate": 0.39755351681957185,
+          "profit_factor": 0.6962239220754682,
+          "mean_net_return": -0.0019244290399899843,
+          "median_hold_minutes": 160.0,
+          "return": -0.11956213546873584,
+          "max_drawdown_conservative": 0.14530393410030906,
+          "exit_reasons": {
+            "stop": 210,
+            "time limit": 117
+          },
+          "positive_days": 11,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 322,
+        "net": -741.1544700356644,
+        "win_rate": 0.43788819875776397,
+        "profit_factor": 0.7942175357224359,
+        "mean_net_return": -0.0011690072856470298,
+        "median_hold_minutes": 180.0,
+        "return": -0.07411544700356587,
+        "max_drawdown_conservative": 0.11747760384396133,
+        "exit_reasons": {
+          "stop": 201,
+          "time limit": 121
+        },
+        "positive_days": 9,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    },
+    {
+      "family": "inverse_diagnostic",
+      "hold_hours": 8,
+      "policy": "stop_only",
+      "selection_periods": [
+        {
+          "trades": 288,
+          "net": -1481.293157373135,
+          "win_rate": 0.3993055555555556,
+          "profit_factor": 0.5989482206332475,
+          "mean_net_return": -0.002762070081574511,
+          "median_hold_minutes": 152.5,
+          "return": -0.14812931573731314,
+          "max_drawdown_conservative": 0.15085436999336876,
+          "exit_reasons": {
+            "stop": 252,
+            "time limit": 36
+          },
+          "positive_days": 9,
+          "leverage": 2,
+          "cost_multiplier": 1
+        },
+        {
+          "trades": 277,
+          "net": -1113.008731032624,
+          "win_rate": 0.3862815884476534,
+          "profit_factor": 0.6982172282786397,
+          "mean_net_return": -0.0020999790187153527,
+          "median_hold_minutes": 180.0,
+          "return": -0.1113008731032642,
+          "max_drawdown_conservative": 0.1334878984424407,
+          "exit_reasons": {
+            "stop": 245,
+            "time limit": 32
+          },
+          "positive_days": 11,
+          "leverage": 2,
+          "cost_multiplier": 1
+        }
+      ],
+      "audit": {
+        "trades": 278,
+        "net": -691.76263735077,
+        "win_rate": 0.4028776978417266,
+        "profit_factor": 0.8026145942746999,
+        "mean_net_return": -0.0012549141153023373,
+        "median_hold_minutes": 182.5,
+        "return": -0.06917626373507924,
+        "max_drawdown_conservative": 0.09758352189443698,
+        "exit_reasons": {
+          "stop": 242,
+          "time limit": 36
+        },
+        "positive_days": 11,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    }
+  ],
+  "frozen_selection": {
+    "family": "hour_sample",
+    "hold_hours": 4,
+    "policy": "stop_only",
+    "selection_periods": [
+      {
+        "trades": 75,
+        "net": -248.3292524828527,
+        "win_rate": 0.36,
+        "profit_factor": 0.7635817325822118,
+        "mean_net_return": -0.0016491672280527364,
+        "median_hold_minutes": 155.0,
+        "return": -0.02483292524828573,
+        "max_drawdown_conservative": 0.04687015996472055,
+        "exit_reasons": {
+          "stop": 50,
+          "time limit": 25
+        },
+        "positive_days": 9,
+        "leverage": 2,
+        "cost_multiplier": 1
+      },
+      {
+        "trades": 59,
+        "net": -222.71912506679686,
+        "win_rate": 0.4915254237288136,
+        "profit_factor": 0.7071376184412392,
+        "mean_net_return": -0.0018832200929971494,
+        "median_hold_minutes": 170.0,
+        "return": -0.022271912506678704,
+        "max_drawdown_conservative": 0.03274820197190498,
+        "exit_reasons": {
+          "stop": 37,
+          "time limit": 22
+        },
+        "positive_days": 11,
+        "leverage": 2,
+        "cost_multiplier": 1
+      }
+    ],
+    "audit": {
+      "trades": 56,
+      "net": -69.99419007532885,
+      "win_rate": 0.4642857142857143,
+      "profit_factor": 0.8951766557405922,
+      "mean_net_return": -0.0006053608521770451,
+      "median_hold_minutes": 200.0,
+      "return": -0.006999419007533092,
+      "max_drawdown_conservative": 0.02622113609523491,
+      "exit_reasons": {
+        "time limit": 23,
+        "stop": 33
+      },
+      "positive_days": 10,
+      "leverage": 2,
+      "cost_multiplier": 1
+    }
+  },
+  "double_cost": {
+    "trades": 56,
+    "net": -259.28288936528645,
+    "win_rate": 0.4107142857142857,
+    "profit_factor": 0.6614115033990176,
+    "mean_net_return": -0.0023233697465276882,
+    "median_hold_minutes": 197.5,
+    "return": -0.025928288936529542,
+    "max_drawdown_conservative": 0.03521428076730393,
+    "exit_reasons": {
+      "time limit": 22,
+      "stop": 34
+    },
+    "positive_days": 8,
+    "leverage": 2,
+    "cost_multiplier": 2
+  },
+  "caveat": "Repeated retrospective family exploration after failed momentum experiments. No guaranteed live edge; no historical order-book or full live risk replay."
+}

@@ -141,8 +141,8 @@ class SimpleService:
 
     async def strategy_control(self, choice: str | None) -> str:
         async with self.mutex:
-            if self.s.simple_entry_profile == "momentum" and choice not in {None, "current"}:
-                raise SafeError("momentum PAPER profile uses fixed A/B/C selection; automatic and opposite modes are unavailable")
+            if self.s.simple_entry_profile.startswith("momentum") and choice not in {None, "current"}:
+                raise SafeError("momentum profile uses fixed A/B/C selection; automatic and opposite modes are unavailable")
             if choice is not None:
                 if self.engine is None:
                     raise SafeError("execution engine is not ready")
@@ -311,7 +311,7 @@ class SimpleService:
                             }:
                                 frame = await asyncio.to_thread(enrich, frame)
                             row = {str(k): v for k, v in frame.iloc[-1].to_dict().items()}
-                            if self.s.simple_market_trend_enabled:
+                            if self.s.simple_market_trend_enabled or self.s.simple_entry_profile.startswith("momentum"):
                                 row.update(await asyncio.to_thread(day_context, frame, boundary))
                                 for key, value in row.items():
                                     if key.startswith("day_"):
@@ -988,7 +988,7 @@ class SimpleService:
                     self.s, self.store, self.exchange.filters, self.rules, broker=live_broker
                 )
                 rotation.initialize(self.store, self.engine.strategy, self.now_ms())
-                if self.s.simple_entry_profile == "momentum":
+                if self.s.simple_entry_profile.startswith("momentum"):
                     state = rotation.selection(self.store)
                     if state["auto"] or state["active"] != "current":
                         rotation.configure(self.store, "current", self.now_ms())

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from bisect import bisect_right
 from collections import Counter
 from pathlib import Path
 from statistics import mean, median
@@ -130,6 +131,13 @@ def portfolio(
     policy: str,
     leverage: int = 2,
     stress: float = 1,
+    *,
+    friction: float = SLIP,
+    funding: dict[str, list[dict[str, Any]]] | None = None,
+    max_positions: int = 4,
+    daily_cap: int = 40,
+    symbol_cap: int = 4,
+    schedule: dict[int, list[tuple[float, str, dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
     rules = execution_rules(Settings(_env_file=None))
     cash, peak, drawdown = 10000.0, 10000.0, 0.0
@@ -140,13 +148,30 @@ def portfolio(
     last_used: dict[str, int] = {}
     daily_start = cash
     locked = False
+    funding_curves = {}
+    if funding is not None:
+        for symbol in tapes:
+            times, positive, negative = [], [0.0], [0.0]
+            for event in sorted(funding[symbol], key=lambda e: e["timestamp_ms"]):
+                times.append(event["timestamp_ms"])
+                amount = event["funding_rate"] * event["mark"]
+                positive.append(positive[-1] + max(0, amount))
+                negative.append(negative[-1] + min(0, amount))
+            funding_curves[symbol] = times, positive, negative
 
     def net(p: dict[str, Any], price: float, now: int) -> float:
-        fill = price * (1 - p["side"] * SLIP * stress)
+        fill = price * (1 - p["side"] * friction * stress)
+        funding_pnl = -p["notional"] * FUNDING * stress * (now - p["opened_ms"]) / HOUR
+        if funding is not None:
+            times, positive, negative = funding_curves[p["symbol"]]
+            a, b = bisect_right(times, p["opened_ms"]), bisect_right(times, now)
+            pos, neg = positive[b] - positive[a], negative[b] - negative[a]
+            funding_pnl = -p["side"] * p["quantity"] * (pos + neg)
+            funding_pnl -= (stress - 1) * p["quantity"] * (pos if p["side"] > 0 else -neg)
         return (
             p["side"] * (fill - p["entry_price"]) * p["quantity"]
             - fill * p["quantity"] * FEE * stress
-            - p["notional"] * FUNDING * stress * (now - p["opened_ms"]) / HOUR
+            + funding_pnl
         )
 
     def close(symbol: str, price: float, now: int, reason: str) -> None:
@@ -168,7 +193,9 @@ def portfolio(
         cooldown[symbol] = now + 30 * 60000
 
     for now in range(start, end, FIVE):
-        bars = {s: tape[now] for s, tape in tapes.items()}
+        scheduled = schedule.get(now, []) if schedule is not None else None
+        needed = set(tapes) if scheduled is None else set(positions) | {s for _, s, _ in scheduled}
+        bars = {s: tapes[s][now] for s in needed}
         equity = cash + sum(net(p, bars[s]["open"], now) for s, p in positions.items())
         if now == start or now % DAY == 0:
             daily_start, locked = equity, False
@@ -190,13 +217,15 @@ def portfolio(
                     reason = "confirmed reversal"
                 elif policy == "single" and p["side"] * row["trend_atr"] < 0:
                     reason = "single reversal"
+                elif policy == "rsi" and p["side"] * (row["rsi_14"] - 50) >= 0:
+                    reason = "RSI returned to neutral"
             if reason:
                 close(symbol, price, now, reason)
                 exited.add(symbol)
             elif row is not None:
                 p["stop_price"] = tighten_stop(p, price, row["atr"], rules)
         # Selection uses only features available at this boundary; fill at next open.
-        candidates = [
+        candidates = scheduled if scheduled is not None else [
             (row["momentum_score"], s, row)
             for s, rows in features.items()
             if (row := rows.get(now)) is not None
@@ -206,13 +235,13 @@ def portfolio(
         for _, symbol, row in sorted(candidates, key=lambda v: (-v[0], v[1]))[:10]:
             if (
                 locked
-                or len(positions) >= 4
+                or len(positions) >= max_positions
                 or symbol in positions
                 or symbol in exited
                 or now < cooldown.get(symbol, 0)
                 or last_used.get(symbol) == now
-                or counts[now // DAY, "all"] >= 40
-                or counts[now // DAY, symbol] >= 4
+                or counts[now // DAY, "all"] >= daily_cap
+                or counts[now // DAY, symbol] >= symbol_cap
                 or now + hold * HOUR >= end
             ):
                 continue
@@ -224,10 +253,10 @@ def portfolio(
                 "minute_atr", row["atr"]
             ):
                 continue
-            price = bars[symbol]["open"] * (1 + side * SLIP * stress)
+            price = bars[symbol]["open"] * (1 + side * friction * stress)
             stop_fraction = min(0.02, max(0.006, 2 * row["atr_fraction"]))
             notional = equity * 0.1 * leverage
-            risk = notional * (stop_fraction + 2 * (FEE + SLIP) * stress + 0.002)
+            risk = notional * (stop_fraction + 2 * (FEE + friction) * stress + 0.002)
             if (
                 risk > equity * 0.04
                 or risk + sum(p["risk"] for p in positions.values()) > equity * 0.05
@@ -236,6 +265,7 @@ def portfolio(
             fee = notional * FEE * stress
             cash -= fee
             positions[symbol] = {
+                "symbol": symbol,
                 "side": side,
                 "entry_price": price,
                 "quantity": notional / price,

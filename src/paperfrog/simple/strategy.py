@@ -23,8 +23,6 @@ def require_paper(s: Settings) -> None:
 
 
 def require_execution(s: Settings) -> None:
-    if s.simple_entry_profile == "momentum":
-        require_paper(s)
     if s.trading_mode == "paper":
         require_paper(s)
         return
@@ -120,8 +118,8 @@ ACTIVE_RULES = replace(
 
 def execution_rules(s: Settings) -> Rules:
     rules = RULES
-    if s.simple_entry_profile == "momentum":
-        rules = replace(RULES, version="abc-momentum-v1", entry_style="trend_follow")
+    if s.simple_entry_profile.startswith("momentum"):
+        rules = replace(RULES, version=f"abc-{s.simple_entry_profile}-v1", entry_style="trend_follow")
     if s.simple_entry_profile == "active":
         if s.simple_entry_mode != "trend":
             raise SafeError("active entry profile requires trend mode")
@@ -227,9 +225,13 @@ def path_features(x: pd.DataFrame, bars: int) -> pd.DataFrame:
 
 
 def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -> list[str]:
+    from .learning_replay import SYMBOLS as researched_symbols
+
     candidates = []
     for symbol, row in rows.items():
         if symbol == "BTCUSDT":
+            continue
+        if s.simple_entry_profile.startswith("momentum") and symbol not in researched_symbols:
             continue
         values = [row.get(k, math.nan) for k in ("score", "atr_fraction", "daily_volume")]
         if not all(math.isfinite(float(v)) for v in values):
@@ -245,7 +247,7 @@ def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -
     pool = sorted(candidates, key=lambda k: (-float(rows[k]["daily_volume"]), k))[
         : s.simple_scan_limit
     ]
-    if s.simple_entry_profile == "momentum":
+    if s.simple_entry_profile.startswith("momentum"):
         from .momentum import classify
 
         cost = s.fee_rate + (s.slippage_bps + rules.assumed_half_spread_bps) / 10000

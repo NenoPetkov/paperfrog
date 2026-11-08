@@ -20,6 +20,7 @@ from .bitcoin import require_order as require_btc_order
 from .data import quote_snapshot
 from .market_trend import require_order as require_market_order
 from .minute import require_order as require_minute_order
+from .momentum import require_order as require_momentum_order
 from .rotation import require_order as require_strategy_order
 from .strategy import require_execution
 
@@ -174,6 +175,7 @@ class LiveBroker:
                 if float((quote.ask - quote.bid) / quote.mid) > self.s.max_spread:
                     raise EntryVeto("simple spread veto at short-interval dispatch")
             require_market_order(self.s, self.store, order, self.now_ms())
+            require_momentum_order(self.s, self.store, order, self.now_ms(), self.quotes.get(order.symbol))
             strategy_permission = self.store.get("simple_strategy_order:" + order.client_id, {})
             if strategy_permission.get("active") == "opposite":
                 quote = await self.refresh_quote(order.symbol)

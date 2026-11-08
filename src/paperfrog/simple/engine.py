@@ -764,12 +764,12 @@ class Engine:
                      selected_strategy: dict[str, Any] | None = None) -> tuple[int, str]:
         if row.get("entry_timeframe", "15m") != self.entry_timeframe:
             return 0, "entry candle timeframe does not match selected policy"
-        if self.s.simple_entry_profile == "momentum":
+        if self.s.simple_entry_profile.startswith("momentum"):
             from .momentum import classify
 
             state = rotation.selection(self.store)
             if state["auto"] or state["active"] != "current":
-                return 0, "momentum PAPER profile requires fixed current strategy"
+                return 0, "momentum profile requires fixed current strategy"
             pattern, side, _ = classify(
                 row, self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2, self.rules
             )
@@ -1097,7 +1097,7 @@ class Engine:
             "entry_timeframe": self.entry_timeframe,
             "max_hold_hours": rotation.hold_hours(self.store, self.s),
             "adaptive_holding": selected_strategy["auto"],
-            "momentum_exit_version": 1 if self.s.simple_entry_profile == "momentum" else None,
+            "momentum_exit_version": 1 if self.s.simple_entry_profile.startswith("momentum") else None,
             "activity_probe": activity_probe,
             "opened_ms": now_ms,
             "stop_fraction": stop,

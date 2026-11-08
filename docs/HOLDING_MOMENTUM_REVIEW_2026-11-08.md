@@ -1,5 +1,10 @@
 # Holding time and A/B/C momentum review — November 8, 2026
 
+This records the original deployed review. See the
+[90-day follow-up](MOMENTUM_90_DAY_REVIEW_2026-11-08.md) for subsequent research
+and the undeployed review branch; the original PAPER-only generic-profile
+restriction described below applies to that earlier release.
+
 The review does **not** establish a profitable strategy. Do not raise live
 leverage. Disable unvalidated live probes, retain evidence-required automatic
 entries, and observe the simpler strategy in an isolated PAPER account.

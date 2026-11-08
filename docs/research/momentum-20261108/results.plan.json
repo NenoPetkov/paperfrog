@@ -1,0 +1,89 @@
+{
+  "variants": [
+    [
+      "momentum",
+      1
+    ],
+    [
+      "momentum",
+      2
+    ],
+    [
+      "momentum",
+      4
+    ],
+    [
+      "momentum",
+      8
+    ],
+    [
+      "momentum_breakout",
+      1
+    ],
+    [
+      "momentum_breakout",
+      2
+    ],
+    [
+      "momentum_breakout",
+      4
+    ],
+    [
+      "momentum_breakout",
+      8
+    ],
+    [
+      "momentum_pullback",
+      1
+    ],
+    [
+      "momentum_pullback",
+      2
+    ],
+    [
+      "momentum_pullback",
+      4
+    ],
+    [
+      "momentum_pullback",
+      8
+    ],
+    [
+      "momentum_selective",
+      1
+    ],
+    [
+      "momentum_selective",
+      2
+    ],
+    [
+      "momentum_selective",
+      4
+    ],
+    [
+      "momentum_selective",
+      8
+    ]
+  ],
+  "periods": [
+    [
+      1786320000000,
+      1788912000000
+    ],
+    [
+      1788912000000,
+      1791504000000
+    ],
+    [
+      1791504000000,
+      1794096000000
+    ]
+  ],
+  "fee_rate": 0.0005,
+  "friction": 0.00035,
+  "funding": "historical exchange events",
+  "selection": "maximize worse return of first two periods; >=20 trades in each",
+  "max_positions": 2,
+  "daily_entry_cap": 12,
+  "per_coin_cap": 2
+}

@@ -1,5 +1,16 @@
 # paperfrog
 
+## Extended 90-day research (review branch; not deployed)
+
+The [extended comparison](docs/MOMENTUM_90_DAY_REVIEW_2026-11-08.md) evaluates
+additional momentum, slower trend and reversal scenarios with historical funding.
+The branch prepares optional locally authorized momentum execution and dispatch
+checks; it does not activate a strategy or demonstrate a profitable trading edge.
+PAPER remains the default. The isolated runner below remains credential-free and
+PAPER-only; the generic momentum profiles on this branch also support the existing
+explicit local LIVE authorization gates. Neither software tests nor configuration
+validation certify profitability. No new profile was deployed or armed in this review.
+
 ## November holding and momentum review
 
 The [November 8 review](docs/HOLDING_MOMENTUM_REVIEW_2026-11-08.md) compares actual

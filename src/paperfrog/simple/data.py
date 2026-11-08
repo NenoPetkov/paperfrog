@@ -68,6 +68,8 @@ def normalize(rows: list[list[Any]], end_ms: int, interval_ms: int = BAR_MS) -> 
 
 async def scan(adapter: BinanceAdapter, s: Settings) -> dict[str, Any]:
     require_execution(s)
+    from .learning_replay import SYMBOLS as researched_symbols
+
     info = await adapter.exchange_info()
     tickers = await adapter.request("GET", "/fapi/v1/ticker/24hr")
     now_ms = int(time.time() * 1000) + adapter.offset_ms
@@ -75,6 +77,7 @@ async def scan(adapter: BinanceAdapter, s: Settings) -> dict[str, Any]:
         x["symbol"]: x
         for x in info["symbols"]
         if x["symbol"] in adapter.filters
+        and (not s.simple_entry_profile.startswith("momentum") or x["symbol"] in researched_symbols)
         and x["symbol"] != "BTCUSDT"
         and re.fullmatch(r"[A-Z0-9]{2,24}USDT", x["symbol"])
         and x["baseAsset"] not in STABLE

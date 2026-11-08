@@ -5,7 +5,12 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 root=/var/www/paperfrog
 expected=${1:?Expected commit is required}
 policy=${2:-preserve}
-[[ $policy == preserve || $policy == strict-auto ]] || exit 2
+[[ $policy == preserve || $policy == strict-auto || $policy == momentum ]] || exit 2
+if [[ $policy == momentum ]]; then
+  profile=${3:?Momentum profile is required}
+  hold=${4:?Holding hours are required}
+  [[ $profile =~ ^momentum(_selective|_breakout|_pullback)?$ && $hold =~ ^(1|2|4|8)$ ]] || exit 2
+fi
 [[ $expected =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd "$root"
 exec 9>/run/lock/paperfrog-deploy.lock
@@ -74,6 +79,8 @@ uv sync --frozen --python 3.12.14
 .venv/bin/python scripts/server_ops.py compare "$context"
 if [[ $policy == strict-auto ]]; then
   .venv/bin/python scripts/server_ops.py strategy-strict
+elif [[ $policy == momentum ]]; then
+  .venv/bin/python scripts/server_ops.py activate-momentum "$context" --profile "$profile" --hold-hours "$hold" --confirm 'ACTIVATE LIVE MOMENTUM'
 fi
 install -m 644 deploy/paperfrog.service deploy/paperfrog-daily-review.service deploy/paperfrog-daily-review.timer /etc/systemd/system/
 systemctl daemon-reload
@@ -84,7 +91,11 @@ systemctl start paperfrog.service
 started=1
 .venv/bin/python scripts/server_ops.py wait --timeout 240
 systemctl start paperfrog-daily-review.timer
-if (( paper_active )); then
+if [[ $policy == momentum ]]; then
+  if systemctl cat paperfrog-momentum-paper.service >/dev/null 2>&1; then
+    systemctl disable paperfrog-momentum-paper.service
+  fi
+elif (( paper_active )); then
   systemctl start paperfrog-momentum-paper.service
 fi
 echo "Deploy complete: $expected; state backup: $backup"

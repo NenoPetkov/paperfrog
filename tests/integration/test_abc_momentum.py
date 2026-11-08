@@ -85,38 +85,34 @@ def test_ambiguous_invalid_or_expensive_pattern_waits(damage):
 
 
 def test_top_ten_ranks_momentum_after_liquidity_filter():
+    from paperfrog.simple.learning_replay import SYMBOLS
+
     s = settings(simple_selected_count=10)
     rows = {
-        f"COIN{i}USDT": row(return_1h=0.01 + i / 100, daily_volume=20_000_000) for i in range(12)
+        SYMBOLS[i]: row(return_1h=0.01 + i / 100, daily_volume=20_000_000) for i in range(12)
     }
-    rows["COIN0USDT"]["daily_volume"] = 1_000_000_000
+    rows[SYMBOLS[0]]["daily_volume"] = 1_000_000_000
     rows["ILLIQUIDUSDT"] = row(return_1h=0.9, daily_volume=10)
     rows["BTCUSDT"] = row(return_1h=1)
-    assert choose(rows, s, execution_rules(s)) == [f"COIN{i}USDT" for i in range(11, 1, -1)]
+    assert choose(rows, s, execution_rules(s)) == [SYMBOLS[i] for i in range(11, 1, -1)]
 
 
 @pytest.mark.parametrize(
     "changes",
     [
-        {
-            "trading_mode": "live",
-            "binance_env": "live",
-            "live_trading_enabled": True,
-            "i_understand_live_risk": "YES",
-        },
-        {"trading_mode": "testnet"},
+        {"trading_mode": "live"},
         {"simple_ai_enabled": True},
         {"simple_confidence_enabled": True},
     ],
 )
-def test_unvalidated_momentum_profile_cannot_trade_live_or_enable_adaptive_exits(changes):
+def test_momentum_preserves_live_environment_gates_and_refuses_adaptive_exits(changes):
     with pytest.raises(ValidationError):
         settings(**changes)
 
 
-def test_execution_boundary_independently_refuses_copied_live_momentum_settings():
+def test_execution_boundary_requires_local_research_waiver_for_momentum():
     s = settings().model_copy(update={"trading_mode": "live", "live_trading_enabled": True})
-    with pytest.raises(SafeError, match="PAPER"):
+    with pytest.raises(SafeError, match="waiver"):
         require_execution(s)
 
 

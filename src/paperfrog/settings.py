@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     simple_poll_seconds: int = Field(5, ge=2, le=30)
     simple_entry_timeframe: Literal["1m", "5m", "8m", "15m"] = "15m"
     simple_entry_mode: SimpleEntryMode = "trend"
-    simple_entry_profile: Literal["standard", "active", "momentum"] = "standard"
+    simple_entry_profile: Literal["standard", "active", "momentum", "momentum_selective", "momentum_breakout", "momentum_pullback"] = "standard"
     simple_max_hold_hours: int = Field(4, ge=1, le=24)
     simple_sizing_mode: Literal["risk", "margin", "equity_range"] = "risk"
     simple_position_margin_cap: float = Field(0.8, gt=0, le=0.8)
@@ -112,10 +112,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
-        if self.simple_entry_profile == "momentum" and not (
-            self.trading_mode == "paper"
-            and not self.live_trading_enabled
-            and self.strategy_profile == "simple"
+        if self.simple_entry_profile.startswith("momentum") and not (
+            self.strategy_profile == "simple"
             and self.simple_entry_mode == "trend"
             and self.simple_entry_timeframe == "5m"
             and not self.simple_btc_reference_enabled
@@ -123,7 +121,7 @@ class Settings(BaseSettings):
             and not self.simple_ai_enabled
             and not self.simple_confidence_enabled
         ):
-            raise ValueError("momentum research requires PAPER, 5m trend entries and disabled BTC/market/AI/confidence direction policies")
+            raise ValueError("momentum requires 5m trend entries and disabled BTC/market/AI/confidence direction policies")
         if self.simple_ai_review_minutes not in {1, 5, 8, 15}:
             raise ValueError("AI review interval must be 1, 5, 8 or 15 minutes")
         if (self.simple_entry_timeframe == "8m") != (self.simple_ai_review_minutes == 8):
