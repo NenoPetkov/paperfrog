@@ -1,0 +1,464 @@
+{
+  "plan": {
+    "candidates": [
+      {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 60,
+        "stop_atr": 3.0
+      },
+      {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 90,
+        "stop_atr": 3.0
+      },
+      {
+        "family": "carry",
+        "lookback": 30,
+        "holding": 60,
+        "stop_atr": 3.0
+      },
+      {
+        "family": "carry",
+        "lookback": 30,
+        "holding": 90,
+        "stop_atr": 3.0
+      }
+    ],
+    "periods": [
+      [
+        1762992000000,
+        1773360000000
+      ],
+      [
+        1773360000000,
+        1783728000000
+      ],
+      [
+        1783728000000,
+        1794096000000
+      ]
+    ],
+    "selection": "Highest worse return of first two periods; at least three closed hedges in each. This small sample is exploratory only.",
+    "reason": "Check whether 60-90 day funding income amortizes four execution costs better than 7-30 days.",
+    "caveat": "Second-stage exploration after examining the first fourteen configurations; not pristine holdout."
+  },
+  "variants": [
+    {
+      "key": "carry-7-60-3",
+      "candidate": {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 60,
+        "stop_atr": 3.0
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 7,
+            "holding": 60,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": -0.0019170590004128352,
+          "net": -19.170590004128826,
+          "trades": 9,
+          "win_rate": 0.3333333333333333,
+          "profit_factor": 0.29157410359436065,
+          "fees": 31.488637977928974,
+          "estimated_friction": 14.693463373934483,
+          "funding": 26.384140321222223,
+          "gross_price_pnl_before_friction": 0.6273710265124102,
+          "max_drawdown_hourly_close": 0.002783833291225668,
+          "max_drawdown_adverse_extremes": 0.018815728158131595,
+          "median_hold_hours": 264.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 7,
+            "holding": 60,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.0039909112948094405,
+          "net": -39.909112948094844,
+          "trades": 9,
+          "win_rate": 0.0,
+          "profit_factor": 0.0,
+          "fees": 31.82539363218066,
+          "estimated_friction": 14.850527708149407,
+          "funding": 4.019491193115196,
+          "gross_price_pnl_before_friction": 2.747317199120027,
+          "max_drawdown_hourly_close": 0.0039909112948094405,
+          "max_drawdown_adverse_extremes": 0.020679717573920953,
+          "median_hold_hours": 120.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        }
+      ],
+      "audit": {
+        "candidate": {
+          "family": "carry",
+          "lookback": 7,
+          "holding": 60,
+          "stop_atr": 3.0
+        },
+        "start_ms": 1783728000000,
+        "end_ms": 1794096000000,
+        "return": 0.001785822887027555,
+        "net": 17.858228870276434,
+        "trades": 4,
+        "win_rate": 0.75,
+        "profit_factor": 6.649341806603433,
+        "fees": 16.2249553041944,
+        "estimated_friction": 7.571455016456492,
+        "funding": 41.100233155424306,
+        "gross_price_pnl_before_friction": 0.554406035503014,
+        "max_drawdown_hourly_close": 0.0011023445517268637,
+        "max_drawdown_adverse_extremes": 0.03817306093283657,
+        "median_hold_hours": 1308.0,
+        "cost_multiplier": 1.0,
+        "delay_hours": 0
+      }
+    },
+    {
+      "key": "carry-7-90-3",
+      "candidate": {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 90,
+        "stop_atr": 3.0
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 7,
+            "holding": 90,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": -0.0029235462034976623,
+          "net": -29.23546203497608,
+          "trades": 9,
+          "win_rate": 0.1111111111111111,
+          "profit_factor": 0.18237857747480812,
+          "fees": 31.45673518081482,
+          "estimated_friction": 14.678718922319964,
+          "funding": 15.498678299615248,
+          "gross_price_pnl_before_friction": 1.4013137685434547,
+          "max_drawdown_hourly_close": 0.0034214295148115026,
+          "max_drawdown_adverse_extremes": 0.023106380699647322,
+          "median_hold_hours": 168.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 7,
+            "holding": 90,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.0022452167412165824,
+          "net": -22.45216741216609,
+          "trades": 5,
+          "win_rate": 0.0,
+          "profit_factor": 0.0,
+          "fees": 17.597414027861007,
+          "estimated_friction": 8.21181251112337,
+          "funding": 0.7837340526024883,
+          "gross_price_pnl_before_friction": 2.5733250742157967,
+          "max_drawdown_hourly_close": 0.002247174759638537,
+          "max_drawdown_adverse_extremes": 0.010673552295489386,
+          "median_hold_hours": 144.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        }
+      ],
+      "audit": {
+        "candidate": {
+          "family": "carry",
+          "lookback": 7,
+          "holding": 90,
+          "stop_atr": 3.0
+        },
+        "start_ms": 1783728000000,
+        "end_ms": 1794096000000,
+        "return": 0.0032090238587010322,
+        "net": 32.09023858701039,
+        "trades": 4,
+        "win_rate": 0.75,
+        "profit_factor": 11.151551296060145,
+        "fees": 16.3603705698402,
+        "estimated_friction": 7.634662371212045,
+        "funding": 55.583977798680955,
+        "gross_price_pnl_before_friction": 0.501293729381679,
+        "max_drawdown_hourly_close": 0.0008750873581439,
+        "max_drawdown_adverse_extremes": 0.03817306093283657,
+        "median_hold_hours": 1668.0,
+        "cost_multiplier": 1.0,
+        "delay_hours": 0
+      }
+    },
+    {
+      "key": "carry-30-60-3",
+      "candidate": {
+        "family": "carry",
+        "lookback": 30,
+        "holding": 60,
+        "stop_atr": 3.0
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 30,
+            "holding": 60,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": -0.00014714647235902767,
+          "net": -1.4714647235905431,
+          "trades": 5,
+          "win_rate": 0.4,
+          "profit_factor": 0.8664442882626839,
+          "fees": 17.79451626044806,
+          "estimated_friction": 8.303277255657786,
+          "funding": 24.109318006975954,
+          "gross_price_pnl_before_friction": 0.5170107855393482,
+          "max_drawdown_hourly_close": 0.0011750259610630032,
+          "max_drawdown_adverse_extremes": 0.019869346022680645,
+          "median_hold_hours": 408.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 30,
+            "holding": 60,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": 0.0,
+          "net": 0.0,
+          "trades": 0,
+          "win_rate": null,
+          "profit_factor": null,
+          "fees": 0.0,
+          "estimated_friction": 0.0,
+          "funding": 0.0,
+          "gross_price_pnl_before_friction": 0.0,
+          "max_drawdown_hourly_close": 0.0,
+          "max_drawdown_adverse_extremes": 0.0,
+          "median_hold_hours": null,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        }
+      ],
+      "audit": {
+        "candidate": {
+          "family": "carry",
+          "lookback": 30,
+          "holding": 60,
+          "stop_atr": 3.0
+        },
+        "start_ms": 1783728000000,
+        "end_ms": 1794096000000,
+        "return": 0.0019212553197951454,
+        "net": 19.21255319795091,
+        "trades": 3,
+        "win_rate": 1.0,
+        "profit_factor": null,
+        "fees": 12.449852958152603,
+        "estimated_friction": 5.810004957282041,
+        "funding": 38.28149274730619,
+        "gross_price_pnl_before_friction": -0.8090816339206341,
+        "max_drawdown_hourly_close": 0.0010081908271958318,
+        "max_drawdown_adverse_extremes": 0.036281698828554254,
+        "median_hold_hours": 1440.0,
+        "cost_multiplier": 1.0,
+        "delay_hours": 0
+      }
+    },
+    {
+      "key": "carry-30-90-3",
+      "candidate": {
+        "family": "carry",
+        "lookback": 30,
+        "holding": 90,
+        "stop_atr": 3.0
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 30,
+            "holding": 90,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": -0.0006956029786681084,
+          "net": -6.956029786681029,
+          "trades": 7,
+          "win_rate": 0.2857142857142857,
+          "profit_factor": 0.6383017173454352,
+          "fees": 23.778209772882487,
+          "estimated_friction": 11.095452574607945,
+          "funding": 27.329012960732772,
+          "gross_price_pnl_before_friction": 0.5886196000766297,
+          "max_drawdown_hourly_close": 0.0018995042603937584,
+          "max_drawdown_adverse_extremes": 0.018778747073914026,
+          "median_hold_hours": 288.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "family": "carry",
+            "lookback": 30,
+            "holding": 90,
+            "stop_atr": 3.0
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.0005815504891270029,
+          "net": -5.815504891270393,
+          "trades": 1,
+          "win_rate": 0.0,
+          "profit_factor": 0.0,
+          "fees": 3.6419746580222343,
+          "estimated_friction": 1.6997169634695652,
+          "funding": 0.06836984748664074,
+          "gross_price_pnl_before_friction": -0.5421831172652345,
+          "max_drawdown_hourly_close": 0.0005815504891270029,
+          "max_drawdown_adverse_extremes": 0.003263551949631238,
+          "median_hold_hours": 72.0,
+          "cost_multiplier": 1.0,
+          "delay_hours": 0
+        }
+      ],
+      "audit": {
+        "candidate": {
+          "family": "carry",
+          "lookback": 30,
+          "holding": 90,
+          "stop_atr": 3.0
+        },
+        "start_ms": 1783728000000,
+        "end_ms": 1794096000000,
+        "return": 0.003767393142166453,
+        "net": 37.67393142166475,
+        "trades": 3,
+        "win_rate": 1.0,
+        "profit_factor": null,
+        "fees": 12.861355545852934,
+        "estimated_friction": 6.0019279586457515,
+        "funding": 56.17655773550956,
+        "gross_price_pnl_before_friction": 0.3606571906538676,
+        "max_drawdown_hourly_close": 0.0008746009959097467,
+        "max_drawdown_adverse_extremes": 0.03810856401738916,
+        "median_hold_hours": 2160.0,
+        "cost_multiplier": 1.0,
+        "delay_hours": 0
+      }
+    }
+  ],
+  "selected_key": "carry-7-90-3",
+  "sensitivity": {
+    "double_cost": {
+      "candidate": {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 90,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1783728000000,
+      "end_ms": 1794096000000,
+      "return": 0.0005977848544216346,
+      "net": 5.977848544216613,
+      "trades": 4,
+      "win_rate": 0.5,
+      "profit_factor": 1.49289004929118,
+      "fees": 32.699792178318546,
+      "estimated_friction": 15.259762483117925,
+      "funding": 53.436261466633674,
+      "gross_price_pnl_before_friction": 0.5011417390194097,
+      "max_drawdown_hourly_close": 0.00197108677927349,
+      "max_drawdown_adverse_extremes": 0.038390967779812324,
+      "median_hold_hours": 1668.0,
+      "cost_multiplier": 2,
+      "delay_hours": 0
+    },
+    "one_hour_delay": {
+      "candidate": {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 90,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1783728000000,
+      "end_ms": 1794096000000,
+      "return": 0.0032007669100744263,
+      "net": 32.00766910074526,
+      "trades": 4,
+      "win_rate": 0.75,
+      "profit_factor": 11.608853762652975,
+      "fees": 16.364651674020035,
+      "estimated_friction": 7.636679929743053,
+      "funding": 55.501945256260534,
+      "gross_price_pnl_before_friction": 0.5070554482478187,
+      "max_drawdown_hourly_close": 0.0008698163414017079,
+      "max_drawdown_adverse_extremes": 0.03817094866871362,
+      "median_hold_hours": 1644.0,
+      "cost_multiplier": 1,
+      "delay_hours": 1
+    },
+    "combined": {
+      "candidate": {
+        "family": "carry",
+        "lookback": 7,
+        "holding": 90,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1783728000000,
+      "end_ms": 1794096000000,
+      "return": 0.0005893099115195088,
+      "net": 5.893099115195582,
+      "trades": 4,
+      "win_rate": 0.5,
+      "profit_factor": 1.494914935461498,
+      "fees": 32.708432424649594,
+      "estimated_friction": 15.263834408883282,
+      "funding": 53.358441113841,
+      "gross_price_pnl_before_friction": 0.5069248348874567,
+      "max_drawdown_hourly_close": 0.001932216435557188,
+      "max_drawdown_adverse_extremes": 0.03838439627513612,
+      "median_hold_hours": 1644.0,
+      "cost_multiplier": 2,
+      "delay_hours": 1
+    },
+    "bootstrap": {
+      "period_return_95_interval": [
+        -0.0002646690458029175,
+        0.0063221585565331195
+      ],
+      "positive_fraction": 0.962,
+      "note": "Descriptive, dependent on this sample, not corrected for strategy search."
+    }
+  }
+}

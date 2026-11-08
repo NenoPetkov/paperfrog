@@ -1,5 +1,15 @@
 # paperfrog
 
+## Independent strategy redesign
+
+The [internet research and two-year redesign review](docs/STRATEGY_REDESIGN_2026-11-08.md)
+records 23 new configurations across carry, daily channels, relative portfolios
+and pairs. A fixed BTC/ETH funding hedge produced positive results in both
+360-day samples under modeled costs and stress. It is an offline research
+candidate, with only two hedges per sample and no proven future return. The
+previous futures-only live process was not changed or rearmed. The new engine in
+`paperfrog.research` does not import live execution or read account credentials.
+
 ## Extended 90-day research (review branch; not deployed)
 
 The [extended comparison](docs/MOMENTUM_90_DAY_REVIEW_2026-11-08.md) evaluates

@@ -1,0 +1,11 @@
+{
+  "candidate": {
+    "family": "channel",
+    "lookback": 55,
+    "holding": 20,
+    "stop_atr": 3.0
+  },
+  "status": "frozen after viewing 22 redesign configurations",
+  "reason": "Positive combined split performance and strongest final-period directional result. This is post-selection research.",
+  "tests": "Continuous 360 days plus three 120-day blocks; base, double cost, delayed execution, combined stress; no further parameter search."
+}

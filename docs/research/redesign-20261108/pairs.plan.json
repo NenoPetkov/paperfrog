@@ -1,0 +1,46 @@
+{
+  "candidates": [
+    {
+      "lookback": 30,
+      "entry_z": 2.0,
+      "max_days": 14
+    },
+    {
+      "lookback": 30,
+      "entry_z": 2.5,
+      "max_days": 14
+    },
+    {
+      "lookback": 60,
+      "entry_z": 2.0,
+      "max_days": 14
+    },
+    {
+      "lookback": 60,
+      "entry_z": 2.5,
+      "max_days": 14
+    }
+  ],
+  "periods": [
+    [
+      1762992000000,
+      1773360000000
+    ],
+    [
+      1773360000000,
+      1783728000000
+    ],
+    [
+      1783728000000,
+      1794096000000
+    ]
+  ],
+  "sources": [
+    "https://www.nber.org/papers/w7032",
+    "https://ieeexplore.ieee.org/document/9200323/"
+  ],
+  "selection": "Maximum worse first-two-period return, at least twelve closed pairs in each; positive in both needed.",
+  "formation": "Monthly, past 30/60 completed days; log price ratio distance, daily return correlation >=0.5 and estimated mean-reversion half-life 1-20 days. Five closest eligible pairs.",
+  "trading": "Entry every six hours at 2/2.5 deviations; exit at 0.5 or zero crossing; divergence stop 4; max14 days; 4% combined gross-notional loss limit; max2 nonoverlapping pairs and 0.8x initial portfolio gross exposure.",
+  "caveat": "Exploratory extension after failed preceding families; not cointegration certification or untouched holdout. Intrabar stops use simultaneous adverse extremes conservatively. Two-leg execution is approximate."
+}

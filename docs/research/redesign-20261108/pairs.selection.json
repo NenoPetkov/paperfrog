@@ -1,0 +1,221 @@
+{
+  "selected_key": "pairs-60-2.5-14",
+  "results": [
+    {
+      "key": "pairs-30-2-14",
+      "candidate": {
+        "lookback": 30,
+        "entry_z": 2.0,
+        "max_days": 14
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "lookback": 30,
+            "entry_z": 2.0,
+            "max_days": 14
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": -0.04567981790369435,
+          "net": -456.7981790369431,
+          "trades": 31,
+          "fees": 120.06645118060483,
+          "estimated_friction": 84.04648573106346,
+          "funding": -7.008834186939123,
+          "gross_price_pnl_before_friction": -245.67640793833573,
+          "win_rate": 0.3225806451612903,
+          "profit_factor": 0.5735709300078465,
+          "max_drawdown_hourly_close": 0.049375594157196945,
+          "median_hold_hours": 64.0,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "lookback": 30,
+            "entry_z": 2.0,
+            "max_days": 14
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.026692018347002744,
+          "net": -266.92018347002704,
+          "trades": 47,
+          "fees": 184.46711965978926,
+          "estimated_friction": 129.12698848984687,
+          "funding": 8.078052282260314,
+          "gross_price_pnl_before_friction": 38.59587239734877,
+          "win_rate": 0.3404255319148936,
+          "profit_factor": 0.7680323496796974,
+          "max_drawdown_hourly_close": 0.05048688885567232,
+          "median_hold_hours": 28.0,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        }
+      ]
+    },
+    {
+      "key": "pairs-30-2.5-14",
+      "candidate": {
+        "lookback": 30,
+        "entry_z": 2.5,
+        "max_days": 14
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "lookback": 30,
+            "entry_z": 2.5,
+            "max_days": 14
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": -0.047728147945236166,
+          "net": -477.28147945236196,
+          "trades": 31,
+          "fees": 120.77432999805454,
+          "estimated_friction": 84.54199806339605,
+          "funding": -3.106032184784535,
+          "gross_price_pnl_before_friction": -268.8591192061269,
+          "win_rate": 0.25806451612903225,
+          "profit_factor": 0.5340496606428716,
+          "max_drawdown_hourly_close": 0.05915163178248006,
+          "median_hold_hours": 52.0,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "lookback": 30,
+            "entry_z": 2.5,
+            "max_days": 14
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.04703081632550821,
+          "net": -470.30816325508204,
+          "trades": 43,
+          "fees": 167.99396745357674,
+          "estimated_friction": 117.59575460175168,
+          "funding": -0.1000565662417395,
+          "gross_price_pnl_before_friction": -184.6183846335119,
+          "win_rate": 0.2558139534883721,
+          "profit_factor": 0.6053811328653417,
+          "max_drawdown_hourly_close": 0.05668312202398906,
+          "median_hold_hours": 28.0,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        }
+      ]
+    },
+    {
+      "key": "pairs-60-2-14",
+      "candidate": {
+        "lookback": 60,
+        "entry_z": 2.0,
+        "max_days": 14
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "lookback": 60,
+            "entry_z": 2.0,
+            "max_days": 14
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": 0.003252298118819663,
+          "net": 32.522981188196354,
+          "trades": 26,
+          "fees": 100.67280080576091,
+          "estimated_friction": 70.47098549417626,
+          "funding": 0.1553908084865956,
+          "gross_price_pnl_before_friction": 203.51137667964693,
+          "win_rate": 0.4230769230769231,
+          "profit_factor": 1.0322356262744934,
+          "max_drawdown_hourly_close": 0.057421101196985846,
+          "median_hold_hours": 91.5,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "lookback": 60,
+            "entry_z": 2.0,
+            "max_days": 14
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.03517462303880092,
+          "net": -351.7462303880093,
+          "trades": 31,
+          "fees": 123.37594512811785,
+          "estimated_friction": 86.3631451003996,
+          "funding": -7.400749489216873,
+          "gross_price_pnl_before_friction": -134.60639067027495,
+          "win_rate": 0.3225806451612903,
+          "profit_factor": 0.6699038111822431,
+          "max_drawdown_hourly_close": 0.05077215279979741,
+          "median_hold_hours": 41.0,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        }
+      ]
+    },
+    {
+      "key": "pairs-60-2.5-14",
+      "candidate": {
+        "lookback": 60,
+        "entry_z": 2.5,
+        "max_days": 14
+      },
+      "selection_periods": [
+        {
+          "candidate": {
+            "lookback": 60,
+            "entry_z": 2.5,
+            "max_days": 14
+          },
+          "start_ms": 1762992000000,
+          "end_ms": 1773360000000,
+          "return": 0.021425475770093128,
+          "net": 214.2547577009318,
+          "trades": 21,
+          "fees": 81.62831505096794,
+          "estimated_friction": 57.13986415596371,
+          "funding": -3.061031869405934,
+          "gross_price_pnl_before_friction": 356.08396877726943,
+          "win_rate": 0.42857142857142855,
+          "profit_factor": 1.3491253156089333,
+          "max_drawdown_hourly_close": 0.05095869932810815,
+          "median_hold_hours": 70.0,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        },
+        {
+          "candidate": {
+            "lookback": 60,
+            "entry_z": 2.5,
+            "max_days": 14
+          },
+          "start_ms": 1773360000000,
+          "end_ms": 1783728000000,
+          "return": -0.005699173684264314,
+          "net": -56.99173684264315,
+          "trades": 26,
+          "fees": 104.7012986613239,
+          "estimated_friction": 73.29092428631454,
+          "funding": -3.272067629410674,
+          "gross_price_pnl_before_friction": 124.27255373440596,
+          "win_rate": 0.2692307692307692,
+          "profit_factor": 0.9207448286150264,
+          "max_drawdown_hourly_close": 0.0308373957077388,
+          "median_hold_hours": 29.5,
+          "cost_multiplier": 1,
+          "delay_hours": 0
+        }
+      ]
+    }
+  ]
+}

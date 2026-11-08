@@ -1,0 +1,113 @@
+{
+  "candidates": [
+    {
+      "family": "carry",
+      "lookback": 7,
+      "holding": 7,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "carry",
+      "lookback": 7,
+      "holding": 30,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "carry",
+      "lookback": 30,
+      "holding": 7,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "carry",
+      "lookback": 30,
+      "holding": 30,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "channel",
+      "lookback": 20,
+      "holding": 10,
+      "stop_atr": 2.0
+    },
+    {
+      "family": "channel",
+      "lookback": 20,
+      "holding": 10,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "channel",
+      "lookback": 55,
+      "holding": 20,
+      "stop_atr": 2.0
+    },
+    {
+      "family": "channel",
+      "lookback": 55,
+      "holding": 20,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "relative_momentum",
+      "lookback": 7,
+      "holding": 7,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "relative_momentum",
+      "lookback": 30,
+      "holding": 7,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "relative_reversal",
+      "lookback": 1,
+      "holding": 1,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "relative_reversal",
+      "lookback": 1,
+      "holding": 7,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "relative_reversal",
+      "lookback": 7,
+      "holding": 1,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "relative_reversal",
+      "lookback": 7,
+      "holding": 7,
+      "stop_atr": 3.0
+    }
+  ],
+  "periods": [
+    [
+      1762992000000,
+      1773360000000
+    ],
+    [
+      1773360000000,
+      1783728000000
+    ],
+    [
+      1783728000000,
+      1794096000000
+    ]
+  ],
+  "sources": {
+    "carry": "https://www.bis.org/publications/working-paper-1087-crypto-carry",
+    "perpetual_carry_mechanics": "https://www.binance.com/en-AE/support/faq/detail/f330e17d6fc04679b9b21d6f9350e787",
+    "trend": "https://www.aqr.com/insights/research/journal-article/a-century-of-evidence-on-trend-following-investing",
+    "relative_reversal": "https://digitalcommons.fairfield.edu/business-facultypubs/246/",
+    "relative_momentum": "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3913263"
+  },
+  "selection": "Maximum worse return of first two periods; at least six trades per period. Positive in both required to pass discovery.",
+  "stress": "Frozen candidate only: double all fees/friction and funding debits, one-hour delayed entries, and combined stress.",
+  "limits": "Futures 0.8x initial gross equity exposure; carry three equal-quantity hedges, 12% equity spot each plus 18% reserved futures margin each.",
+  "caveat": "Fixed surviving universe. Final period overlaps previously viewed data. Literature motivates families, not these precise parameters or guaranteed results."
+}

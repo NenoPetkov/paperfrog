@@ -1,0 +1,45 @@
+{
+  "candidates": [
+    {
+      "family": "carry",
+      "lookback": 7,
+      "holding": 60,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "carry",
+      "lookback": 7,
+      "holding": 90,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "carry",
+      "lookback": 30,
+      "holding": 60,
+      "stop_atr": 3.0
+    },
+    {
+      "family": "carry",
+      "lookback": 30,
+      "holding": 90,
+      "stop_atr": 3.0
+    }
+  ],
+  "periods": [
+    [
+      1762992000000,
+      1773360000000
+    ],
+    [
+      1773360000000,
+      1783728000000
+    ],
+    [
+      1783728000000,
+      1794096000000
+    ]
+  ],
+  "selection": "Highest worse return of first two periods; at least three closed hedges in each. This small sample is exploratory only.",
+  "reason": "Check whether 60-90 day funding income amortizes four execution costs better than 7-30 days.",
+  "caveat": "Second-stage exploration after examining the first fourteen configurations; not pristine holdout."
+}

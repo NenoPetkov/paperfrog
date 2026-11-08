@@ -1,0 +1,237 @@
+{
+  "frozen": {
+    "family": "channel",
+    "lookback": 55,
+    "holding": 20,
+    "stop_atr": 3.0
+  },
+  "period": [
+    1762992000000,
+    1794096000000
+  ],
+  "results": {
+    "base": {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1762992000000,
+      "end_ms": 1794096000000,
+      "return": 0.07843226531288372,
+      "net": 784.3226531288365,
+      "trades": 34,
+      "win_rate": 0.5294117647058824,
+      "profit_factor": 1.3097664706787238,
+      "fees": 68.0008578613502,
+      "estimated_friction": 47.60071280009463,
+      "funding": -16.78720063488595,
+      "gross_price_pnl_before_friction": 916.7114244251671,
+      "max_drawdown_hourly_close": 0.163247266550004,
+      "max_drawdown_adverse_extremes": 0.16507257958552968,
+      "median_hold_hours": 343.5,
+      "cost_multiplier": 1,
+      "delay_hours": 0
+    },
+    "double_cost": {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1762992000000,
+      "end_ms": 1794096000000,
+      "return": 0.05281453965254457,
+      "net": 528.1453965254459,
+      "trades": 34,
+      "win_rate": 0.5,
+      "profit_factor": 1.2030560248360629,
+      "fees": 134.644313959989,
+      "estimated_friction": 94.25146484191482,
+      "funding": -151.26478903602998,
+      "gross_price_pnl_before_friction": 908.3059643633796,
+      "max_drawdown_hourly_close": 0.1678321874656663,
+      "max_drawdown_adverse_extremes": 0.16964947454076196,
+      "median_hold_hours": 343.5,
+      "cost_multiplier": 2,
+      "delay_hours": 0
+    },
+    "one_hour_delay": {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1762992000000,
+      "end_ms": 1794096000000,
+      "return": 0.049961745098001886,
+      "net": 499.6174509800185,
+      "trades": 35,
+      "win_rate": 0.5142857142857142,
+      "profit_factor": 1.1768443674948001,
+      "fees": 70.18802435917546,
+      "estimated_friction": 49.131694724871984,
+      "funding": -15.131802649141573,
+      "gross_price_pnl_before_friction": 634.0689727132075,
+      "max_drawdown_hourly_close": 0.16057660509732408,
+      "max_drawdown_adverse_extremes": 0.16238789373146967,
+      "median_hold_hours": 308.0,
+      "cost_multiplier": 1,
+      "delay_hours": 1
+    },
+    "combined": {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1762992000000,
+      "end_ms": 1794096000000,
+      "return": 0.025055703327521384,
+      "net": 250.55703327521405,
+      "trades": 35,
+      "win_rate": 0.4857142857142857,
+      "profit_factor": 1.0868067201645575,
+      "fees": 138.94341234225286,
+      "estimated_friction": 97.26069914927572,
+      "funding": -146.9321180785818,
+      "gross_price_pnl_before_friction": 633.6932628453244,
+      "max_drawdown_hourly_close": 0.1653035720900481,
+      "max_drawdown_adverse_extremes": 0.16747913104210088,
+      "median_hold_hours": 306.0,
+      "cost_multiplier": 2,
+      "delay_hours": 1
+    },
+    "bootstrap": {
+      "period_return_95_interval": [
+        -0.35536013508879233,
+        0.8542587370706628
+      ],
+      "positive_fraction": 0.60375,
+      "note": "Descriptive, dependent on this sample, not corrected for strategy search."
+    }
+  },
+  "blocks": [
+    {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1762992000000,
+      "end_ms": 1773360000000,
+      "return": 0.04024119842917995,
+      "net": 402.41198429179894,
+      "trades": 11,
+      "win_rate": 0.5454545454545454,
+      "profit_factor": 1.5548336451535498,
+      "fees": 21.19416705561256,
+      "estimated_friction": 14.835968075354268,
+      "funding": 21.00191146864115,
+      "gross_price_pnl_before_friction": 417.4402079541247,
+      "max_drawdown_hourly_close": 0.11902881857547942,
+      "max_drawdown_adverse_extremes": 0.11994195610589209,
+      "median_hold_hours": 621.0,
+      "cost_multiplier": 1.0,
+      "delay_hours": 0
+    },
+    {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1773360000000,
+      "end_ms": 1783728000000,
+      "return": -0.05094128271097065,
+      "net": -509.412827109707,
+      "trades": 12,
+      "win_rate": 0.3333333333333333,
+      "profit_factor": 0.565628644511902,
+      "fees": 22.8886130684566,
+      "estimated_friction": 16.02197213882947,
+      "funding": -5.121914128606676,
+      "gross_price_pnl_before_friction": -465.3803277738142,
+      "max_drawdown_hourly_close": 0.139556117319523,
+      "max_drawdown_adverse_extremes": 0.14092494244443554,
+      "median_hold_hours": 304.0,
+      "cost_multiplier": 1.0,
+      "delay_hours": 0
+    },
+    {
+      "candidate": {
+        "family": "channel",
+        "lookback": 55,
+        "holding": 20,
+        "stop_atr": 3.0
+      },
+      "start_ms": 1783728000000,
+      "end_ms": 1794096000000,
+      "return": 0.08366484560757526,
+      "net": 836.6484560757526,
+      "trades": 12,
+      "win_rate": 0.6666666666666666,
+      "profit_factor": 2.114391286161399,
+      "fees": 25.14947915847935,
+      "estimated_friction": 17.604747645998668,
+      "funding": -36.80191413241995,
+      "gross_price_pnl_before_friction": 916.2045970126507,
+      "max_drawdown_hourly_close": 0.13786930876897574,
+      "max_drawdown_adverse_extremes": 0.14675748021705648,
+      "median_hold_hours": 216.0,
+      "cost_multiplier": 1.0,
+      "delay_hours": 0
+    }
+  ],
+  "spot_buy_hold_benchmarks": {
+    "BTC": -0.25568351196762695,
+    "equal_weight_ten": -0.43156735272557156
+  },
+  "cost_assumptions": {
+    "futures_fee_per_side": 0.0005,
+    "friction_per_side": 0.00035
+  },
+  "history_sha256": {
+    "ADAUSDT.funding.json": "fd1d083ab26abafdae5032ce0c51395ebbe5e7b2176ccdb75ca2ca051870b787",
+    "ADAUSDT.futures.parquet": "291e53422b3c26c4f13e482c5f21c52e43c1522bdecf3b37baf9189a627de29e",
+    "ADAUSDT.spot.parquet": "654f643e2a0ae693145ef2f95cb1130d289aca84aff5dc95526214aa1fd6973f",
+    "AVAXUSDT.funding.json": "e6a705a56d976945082892fa0ea6e37c90e7d69711c3d81de5854ebb50a27c38",
+    "AVAXUSDT.futures.parquet": "95741419a0acf90cec09f88c35829a5cfa41c580aa2954d96684d7982cc44a06",
+    "AVAXUSDT.spot.parquet": "4f6c6144bef81e2654abbee1b2e0dda5a44bc41178d657774c17d824e4d8b478",
+    "BNBUSDT.funding.json": "dc8257d40102202a2d28efb2d0467c381a8201c4f65d7e5f2a162dd115fe45c0",
+    "BNBUSDT.futures.parquet": "a5ac8196d69cb4e698779059b6f41ef8ff048ef77bdc1ca0b717ec5dd0f60a0d",
+    "BNBUSDT.spot.parquet": "3b4090b33d96f4bc40260bdf22898529558be4adbd6e4c9b4158d52fc502405c",
+    "BTCUSDT.funding.json": "770dc981e8d0317b00df5dd8e44404fa272056eb15197accbf8896a66a338822",
+    "BTCUSDT.futures.parquet": "05fe38bd4aa984367a27077bed3e586de86d738c9c06299d6f6b6aab722584fd",
+    "BTCUSDT.spot.parquet": "eb89e93a5dfa5e9a285ff80affd427698df744d61693d5650ac89224e41301cb",
+    "DOGEUSDT.funding.json": "0e59c6787f2af9c1b3235e8b469e664cbe02d0de06a938263342b59706a492a8",
+    "DOGEUSDT.futures.parquet": "45da3e5ca7b38864f7153a83c4256c361a4270b2db5ed724f7be9b826100a5e7",
+    "DOGEUSDT.spot.parquet": "879fdc0be8b5e110d566816be2cd4eab4d16ec9197f62f4257a70a5623d98491",
+    "ETHUSDT.funding.json": "5e897caf386298e502116624cc95f07521407bc4bbf8c97824b89c926648b076",
+    "ETHUSDT.futures.parquet": "1327cf09b6b50e470f18b3639a16324a33bdbe0bcc6223d5cca03f67b2b88677",
+    "ETHUSDT.spot.parquet": "c0f555119a39236b6da9893cf22dc360082713c06c5807ebd29a46bc34cab750",
+    "LINKUSDT.funding.json": "d6a6af59abcef20c93f6f157d8e6143b677e20c25aff5619a97cf81ce21b3264",
+    "LINKUSDT.futures.parquet": "24861ffad33457a1582fe09472835a074a039b79677f9d77b92f88ec77bb60cc",
+    "LINKUSDT.spot.parquet": "e4fc126ff05fb57fc765a573351e2bf5849e864a90ef0e6aef16795e9e93685a",
+    "LTCUSDT.funding.json": "9630f356bd347c785a03a8f5e53df01d22427f682c29249c42b7939381f4f9e0",
+    "LTCUSDT.futures.parquet": "81e572c8f6e108bc8d938a5cbd02cacda75745630f0a7bc00d1e47cda6e9065b",
+    "LTCUSDT.spot.parquet": "793a633485a02044a6fcb6afa1cbac53b38d1c538afbcfadb7f28367d29d942f",
+    "SOLUSDT.funding.json": "bc6c3bc43219f5bf41f4ba9c05c683306755b9a0b6085d2d813609a6bfd35954",
+    "SOLUSDT.futures.parquet": "572b5b6eb70645249a833c61f912292d0059edd417ac2833ab488376472554b9",
+    "SOLUSDT.spot.parquet": "c9ea7079c6755914392c5436a5aa43f9ad6442d76337525f239398dd1ca1171d",
+    "XRPUSDT.funding.json": "abb29900d24b524af405dde367f5fed35473b40c35371d934ee0b31f63b36b9d",
+    "XRPUSDT.futures.parquet": "c670f359f2523cbf6116fbadbd0bfe297527b49cb9781f056485d8d38d139385",
+    "XRPUSDT.spot.parquet": "113d3a280f7f18a4ebdb5b6cbf66ce76b5a06d176b3b349ca26853e07be915a5"
+  },
+  "limitations": [
+    "Current-year candidate chosen after viewing its final block; not untouched validation.",
+    "Earlier-year check is untouched for this new candidate but runs backward in calendar time; not forward evidence.",
+    "Fixed current surviving universe, simplified fills, hourly stop bars, no exchange-specific liquidation simulation."
+  ]
+}
