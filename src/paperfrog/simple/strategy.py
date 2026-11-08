@@ -23,6 +23,8 @@ def require_paper(s: Settings) -> None:
 
 
 def require_execution(s: Settings) -> None:
+    if s.simple_entry_profile == "momentum":
+        require_paper(s)
     if s.trading_mode == "paper":
         require_paper(s)
         return
@@ -118,6 +120,8 @@ ACTIVE_RULES = replace(
 
 def execution_rules(s: Settings) -> Rules:
     rules = RULES
+    if s.simple_entry_profile == "momentum":
+        rules = replace(RULES, version="abc-momentum-v1", entry_style="trend_follow")
     if s.simple_entry_profile == "active":
         if s.simple_entry_mode != "trend":
             raise SafeError("active entry profile requires trend mode")
@@ -241,6 +245,12 @@ def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -
     pool = sorted(candidates, key=lambda k: (-float(rows[k]["daily_volume"]), k))[
         : s.simple_scan_limit
     ]
+    if s.simple_entry_profile == "momentum":
+        from .momentum import classify
+
+        cost = s.fee_rate + (s.slippage_bps + rules.assumed_half_spread_bps) / 10000
+        ranked = [(classify(rows[symbol], cost, rules), symbol) for symbol in pool]
+        return [symbol for (_, side, _), symbol in sorted(ranked, key=lambda v: (-v[0][2], v[1])) if side][:s.simple_selected_count]
     return sorted(
         pool,
         key=lambda k: (
@@ -393,6 +403,11 @@ def exit_reason(
         elif mode == "failed_breakout":
             if decision * (float(row["close"]) - float(position["rejection_level"])) <= 0:
                 return "failed-breakout thesis invalidated: price reclaimed the breakout level"
+        elif position.get("momentum_exit_version") == 1:
+            from .momentum import reversal
+
+            if reversal(position, row):
+                return "momentum trend reversed on two completed candles"
         elif (decision if mode == "trend" else -decision) * float(row["trend_atr"]) < 0:
             return (
                 (

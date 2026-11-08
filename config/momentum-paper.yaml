@@ -1,0 +1,14 @@
+# Research only: all tested variants lost on the November validation week.
+trading_mode: paper
+live_trading_enabled: false
+strategy_profile: simple
+simple_entry_profile: momentum
+simple_entry_mode: trend
+simple_entry_timeframe: 5m
+simple_selected_count: 10
+simple_max_hold_hours: 4
+simple_btc_reference_enabled: false
+simple_market_trend_enabled: false
+simple_ai_enabled: false
+simple_confidence_enabled: false
+# Default risk sizing, exposure, loss limits and 2x leverage remain in force.

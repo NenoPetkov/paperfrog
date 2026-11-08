@@ -9,6 +9,7 @@ __pycache__/
 .env.*
 !.env.example
 state/
+state-momentum-paper/
 logs/
 data/*
 !data/.gitkeep

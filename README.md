@@ -1,5 +1,20 @@
 # paperfrog
 
+## November holding and momentum review
+
+The [November 8 review](docs/HOLDING_MOMENTUM_REVIEW_2026-11-08.md) compares actual
+entries held longer, 5m/15m A/B/C momentum, costs and 2x/4x leverage. All 24 momentum
+variants lost on the later validation week under modeled costs. The production
+decision is evidence-required entries and unchanged 2x leverage.
+
+`config/momentum-paper.yaml` provides a PAPER-only A/B/C profile: long established
+upward momentum, short established downward momentum, otherwise wait; rank ten
+coins by volatility-adjusted momentum. Five-minute signals, confirmed trend exits
+and a four-hour cap simplify the policy. Emergency protection remains in force.
+`scripts/run_momentum_paper.py` isolates it from production credentials and state;
+`deploy/paperfrog-momentum-paper.service` runs it on loopback port 8081. This forward
+experiment has no demonstrated trading edge and cannot execute live orders.
+
 `/strategy auto` learns a joint choice of **current/opposite, 5m/15m candles and
 1/2/4/8-hour holding limits** from closed historical results in the current market
 pattern. It checks costs, chronological validation, sample size and uncertainty;

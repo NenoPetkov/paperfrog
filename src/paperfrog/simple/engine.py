@@ -764,6 +764,16 @@ class Engine:
                      selected_strategy: dict[str, Any] | None = None) -> tuple[int, str]:
         if row.get("entry_timeframe", "15m") != self.entry_timeframe:
             return 0, "entry candle timeframe does not match selected policy"
+        if self.s.simple_entry_profile == "momentum":
+            from .momentum import classify
+
+            state = rotation.selection(self.store)
+            if state["auto"] or state["active"] != "current":
+                return 0, "momentum PAPER profile requires fixed current strategy"
+            pattern, side, _ = classify(
+                row, self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2, self.rules
+            )
+            return side, f"Momentum pattern {pattern}: {'LONG' if side > 0 else 'SHORT' if side < 0 else 'WAIT'}"
         learned_veto = learning.veto(self.store, self.s, now_ms)
         if learned_veto:
             return 0, learned_veto
@@ -1087,6 +1097,7 @@ class Engine:
             "entry_timeframe": self.entry_timeframe,
             "max_hold_hours": rotation.hold_hours(self.store, self.s),
             "adaptive_holding": selected_strategy["auto"],
+            "momentum_exit_version": 1 if self.s.simple_entry_profile == "momentum" else None,
             "activity_probe": activity_probe,
             "opened_ms": now_ms,
             "stop_fraction": stop,
@@ -1261,6 +1272,7 @@ class Engine:
             "entry_timeframe": intent.get("entry_timeframe", "15m"),
             "max_hold_hours": intent.get("max_hold_hours", self.s.simple_max_hold_hours),
             "adaptive_holding": intent.get("adaptive_holding", False),
+            "momentum_exit_version": intent.get("momentum_exit_version"),
             "activity_probe": intent.get("activity_probe", False),
             "quantity": str(fill.quantity),
             "entry_price": float(fill.price),

@@ -17,8 +17,10 @@ def close_trade(risk, store, index, pnl, now, health):
     risk.closed(str(index), pnl, now)
 
 
-def test_recovery_preset_changes_only_cooldown_and_concurrent_cap():
+def test_recovery_preset_changes_only_cooldown_and_concurrent_cap(tmp_path, monkeypatch):
     preset = Path(__file__).resolve().parents[2] / "config/loss-protection.yaml"
+    # A unit test must not inherit the operator's production .env.
+    monkeypatch.chdir(tmp_path)
     s = load_settings(preset)
     assert s.soft_loss_cooldown_minutes == 30
     assert s.max_concurrent_strategy_trades == 2

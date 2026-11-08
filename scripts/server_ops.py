@@ -71,6 +71,25 @@ def assert_idle(root: Path) -> None:
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def strict_auto(root: Path, s: Settings) -> None:
+    """Explicit local reduction of entry permission, preserving all financial state."""
+    from paperfrog.simple import rotation
+    from paperfrog.storage.database import Store
+
+    assert_idle(root)
+    path = directory(s) / "paperfrog.sqlite"
+    if not path.exists():
+        raise DeploymentError("Existing strategy ledger required.")
+    store = Store(path)
+    try:
+        if not rotation.selection(store)["auto"]:
+            raise DeploymentError("Strict reduction requires an existing automatic strategy.")
+        rotation.configure(store, "auto", int(time.time() * 1000))
+        store.audit("local_strict_auto_activation", {"reason": "unvalidated live probes disabled after holding/momentum review"})
+    finally:
+        store.engine.dispose()
+
+
 def check_databases(folder: Path) -> dict[str, dict[str, int]]:
     result = {}
     for path in sorted(folder.rglob("*")):
@@ -212,6 +231,7 @@ def main() -> None:
     commands.add_parser("run")
     commands.add_parser("status")
     commands.add_parser("databases")
+    commands.add_parser("strategy-strict")
     commands.add_parser("context").add_argument("--require-arm", action="store_true")
     commands.add_parser("compare").add_argument("path", type=Path)
     commands.add_parser("rearm").add_argument("path", type=Path)
@@ -234,7 +254,9 @@ def main() -> None:
         backup(root, args.path)
         return
     s = settings()
-    if args.command == "context":
+    if args.command == "strategy-strict":
+        strict_auto(root, s)
+    elif args.command == "context":
         if args.require_arm and s.trading_mode == "live":
             verify_simple_arm(s)
         print(json.dumps(context(s)))

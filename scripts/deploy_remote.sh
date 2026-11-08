@@ -4,6 +4,8 @@ umask 077
 export PATH=/usr/local/bin:/usr/bin:/bin
 root=/var/www/paperfrog
 expected=${1:?Expected commit is required}
+policy=${2:-preserve}
+[[ $policy == preserve || $policy == strict-auto ]] || exit 2
 [[ $expected =~ ^[0-9a-f]{40}$ ]] || exit 2
 cd "$root"
 exec 9>/run/lock/paperfrog-deploy.lock
@@ -18,6 +20,10 @@ candidate=$(mktemp -d /var/tmp/paperfrog-check.XXXXXXXX)
 context=$(mktemp /var/tmp/paperfrog-context.XXXXXXXX)
 stopped=0
 started=0
+paper_active=0
+if systemctl is-active --quiet paperfrog-momentum-paper.service; then
+  paper_active=1
+fi
 cleanup() {
   result=$?
   trap - EXIT
@@ -53,6 +59,9 @@ systemd-analyze verify "$candidate/deploy/paperfrog.service" "$candidate/deploy/
 echo 'Release verified. Stopping writers and taking a consistent state backup.'
 systemctl stop paperfrog-daily-review.timer paperfrog-daily-review.service
 systemctl stop paperfrog.service
+if (( paper_active )); then
+  systemctl stop paperfrog-momentum-paper.service
+fi
 stopped=1
 .venv/bin/python scripts/server_ops.py idle
 # Detect configuration/account changes that occurred during the release checks.
@@ -63,6 +72,9 @@ git pull --ff-only origin master
 [[ $(git rev-parse HEAD) == "$expected" ]] || { echo 'Master changed during deployment; leaving the bot stopped.' >&2; exit 1; }
 uv sync --frozen --python 3.12.14
 .venv/bin/python scripts/server_ops.py compare "$context"
+if [[ $policy == strict-auto ]]; then
+  .venv/bin/python scripts/server_ops.py strategy-strict
+fi
 install -m 644 deploy/paperfrog.service deploy/paperfrog-daily-review.service deploy/paperfrog-daily-review.timer /etc/systemd/system/
 systemctl daemon-reload
 .venv/bin/python scripts/server_ops.py rearm "$context"
@@ -72,4 +84,7 @@ systemctl start paperfrog.service
 started=1
 .venv/bin/python scripts/server_ops.py wait --timeout 240
 systemctl start paperfrog-daily-review.timer
+if (( paper_active )); then
+  systemctl start paperfrog-momentum-paper.service
+fi
 echo "Deploy complete: $expected; state backup: $backup"

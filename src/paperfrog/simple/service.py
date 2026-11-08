@@ -141,6 +141,8 @@ class SimpleService:
 
     async def strategy_control(self, choice: str | None) -> str:
         async with self.mutex:
+            if self.s.simple_entry_profile == "momentum" and choice not in {None, "current"}:
+                raise SafeError("momentum PAPER profile uses fixed A/B/C selection; automatic and opposite modes are unavailable")
             if choice is not None:
                 if self.engine is None:
                     raise SafeError("execution engine is not ready")
@@ -986,6 +988,10 @@ class SimpleService:
                     self.s, self.store, self.exchange.filters, self.rules, broker=live_broker
                 )
                 rotation.initialize(self.store, self.engine.strategy, self.now_ms())
+                if self.s.simple_entry_profile == "momentum":
+                    state = rotation.selection(self.store)
+                    if state["auto"] or state["active"] != "current":
+                        rotation.configure(self.store, "current", self.now_ms())
                 await self.engine.restore()
                 self.store.put("operating_mode", self.s.trading_mode)
                 self.store.put("simple_loaded_settings", self.s.simple_parameters())
