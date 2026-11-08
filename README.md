@@ -12,7 +12,7 @@ upward momentum, short established downward momentum, otherwise wait; rank ten
 coins by volatility-adjusted momentum. Five-minute signals, confirmed trend exits
 and a four-hour cap simplify the policy. Emergency protection remains in force.
 `scripts/run_momentum_paper.py` isolates it from production credentials and state;
-`deploy/paperfrog-momentum-paper.service` runs it on loopback port 8081. This forward
+`deploy/paperfrog-momentum-paper.service` runs it on loopback port 8082. This forward
 experiment has no demonstrated trading edge and cannot execute live orders.
 
 `/strategy auto` learns a joint choice of **current/opposite, 5m/15m candles and

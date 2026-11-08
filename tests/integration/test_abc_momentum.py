@@ -160,7 +160,7 @@ def test_isolated_paper_runner_ignores_production_credentials_and_risk(monkeypat
     assert not s.telegram_bot_token.get_secret_value()
     assert s.risk_per_trade == 0.002
     assert s.state_dir.name == "state-momentum-paper"
-    assert s.health_port == 8081
+    assert s.health_port == 8082
 
 
 def test_strict_activation_preserves_positions_losses_and_risk_locks(tmp_path):

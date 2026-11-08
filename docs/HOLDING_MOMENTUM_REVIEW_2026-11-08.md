@@ -113,8 +113,8 @@ or automatic/opposite routing. Existing positions without its version marker kee
 their original exits. The separate `paperfrog-momentum-paper.service` loads explicit
 safe defaults and its preset, ignoring production credentials and environment
 settings. It uses `state-momentum-paper/`, separate public history/report folders,
-and loopback port 8081. It has no Telegram or private exchange credentials. The
-production process keeps port 8080 and its existing ledger. A PAPER restart with
+and loopback port 8082. It has no Telegram or private exchange credentials. The
+production process keeps its configured port (8081 on this server) and its existing ledger. A PAPER restart with
 open simulated positions retains the existing conservative manual-pause behavior.
 
 Run the isolated experiment with `uv run --no-sync python scripts/run_momentum_paper.py`.

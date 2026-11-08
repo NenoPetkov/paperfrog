@@ -25,7 +25,7 @@ def paper_settings(root: Path) -> Settings:
         reports_dir=root / "reports/momentum-paper",
         artifacts_dir=root / "artifacts/momentum-paper",
         binance_env="live",
-        health_port=8081,
+        health_port=8082,
         binance_api_key="",
         binance_api_secret="",
         openai_api_key="",
