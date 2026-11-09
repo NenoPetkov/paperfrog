@@ -282,6 +282,8 @@ def read_status(s: Settings) -> dict[str, Any]:
         "open_positions": status.get("open_positions", []),
         "entry_timeframe": status.get("entry_timeframe"),
         "entry_profile": status.get("entry_profile"),
+        "entry_strategy": status.get("strategy"),
+        "momentum_timing": status.get("momentum_timing"),
         "funding_carry": status.get("funding_carry", {"enabled": False}),
         "scan_pool_count": status.get("scan_pool_count"),
         "settings_match": status.get("loaded_settings") == s.simple_parameters(),

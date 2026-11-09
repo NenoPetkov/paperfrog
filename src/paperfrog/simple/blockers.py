@@ -63,6 +63,7 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
         "reconciled",
         "simple_ai_budget",
         "last_signal",
+        "simple_momentum_timing",
         rotation.KEY,
     )
     with store.engine.connect() as conn:
@@ -253,6 +254,16 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
                 f"• {symbol}: {str(reason)[:220]}"
                 for symbol, reason in list(strategy_rejected.items())[:5]
             )
+        if s.simple_entry_profile == "momentum":
+            from .momentum import EARLY_VERSION
+            timing = values["simple_momentum_timing"] or {}
+            lines.append("Momentum timing: first 60 minutes of a confirmed trend; 5m/15m confirmation; exhausted or overextended entries wait.")
+            if timing.get("version") == EARLY_VERSION and timing.get("asof_ms") == selection.get("asof_ms"):
+                rejected_timing = timing.get("blocked", {})
+                lines.append(f"Momentum timing rejections: {len(rejected_timing)}.")
+                lines.extend(f"• {symbol}: {reason}" for symbol, reason in list(rejected_timing.items())[:5])
+            else:
+                blockers.append("Fresh momentum timing evidence is unavailable.")
     for symbol in selected:
         if counts.get(symbol, 0) >= s.max_entries_per_symbol_per_day:
             blockers.append(f"{symbol}: daily per-coin entry limit reached.")

@@ -18,6 +18,7 @@ from .strategy import BAR_MS, Rules
 
 MINUTE_MS = 60_000
 HISTORY_BARS = 120
+MOMENTUM_HISTORY_BARS = HISTORY_BARS + 24
 
 
 def validate_history(x: pd.DataFrame, boundary: int, interval_ms: int, bars: int) -> None:
@@ -48,12 +49,15 @@ def validate_ohlc(x: pd.DataFrame) -> None:
 
 
 def frame(
-    raw: list[list[Any]], context: dict[str, Any], boundary: int, timeframe: str = "1m"
+    raw: list[list[Any]], context: dict[str, Any], boundary: int, timeframe: str = "1m",
+    *, early_momentum: bool = False,
 ) -> pd.DataFrame:
     """Use 120 completed consecutive entry candles and already closed slow context."""
     if timeframe not in {"1m", "5m", "8m"}:
         raise SafeError("unsupported short entry timeframe")
     minutes = {"1m": 1, "5m": 5, "8m": 8}[timeframe]
+    if early_momentum and timeframe != "5m":
+        raise SafeError("early momentum requires five-minute candles")
     interval_ms = minutes * MINUTE_MS
     minute_closes: dict[int, float] = {}
     if timeframe == "8m":
@@ -79,7 +83,7 @@ def frame(
         )
     else:
         x = normalize(raw, boundary, interval_ms)
-    validate_history(x, boundary, interval_ms, HISTORY_BARS)
+    validate_history(x, boundary, interval_ms, MOMENTUM_HISTORY_BARS if early_momentum else HISTORY_BARS)
     if not 0 <= boundary - int(context.get("timestamp_ms", 0)) < BAR_MS:
         raise SafeError("short-interval closed risk context incomplete")
     validate_ohlc(x)
@@ -123,6 +127,22 @@ def timing_indicators(x: pd.DataFrame, minutes: int, minute_closes: dict[int, fl
         )
     x["fast_change"] = x.fast.diff()
     x["trend_atr"] = (x.fast - x.slow) / x.minute_atr.replace(0, np.nan)
+    # Extra history proves a recent EMA regime transition. A trend already in
+    # progress at the beginning of the observable window has unknown age.
+    signs = np.sign(x.fast - x.slow)
+    started: int | None = None
+    starts: list[float] = []
+    previous_side = math.nan
+    for side, timestamp in zip(signs, x.timestamp_ms, strict=True):
+        if not math.isfinite(side) or side == 0:
+            started = None
+        elif math.isfinite(previous_side) and side != previous_side:
+            started = int(timestamp)
+        starts.append(float(started) if started is not None else -1.0)
+        previous_side = side
+    x["momentum_trend_started_ms"] = starts
+    x["momentum_trend_age_bars"] = ((x.timestamp_ms - x.momentum_trend_started_ms)
+                                    / (minutes * MINUTE_MS)).where(x.momentum_trend_started_ms >= 0, -1.0)
     x["prior_high"] = x.high.shift(1).rolling(5).max()
     x["prior_low"] = x.low.shift(1).rolling(5).min()
     for bars in (1, 3, 5):
@@ -143,6 +163,11 @@ def timing_indicators(x: pd.DataFrame, minutes: int, minute_closes: dict[int, fl
         0, np.nan
     )
     delta = x.close.diff()
+    if 15 % minutes == 0:
+        bars_15m = 15 // minutes
+        travel_15m = delta.abs().rolling(bars_15m).sum()
+        x["path_efficiency_15m"] = (x.close - x.close.shift(bars_15m)).abs() / travel_15m.replace(0, np.nan)
+        x.loc[travel_15m == 0, "path_efficiency_15m"] = 0.0
     gain, loss = delta.clip(lower=0).rolling(14).mean(), (-delta.clip(upper=0)).rolling(14).mean()
     x["rsi_14"] = 100 * gain / (gain + loss).replace(0, np.nan)
     x.loc[(gain == 0) & (loss == 0), "rsi_14"] = 50.0
@@ -163,7 +188,8 @@ def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
     if timeframe not in {"1m", "5m", "8m"}:
         return 0, "complete closed entry slope required"
     minutes = {"1m": 1, "5m": 5, "8m": 8}[timeframe]
-    returns = tuple(f"return_{bars * minutes}m" for bars in (1, 3, 5))
+    windows = (1, 3) if rules.version == "abc-momentum-v2" and timeframe == "5m" else (1, 3, 5)
+    returns = tuple(f"return_{bars * minutes}m" for bars in windows)
     fields = (
         "close",
         "open",
@@ -195,7 +221,7 @@ def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
         return 0, "short-interval slope reversed, flat or unconfirmed by trading flow"
     return (
         side,
-        f"{timeframe} {'upward' if side > 0 else 'downward'} slope: EMA 5/20, aligned {minutes}/{3 * minutes}/{5 * minutes}-minute moves and trading flow",
+        f"{timeframe} {'upward' if side > 0 else 'downward'} slope: EMA 5/20, aligned {'/'.join(str(w * minutes) for w in windows)}-minute moves and trading flow",
     )
 
 

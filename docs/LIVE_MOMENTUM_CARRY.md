@@ -12,6 +12,11 @@ profile, with a four-hour holding ceiling. It lowers position margin to at most
 and loss limits with carry. BTC and ETH are reserved for carry when enabled.
 No research result or software check demonstrates future profitability.
 
+The base profile now uses `abc-momentum-v2` entry timing. The
+[November 9 timing audit](MOMENTUM_ENTRY_TIMING_2026-11-09.md) explains the earlier
+entry window, exhaustion veto and the distinction between historical signal
+eligibility and actual execution. Existing positions retain their recorded exits.
+
 ## Funding hedge
 
 `SIMPLE_CARRY_ENABLED=true` enables real spot/perpetual execution alongside LIVE

@@ -92,7 +92,23 @@ class Engine:
                 "atr_timeframe_bars",
             )
         }
-        if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules:
+        entry_timing_upgrade = (
+            broker is not None and s.simple_entry_profile == "momentum"
+            and stored_rules.get("version") == "abc-momentum-v1"
+            and public_rules["version"] == "abc-momentum-v2"
+            and {**defaults, **stored_rules, "version": public_rules["version"],
+                 "minimum_trend_atr": public_rules["minimum_trend_atr"]} == public_rules
+            and all(t.get("momentum_exit_version") == 1 and t.get("entry_mode") == "trend"
+                    and t.get("entry_timeframe") == "5m"
+                    and (t.get("entry_context") or {}).get("entry_profile") == "momentum"
+                    for t in store.get("simple_positions", {}).values())
+        )
+        if entry_timing_upgrade:
+            assert broker is not None
+            broker.require_authorization()
+            store.audit("simple_entry_timing_upgrade", {"from": "abc-momentum-v1", "to": "abc-momentum-v2",
+                                                       "positions": "retained with original exits and protection"})
+        if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules and not entry_timing_upgrade:
             raise SafeError("close existing PAPER positions before changing strategy rules")
         self.s, self.store, self.filters = s, store, filters
         self.risk = RiskEngine(
@@ -776,7 +792,7 @@ class Engine:
         if row.get("entry_timeframe", "15m") != self.entry_timeframe:
             return 0, "entry candle timeframe does not match selected policy"
         if self.s.simple_entry_profile.startswith("momentum"):
-            from .momentum import classify
+            from .momentum import classify, timing_veto
 
             state = rotation.selection(self.store)
             if state["auto"] or state["active"] != "current":
@@ -784,7 +800,9 @@ class Engine:
             pattern, side, _ = classify(
                 row, self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2, self.rules
             )
-            return side, f"Momentum pattern {pattern}: {'LONG' if side > 0 else 'SHORT' if side < 0 else 'WAIT'}"
+            detail = timing_veto(row, self.rules) if not side else None
+            return side, (f"Momentum pattern {pattern}: {'LONG' if side > 0 else 'SHORT' if side < 0 else 'WAIT'}"
+                          + (f"; {detail}" if detail else ""))
         learned_veto = learning.veto(self.store, self.s, now_ms)
         if learned_veto:
             return 0, learned_veto

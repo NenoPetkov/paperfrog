@@ -55,7 +55,7 @@ git worktree add --detach "$candidate" "$expected"
   uv run --no-sync pytest -q -m 'not testnet'
   uv run --no-sync ruff check src tests scripts
   uv run --no-sync mypy --strict
-  uv run --no-sync mypy --strict src/paperfrog/simple/carry.py src/paperfrog/simple/live_broker.py
+  uv run --no-sync mypy --strict src/paperfrog/simple/carry.py src/paperfrog/simple/live_broker.py src/paperfrog/simple/momentum.py src/paperfrog/simple/minute.py
   bash -n depoy.sh scripts/deploy_remote.sh
 )
 "$candidate/.venv/bin/python" "$candidate/scripts/server_ops.py" --root "$root" compare "$context"

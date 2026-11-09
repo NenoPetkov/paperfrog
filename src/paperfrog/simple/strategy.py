@@ -114,12 +114,17 @@ ACTIVE_RULES = replace(
     minimum_trend_atr=0.3,
     minimum_flow=0.02,
 )
+EARLY_MOMENTUM_RULES = replace(
+    RULES, version="abc-momentum-v2", entry_style="trend_follow", minimum_trend_atr=0.3
+)
 
 
 def execution_rules(s: Settings) -> Rules:
     rules = RULES
     if s.simple_entry_profile.startswith("momentum"):
         rules = replace(RULES, version=f"abc-{s.simple_entry_profile}-v1", entry_style="trend_follow")
+        if s.simple_entry_profile == "momentum":
+            rules = EARLY_MOMENTUM_RULES
     if s.simple_entry_profile == "active":
         if s.simple_entry_mode != "trend":
             raise SafeError("active entry profile requires trend mode")

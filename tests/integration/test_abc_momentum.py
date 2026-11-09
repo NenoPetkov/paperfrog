@@ -1,4 +1,5 @@
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,10 @@ def row(side=1, **changes):
         "return_25m": side * 0.02,
         "return_1h": side * 0.03,
         "path_efficiency_1h": 0.6,
+        "path_efficiency_15m": 0.6,
+        "momentum_trend_started_ms": 0,
+        "momentum_trend_age_bars": 1,
+        "rsi_14": 50,
         "prior_high": 105,
         "prior_low": 95,
         "daily_volume": 20_000_000,
@@ -94,7 +99,7 @@ def test_top_ten_ranks_momentum_after_liquidity_filter():
     rows[SYMBOLS[0]]["daily_volume"] = 1_000_000_000
     rows["ILLIQUIDUSDT"] = row(return_1h=0.9, daily_volume=10)
     rows["BTCUSDT"] = row(return_1h=1)
-    assert choose(rows, s, execution_rules(s)) == [SYMBOLS[i] for i in range(11, 1, -1)]
+    assert choose(rows, s, replace(execution_rules(s), version="abc-momentum-v1")) == [SYMBOLS[i] for i in range(11, 1, -1)]
 
 
 @pytest.mark.parametrize(

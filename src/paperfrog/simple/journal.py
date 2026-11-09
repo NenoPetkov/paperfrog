@@ -11,6 +11,9 @@ from paperfrog.domain.types import Fill, Quote
 INDICATORS = (
     "timestamp_ms",
     "path_efficiency_1h",
+    "path_efficiency_15m",
+    "momentum_trend_started_ms",
+    "momentum_trend_age_bars",
     "direction_changes_1h",
     "open",
     "fast",

@@ -11,19 +11,94 @@ from paperfrog.settings import Settings
 from paperfrog.storage.database import Store
 
 from .minute import direction
-from .strategy import BAR_MS, Rules, entry
+from .strategy import BAR_MS, EARLY_MOMENTUM_RULES, Rules, entry
 
 VERSION = "abc-momentum-v1"
 PROFILES = {"momentum", "momentum_selective", "momentum_breakout", "momentum_pullback"}
+EARLY_VERSION = EARLY_MOMENTUM_RULES.version
+MAXIMUM_TREND_AGE_BARS = 12
+
+
+def timing_veto(row: dict[str, Any], rules: Rules) -> str | None:
+    """Reject old or exhausted five-minute moves, using only completed bars."""
+    if rules.version != EARLY_VERSION:
+        return None
+    try:
+        keys = (
+            "timestamp_ms",
+            "momentum_trend_started_ms",
+            "momentum_trend_age_bars",
+            "rsi_14",
+            "path_efficiency_15m",
+            "minute_atr",
+            "close",
+            "open",
+            "fast",
+            "trend_atr",
+        )
+        if row.get("entry_timeframe") != "5m" or not all(
+            math.isfinite(float(row[k])) for k in keys
+        ):
+            return "early momentum timing evidence unavailable"
+        age = float(row["momentum_trend_age_bars"])
+        elapsed = float(row["timestamp_ms"]) - float(row["momentum_trend_started_ms"])
+        if (
+            float(row["timestamp_ms"]) % 300_000
+            or float(row["momentum_trend_started_ms"]) < 0
+            or age != int(age)
+            or elapsed != age * 300_000
+            or not 0 <= age <= MAXIMUM_TREND_AGE_BARS
+        ):
+            return "momentum move is older than the sixty-minute entry window or its start is unverified"
+        atr = float(row["minute_atr"])
+        if (
+            atr <= 0
+            or min(row["close"], row["open"], row["fast"]) <= 0
+            or not 0.3 <= float(row["path_efficiency_15m"]) <= 1
+        ):
+            return "recent fifteen-minute movement is flat, noisy or incomplete"
+        side = 1 if row["trend_atr"] > 0 else -1 if row["trend_atr"] < 0 else 0
+        if not side:
+            return "new momentum direction is not confirmed"
+        rsi = float(row["rsi_14"])
+        if not 0 <= rsi <= 100:
+            return "momentum RSI evidence invalid"
+        if (side < 0 and rsi < 30) or (side > 0 and rsi > 70):
+            return "momentum move is already exhausted; wait for a new trend rather than chase it"
+        if (
+            side * (row["close"] - row["fast"]) > 1.5 * atr
+            or abs(row["close"] - row["open"]) > 1.5 * atr
+        ):
+            return "momentum entry is overextended from its fast average or current candle"
+        return None
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return "early momentum timing evidence unavailable"
 
 
 def classify(row: dict[str, Any], cost: float, rules: Rules) -> tuple[str, int, float]:
     """A = persistent uptrend, C = persistent downtrend, B = wait.
 
-    Rank by the absolute one-hour move divided by 15m ATR, multiplied by
-    one-hour path efficiency. Liquidity is an eligibility filter, not momentum.
+    V2 ranks recent fifteen-minute movement and efficiency, discounted by trend
+    age. Legacy research profiles retain their one-hour ranking. Liquidity is
+    an eligibility filter, not momentum.
     Inputs are completed candles only. Missing/invalid observations fail closed.
     """
+    if rules.version == EARLY_VERSION:
+        if not math.isfinite(cost) or cost < 0 or timing_veto(row, rules):
+            return "B", 0, 0.0
+        try:
+            side, _ = direction(row, rules)
+            if not side or entry(row, cost, rules=rules)[0] != side:
+                return "B", 0, 0.0
+            score = abs(float(row["return_15m"])) / (float(row["minute_atr"]) / float(row["close"]))
+            score *= float(row["path_efficiency_15m"]) / (
+                1 + float(row["momentum_trend_age_bars"]) / MAXIMUM_TREND_AGE_BARS
+            )
+            if not math.isfinite(score):
+                return "B", 0, 0.0
+            return ("A" if side > 0 else "C"), side, score
+        except (KeyError, ValueError, TypeError, OverflowError, ZeroDivisionError):
+            return "B", 0, 0.0
     keys = ("return_1h", "path_efficiency_1h", "atr_fraction", "previous_trend_atr")
     try:
         if not all(math.isfinite(float(row[k])) for k in keys):

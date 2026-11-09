@@ -35,9 +35,10 @@ from .engine import Engine
 from .live_broker import LiveBroker
 from .market_trend import day_context, market_context
 from .market_trend import entry_gate as market_entry_gate
-from .minute import HISTORY_BARS
+from .minute import HISTORY_BARS, MOMENTUM_HISTORY_BARS
 from .minute import direction as minute_direction
 from .minute import frame as minute_frame
+from .momentum import EARLY_VERSION, timing_veto
 from .strategy import BAR_MS, choose, execution_rules, indicators, require_execution, strategy_name
 
 
@@ -234,6 +235,7 @@ class SimpleService:
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
                 "funding_carry": self.store.get("carry_status", {"enabled": self.s.simple_carry_enabled}),
+                "momentum_timing": self.store.get("simple_momentum_timing"),
                 "entry_timeframe": self.entry_timeframe,
                 "ai_review_minutes": self.s.simple_ai_review_minutes,
                 "risk_context_timeframe": "15m",
@@ -476,6 +478,8 @@ class SimpleService:
         self, symbol: str, timeframe: str, boundary: int, context: dict[str, Any]
     ) -> Any:
         interval_ms = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS}[timeframe]
+        early_momentum = timeframe == "5m" and self.rules.version == EARLY_VERSION
+        bars = MOMENTUM_HISTORY_BARS if early_momentum else HISTORY_BARS
         async with asyncio.timeout(12):
             raw = await self.exchange.request(
                 "GET",
@@ -483,12 +487,12 @@ class SimpleService:
                 {
                     "symbol": symbol,
                     "interval": "1m" if timeframe == "8m" else timeframe,
-                    "limit": HISTORY_BARS * 8 if timeframe == "8m" else HISTORY_BARS,
-                    "startTime": boundary - HISTORY_BARS * interval_ms,
+                    "limit": HISTORY_BARS * 8 if timeframe == "8m" else bars,
+                    "startTime": boundary - bars * interval_ms,
                     "endTime": boundary - 1,
                 },
             )
-        data = await asyncio.to_thread(minute_frame, raw, context, boundary, timeframe)
+        data = await asyncio.to_thread(minute_frame, raw, context, boundary, timeframe, early_momentum=early_momentum)
         columns = [
             "timestamp_ms",
             "open_ms",
@@ -655,6 +659,14 @@ class SimpleService:
                 self.store.put("simple_minute:" + symbol, rows.get(symbol))
             self.store.put("simple_selected", selected)
             self.store.put("simple_scan_at_ms", self.now_ms())
+            if self.rules.version == EARLY_VERSION:
+                self.store.put("simple_momentum_timing", {
+                    "version": EARLY_VERSION, "asof_ms": boundary, "maximum_trend_age_minutes": 60,
+                    "confirmation_minutes": [5, 15],
+                    "blocked": {symbol: reason for symbol, row in rows.items()
+                                if (reason := timing_veto(row, self.rules))},
+                    "selected": selected,
+                })
             self.store.audit(
                 "simple_selection",
                 {

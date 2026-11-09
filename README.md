@@ -9,6 +9,10 @@ remains the installation default. Account-specific spot-market permissions can
 block hedge entries independently of momentum. The execution implementation is
 separate from the offline research engine below.
 
+The [November 9 entry-timing audit](docs/MOMENTUM_ENTRY_TIMING_2026-11-09.md)
+documents earlier closed-candle confirmation, a sixty-minute entry window and
+exhaustion checks for new momentum positions, with original exits preserved.
+
 ## Independent strategy redesign
 
 The [internet research and two-year redesign review](docs/STRATEGY_REDESIGN_2026-11-08.md)
