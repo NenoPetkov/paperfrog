@@ -97,6 +97,11 @@ def explain(s: Settings, store: Store, now_ms: int, crisis: bool, armed: bool) -
     blockers: list[str] = []
     notes: list[str] = []
     lines = ["Trading check", f"As of {stamp(now_ms)}", state_label(values["state"] or "BOOTING")]
+    if s.simple_exit_policy == "fixed_roe":
+        ranking = store.get("simple_candidate_ranking", {})
+        lines += ["New positions: +5% / -5% gross return on margin at 2x; no trend, trailing or time exit.",
+                  f"Selection: {ranking.get('pool_size', 0)} liquid coins assessed; one best eligible setup.",
+                  "Scheduled OpenAI entry reviews: disabled."]
     if values["manual_lock"]:
         blockers.append("Manual pause is active.")
     if values["local_flatten_request"]:

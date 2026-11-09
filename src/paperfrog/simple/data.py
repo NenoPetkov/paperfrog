@@ -77,7 +77,7 @@ async def scan(adapter: BinanceAdapter, s: Settings) -> dict[str, Any]:
         x["symbol"]: x
         for x in info["symbols"]
         if x["symbol"] in adapter.filters
-        and (not s.simple_entry_profile.startswith("momentum") or x["symbol"] in researched_symbols)
+        and (s.simple_exit_policy == "fixed_roe" or not s.simple_entry_profile.startswith("momentum") or x["symbol"] in researched_symbols)
         and x["symbol"] != "BTCUSDT"
         and not (s.simple_carry_enabled and x["symbol"] == "ETHUSDT")
         and re.fullmatch(r"[A-Z0-9]{2,24}USDT", x["symbol"])

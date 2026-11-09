@@ -8,7 +8,7 @@ import random
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -243,7 +243,8 @@ class BinanceAdapter:
         await self.create_stop(symbol, side, trigger, key)
 
     async def create_stop(
-        self, symbol: str, side: int, trigger: Decimal, key: str
+        self, symbol: str, side: int, trigger: Decimal, key: str,
+        *, order_type: Literal["STOP_MARKET", "TAKE_PROFIT_MARKET"] = "STOP_MARKET",
     ) -> dict[str, Any]:
         if self.s.trading_mode == "paper":
             raise SafeError("paper mode cannot change exchange stops")
@@ -256,7 +257,7 @@ class BinanceAdapter:
                 "symbol": symbol,
                 "side": "SELL" if side > 0 else "BUY",
                 "positionSide": "BOTH",
-                "type": "STOP_MARKET",
+                "type": order_type,
                 "triggerPrice": str(trigger),
                 "closePosition": "true",
                 "workingType": "MARK_PRICE",

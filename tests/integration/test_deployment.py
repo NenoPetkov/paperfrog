@@ -100,12 +100,18 @@ def test_previous_config_schema_allows_only_disabled_carry_default(tmp_path):
     settings = Settings(_env_file=None)
     values = settings.public()
     values.pop("simple_carry_enabled")
-    context = {**ops.context(settings), "config_hash": hashlib.sha256(
-        json.dumps(values, sort_keys=True).encode()).hexdigest()}
+    context = {
+        **ops.context(settings),
+        "config_hash": hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest(),
+    }
     previous = tmp_path / "previous.json"
     previous.write_text(json.dumps(context))
     ops.compare(settings, previous)
-    for update in ({"simple_carry_enabled": True}, {"risk_per_trade": .001}, {"trading_mode": "live"}):
+    for update in (
+        {"simple_carry_enabled": True},
+        {"risk_per_trade": 0.001},
+        {"trading_mode": "live"},
+    ):
         with pytest.raises(ops.DeploymentError):
             ops.compare(settings.model_copy(update=update), previous)
 
@@ -236,3 +242,106 @@ def test_idle_startup_requires_new_scan_and_successful_monitor(
         monkeypatch.setattr(ops.time, "sleep", lambda _: None)
         with pytest.raises(ops.DeploymentError, match="not confirmed"):
             ops.wait_online(settings, 1)
+
+
+def test_previous_schema_with_live_carry_accepts_only_default_trend_policy(tmp_path, settings):
+    from test_simple_live import live_settings
+
+    s = live_settings(
+        settings,
+        simple_entry_profile="momentum",
+        simple_entry_timeframe="5m",
+        simple_carry_enabled=True,
+    )
+    values = s.public()
+    values.pop("simple_exit_policy")
+    previous = {
+        **ops.context(s),
+        "config_hash": hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest(),
+    }
+    path = tmp_path / "previous.json"
+    path.write_text(json.dumps(previous))
+    ops.compare(s, path)
+    with pytest.raises(ops.DeploymentError):
+        ops.compare(s.model_copy(update={"simple_exit_policy": "fixed_roe"}), path)
+    with pytest.raises(ops.DeploymentError):
+        ops.compare(s.model_copy(update={"risk_per_trade": 0.001}), path)
+
+
+def test_fixed_roe_activation_changes_only_reviewed_settings_and_preserves_locks(
+    tmp_path, settings, monkeypatch
+):
+    from test_simple_live import live_settings
+
+    from paperfrog.domain.types import SafeError
+    from paperfrog.simple.authorization import directory, verify_simple_arm
+    from paperfrog.storage.database import Store
+
+    monkeypatch.chdir(tmp_path)
+    s = live_settings(
+        settings,
+        state_dir=tmp_path / "state",
+        simple_entry_profile="momentum",
+        simple_entry_timeframe="5m",
+        simple_selected_count=10,
+        simple_sizing_mode="margin",
+        simple_position_margin_cap=0.1,
+    )
+    values = {
+        **s.public(),
+        "binance_api_key": "mock-account-key",
+        "binance_api_secret": "mock-signing-secret",
+    }
+    values.pop("exchange_leverage")
+    env = tmp_path / ".env"
+    env.write_text("\n".join(f"{k.upper()}={json.dumps(v)}" for k, v in values.items()) + "\n")
+    previous = tmp_path / "context.json"
+    previous.write_text(json.dumps(ops.context(s)))
+    store = Store(directory(s) / "paperfrog.sqlite")
+    saved = {
+        "reconciled": True,
+        "risk_lock": {"state": "HARD_RISK_LOCK", "reason": "high_water"},
+        "manual_lock": True,
+        "consecutive_losses": 4,
+        "loss_cooldown_step": 2,
+        "anchors": {"high_water": 1000, "equity": 950},
+        "simple_positions": {
+            "SOLUSDT": {
+                "entry_context": {"entry_profile": "momentum"},
+                "entry_mode": "trend",
+                "entry_timeframe": "5m",
+                "stop_price": 95,
+            }
+        },
+    }
+    try:
+        for k, v in saved.items():
+            store.put(k, v)
+        store.put("simple_pending", {"SOLUSDT": {"id": "pending"}})
+        original = env.read_bytes()
+        with pytest.raises(ops.DeploymentError, match="pending execution"):
+            ops.activate_fixed_roe(tmp_path, s, previous)
+        assert env.read_bytes() == original
+        store.put("simple_pending", {})
+        ops.activate_fixed_roe(tmp_path, s, previous)
+        loaded = Settings()
+        assert loaded.simple_exit_policy == "fixed_roe" and loaded.simple_scan_limit == 100
+        assert loaded.simple_selected_count == 1 and not loaded.simple_ai_enabled
+        assert loaded.exchange_leverage == s.exchange_leverage == 2
+        allowed = {
+            "simple_exit_policy",
+            "simple_scan_limit",
+            "simple_selected_count",
+            "simple_ai_enabled",
+            "simple_confidence_enabled",
+        }
+        assert {k: v for k, v in loaded.public().items() if k not in allowed} == {
+            k: v for k, v in s.public().items() if k not in allowed
+        }
+        assert {k: store.get(k) for k in saved} == saved
+        assert env.stat().st_mode & 0o077 == 0
+        assert json.loads(previous.read_text()) == ops.context(loaded)
+        with pytest.raises(SafeError):
+            verify_simple_arm(loaded)
+    finally:
+        store.engine.dispose()

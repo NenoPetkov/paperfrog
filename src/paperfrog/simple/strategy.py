@@ -129,6 +129,9 @@ def execution_rules(s: Settings) -> Rules:
         if s.simple_entry_mode != "trend":
             raise SafeError("active entry profile requires trend mode")
         rules = ACTIVE_RULES
+    if s.simple_exit_policy == "fixed_roe":
+        from .fixed_roe import PRICE_FRACTION
+        rules = replace(rules, minimum_stop_fraction=float(PRICE_FRACTION), maximum_stop_fraction=float(PRICE_FRACTION))
     return replace(rules, maximum_hold_bars=s.simple_max_hold_hours * 4)
 
 
@@ -236,7 +239,7 @@ def choose(rows: dict[str, dict[str, Any]], s: Settings, rules: Rules = RULES) -
     for symbol, row in rows.items():
         if symbol == "BTCUSDT":
             continue
-        if s.simple_entry_profile.startswith("momentum") and symbol not in researched_symbols:
+        if s.simple_entry_profile.startswith("momentum") and s.simple_exit_policy != "fixed_roe" and symbol not in researched_symbols:
             continue
         values = [row.get(k, math.nan) for k in ("score", "atr_fraction", "daily_volume")]
         if not all(math.isfinite(float(v)) for v in values):
@@ -284,8 +287,10 @@ def entry(
         return 0, "insufficient closed-candle history"
     if not rules.min_atr_fraction <= row["atr_fraction"] <= rules.max_atr_fraction:
         return 0, "volatility outside the permitted range"
+    cost_stop = (rules.maximum_stop_fraction if rules.minimum_stop_fraction == rules.maximum_stop_fraction
+                 else min(rules.maximum_stop_fraction, rules.stop_atr * row["atr_fraction"]))
     if (
-        min(rules.maximum_stop_fraction, rules.stop_atr * row["atr_fraction"])
+        cost_stop
         <= 2 * one_way_cost + 0.0035
     ):
         return 0, "price range too small relative to assumed trading costs"
@@ -393,6 +398,9 @@ def exit_reason(
     row: dict[str, Any] | None,
     rules: Rules = RULES,
 ) -> str | None:
+    if position.get("exit_policy") == "fixed_roe":
+        from .fixed_roe import reason
+        return reason(position, mark)
     side = int(position["side"])
     if side * (mark - float(position["stop_price"])) <= 0:
         return "protective stop or volatility trailing stop reached"
@@ -431,6 +439,8 @@ def exit_reason(
 def tighten_stop(position: dict[str, Any], mark: float, atr: float, rules: Rules = RULES) -> float:
     """Never loosen a stop. Activate trailing after the initial planned stop distance is earned."""
     old = float(position["stop_price"])
+    if position.get("exit_policy") == "fixed_roe":
+        return old
     initial = float(position["initial_stop_distance"])
     side = int(position["side"])
     if (

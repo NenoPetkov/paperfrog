@@ -42,6 +42,8 @@ def strategy_hash(s: Settings) -> str:
         "market_trend.py",
         "momentum.py",
         "carry.py",
+        "fixed_roe.py",
+        "selection.py",
     ):
         digest.update(Path(__file__).with_name(name).read_bytes())
     root = Path(__file__).parent.parent

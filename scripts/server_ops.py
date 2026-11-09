@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -60,12 +61,15 @@ def compare(s: Settings, path: Path) -> None:
         raise DeploymentError("Mode, account or configuration changed; deployment cannot authorize that change.")
     # A release adding an opt-in field must recognize the previous schema's
     # hash, but only with that new feature disabled and every old value equal.
-    legacy_values = s.public()
-    legacy_values.pop("simple_carry_enabled", None)
-    legacy = {**context(s), "config_hash": hashlib.sha256(
-        json.dumps(legacy_values, sort_keys=True).encode()).hexdigest()}
-    if not s.simple_carry_enabled and previous == legacy:
-        return
+    variants = [s.public()]
+    if s.simple_exit_policy == "trend":
+        variants.append({k:v for k,v in s.public().items() if k != "simple_exit_policy"})
+    if not s.simple_carry_enabled:
+        variants += [{k:v for k,v in values.items() if k != "simple_carry_enabled"} for values in list(variants)]
+    for values in variants:
+        legacy = {**context(s), "config_hash": hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()}
+        if previous == legacy:
+            return
     if s.trading_mode != previous.get("mode") or context(s) != previous:
         raise DeploymentError(
             "Mode, account or configuration changed; deployment cannot authorize that change."
@@ -182,6 +186,65 @@ def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hol
         store.engine.dispose()
 
 
+def activate_fixed_roe(root: Path, s: Settings, previous: Path) -> None:
+    """Operator-requested new-entry policy; never widen existing stops or clear locks."""
+    from paperfrog.simple.strategy import require_execution
+    from paperfrog.storage.database import Store
+
+    assert_idle(root)
+    compare(s, previous)
+    require_execution(s)
+    if s.trading_mode != "live" or s.simple_entry_profile != "momentum":
+        raise DeploymentError("Fixed margin-return activation requires the existing authorized LIVE momentum account.")
+    store = Store(directory(s) / "paperfrog.sqlite")
+    try:
+        if (store.get("reconciled") is not True or store.get("simple_pending") or store.get("simple_closing")
+                or store.unresolved_orders()
+                or any(c.get("phase") not in {"OPEN", "CLOSED"} for c in store.get("carry_cycles", {}).values())):
+            raise DeploymentError("Resolve pending execution before changing the new-entry policy.")
+        for trade in store.get("simple_positions", {}).values():
+            if not (trade.get("entry_context", {}).get("entry_profile") == "momentum"
+                    and trade.get("entry_mode") == "trend" and trade.get("entry_timeframe") == "5m"
+                    and trade.get("stop_price", 0) > 0):
+                raise DeploymentError("Existing positions lack original exit evidence; migration refused.")
+        updates = {"simple_exit_policy": "fixed_roe", "simple_scan_limit": 100,
+                   "simple_selected_count": 1, "simple_ai_enabled": False, "simple_confidence_enabled": False}
+        target = Settings(_env_file=root / ".env", **{**s.public(), **updates})
+        if credential_binding(target) != credential_binding(s):
+            raise DeploymentError("Account binding changed; fixed-return activation refused.")
+        env = root / ".env"
+        original = env.read_bytes()
+        keys = {k.upper(): str(v).lower() if isinstance(v,bool) else str(v) for k,v in updates.items()}
+        pattern = re.compile(r"^\s*(?:export\s+)?(" + "|".join(keys) + r")\s*=")
+        lines = [line for line in original.decode().splitlines() if not pattern.match(line)]
+        revised = "\n".join([*lines, *(f"{k}={v}" for k,v in keys.items())]) + "\n"
+        def write(content: bytes) -> None:
+            fd, name = tempfile.mkstemp(prefix=".env.fixed-roe-", dir=root)
+            path = Path(name)
+            try:
+                with os.fdopen(fd,"wb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                path.replace(env)
+            finally:
+                path.unlink(missing_ok=True)
+        write(revised.encode())
+        try:
+            loaded = load_settings()
+            if context(loaded) != context(target):
+                raise DeploymentError("Reloaded configuration differs from reviewed fixed-return settings.")
+        except Exception:
+            write(original)
+            raise
+        previous.write_text(json.dumps(context(loaded)))
+        store.audit("local_fixed_roe_activation", {"parameters": updates, "gross_margin_target": 0.05,
+                    "leverage": s.exchange_leverage, "existing_positions": "original exits retained",
+                    "authorization": "explicit operator margin-return request", "profitability": "unproven"})
+    finally:
+        store.engine.dispose()
+
+
 def check_databases(folder: Path) -> dict[str, dict[str, int]]:
     result = {}
     for path in sorted(folder.rglob("*")):
@@ -282,6 +345,15 @@ def read_status(s: Settings) -> dict[str, Any]:
         "open_positions": status.get("open_positions", []),
         "entry_timeframe": status.get("entry_timeframe"),
         "entry_profile": status.get("entry_profile"),
+        "exit_policy": status.get("exit_policy"),
+        "candidate_ranking": ({**{k:status["candidate_ranking"].get(k) for k in
+                                ("asof_ms", "pool_size", "usable_size", "quote_checked_count", "selected")},
+                              "ranked_count":len(status["candidate_ranking"].get("ranked",[])),
+                              "rejected_count":len(status["candidate_ranking"].get("rejected",{}))}
+                             if status.get("candidate_ranking") else None),
+        "ai_enabled": status.get("adaptive_ai", {}).get("enabled"),
+        "ai_review_minutes": status.get("ai_review_minutes"),
+        "gross_margin_targets": status.get("gross_margin_targets"),
         "entry_strategy": status.get("strategy"),
         "momentum_timing": status.get("momentum_timing"),
         "funding_carry": status.get("funding_carry", {"enabled": False}),
@@ -334,6 +406,9 @@ def main() -> None:
     momentum.add_argument("--hold-hours", type=int, required=True)
     momentum.add_argument("--confirm", required=True)
     momentum.add_argument("--with-carry", action="store_true")
+    fixed = commands.add_parser("activate-fixed-roe")
+    fixed.add_argument("context", type=Path)
+    fixed.add_argument("--confirm", required=True)
     commands.add_parser("context").add_argument("--require-arm", action="store_true")
     commands.add_parser("compare").add_argument("path", type=Path)
     commands.add_parser("rearm").add_argument("path", type=Path)
@@ -362,6 +437,10 @@ def main() -> None:
         if args.confirm != "ACTIVATE LIVE MOMENTUM":
             raise DeploymentError("Explicit local momentum activation confirmation required.")
         activate_momentum(root, s, args.context, args.profile, args.hold_hours, args.with_carry)
+    elif args.command == "activate-fixed-roe":
+        if args.confirm != "SET LIVE FIXED ROE":
+            raise DeploymentError("Explicit local fixed-return activation confirmation required.")
+        activate_fixed_roe(root, s, args.context)
     elif args.command == "context":
         if args.require_arm and s.trading_mode == "live":
             verify_simple_arm(s)

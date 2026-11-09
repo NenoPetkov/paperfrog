@@ -188,7 +188,7 @@ class ExchangeSimulation:
                 "symbol": params["symbol"],
                 "side": params["side"],
                 "positionSide": "BOTH",
-                "orderType": "STOP_MARKET",
+                "orderType": params["type"],
                 "closePosition": True,
                 "workingType": "MARK_PRICE",
                 "triggerPrice": params["triggerPrice"],

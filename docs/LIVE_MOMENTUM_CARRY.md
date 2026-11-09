@@ -6,6 +6,11 @@ PAPER with carry disabled. Telegram cannot enable carry or arm LIVE.
 
 ## Momentum
 
+The locally selected [fixed margin-return policy](FIXED_ROE_100_COIN_SELECTION.md)
+uses the full liquid 100-coin pool and replaces normal exits for new entries with
+hosted +/-5% gross margin-return brackets. The trend-policy behavior below remains
+the installation default and the recorded behavior of older positions.
+
 The combined deployment selects the existing five-minute A/B/C `momentum`
 profile, with a four-hour holding ceiling. It lowers position margin to at most
 10%, retains 2x leverage, and shares the existing entry, concurrency, exposure

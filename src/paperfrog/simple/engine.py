@@ -108,7 +108,18 @@ class Engine:
             broker.require_authorization()
             store.audit("simple_entry_timing_upgrade", {"from": "abc-momentum-v1", "to": "abc-momentum-v2",
                                                        "positions": "retained with original exits and protection"})
-        if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules and not entry_timing_upgrade:
+        fixed_entry_upgrade = (
+            broker is not None and s.simple_exit_policy == "fixed_roe"
+            and stored_rules.get("version") == public_rules["version"] == "abc-momentum-v2"
+            and {**defaults, **stored_rules, "minimum_stop_fraction": public_rules["minimum_stop_fraction"],
+                 "maximum_stop_fraction": public_rules["maximum_stop_fraction"]} == public_rules
+            and all(t.get("entry_mode") == "trend" and (t.get("entry_context") or {}).get("entry_profile") == "momentum"
+                    for t in store.get("simple_positions", {}).values())
+        )
+        if fixed_entry_upgrade:
+            assert broker is not None
+            broker.require_authorization()
+        if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules and not (entry_timing_upgrade or fixed_entry_upgrade):
             raise SafeError("close existing PAPER positions before changing strategy rules")
         self.s, self.store, self.filters = s, store, filters
         self.risk = RiskEngine(
@@ -226,6 +237,9 @@ class Engine:
                 Decimal(str(trade["stop_price"])),
                 client_id(trade["id"], "stop-0"),
             )
+            if trade.get("exit_policy") == "fixed_roe" and isinstance(self.broker, LiveBroker):
+                await self.broker.take_profit(symbol, trade["side"], Decimal(str(trade["take_profit_price"])),
+                                              client_id(trade["id"], "take-0"))
         if not await self.coordinator.reconcile():
             raise SafeError("simple startup reconciliation failed")
         if recover_state:
@@ -280,18 +294,35 @@ class Engine:
         trigger = self.filters[symbol].round_price(
             fill.price * (1 - Decimal(str(intent["stop_fraction"])) * fill.side)
         )
+        if intent.get("exit_policy") == "fixed_roe":
+            from .fixed_roe import trigger as roe_trigger
+            trigger = roe_trigger(fill.price, fill.side, self.filters[symbol].tick, profit=False)
         if (
             stop.get("key") != client_id(intent["id"], "stop-0")
             or stop.get("side") != fill.side
             or Decimal(stop.get("trigger", "0")) != trigger
         ):
             raise SafeError("original entry protection missing or changed; account remains paused")
+        if intent.get("exit_policy") == "fixed_roe" and symbol in self.store.get("live_takes", {}):
+            from .fixed_roe import trigger as roe_trigger
+            take = self.store.get("live_takes")[symbol]
+            if (take.get("key") != client_id(intent["id"], "take-0") or take.get("side") != fill.side
+                    or Decimal(take.get("trigger", "0")) != roe_trigger(fill.price, fill.side, self.filters[symbol].tick, profit=True)):
+                raise SafeError("original take-profit protection changed; account remains paused")
         stop_fill = await self.broker.protection_fill(symbol)
         actual = (await self.broker.positions()).get(symbol, Decimal(0))
         if stop_fill is None:
             if actual != fill.quantity * fill.side:
                 raise SafeError("protected entry quantity mismatch; account remains paused")
             await self.broker.protect(symbol, fill.side, trigger, stop["key"])
+            if intent.get("exit_policy") == "fixed_roe":
+                from .fixed_roe import trigger as roe_trigger
+                take = self.store.get("live_takes", {}).get(symbol, {})
+                target = roe_trigger(fill.price, fill.side, self.filters[symbol].tick, profit=True)
+                if (take.get("key") != client_id(intent["id"], "take-0")
+                        or take.get("side") != fill.side or Decimal(take.get("trigger", "0")) != target):
+                    raise SafeError("original take-profit protection missing or changed; account remains paused")
+                await self.broker.take_profit(symbol, fill.side, target, take["key"])
             await self.broker.verify_liquidation(float(intent["stop_fraction"]))
         elif stop_fill.quantity != fill.quantity or actual != 0:
             raise SafeError("original protective exit is incomplete; account remains paused")
@@ -584,6 +615,9 @@ class Engine:
             "entry_execution_cost": trade.get("entry_execution_cost"),
             "exit_execution_cost": execution_cost(fill, exit_reference),
             "exit_quote_reference": exit_reference,
+            "exit_policy": trade.get("exit_policy", "trend"),
+            "gross_margin_return": gross_pnl / (trade["entry_price"] * float(total_quantity) / trade.get("entry_leverage", self.s.exchange_leverage)),
+            "net_margin_return": pnl / (trade["entry_price"] * float(total_quantity) / trade.get("entry_leverage", self.s.exchange_leverage)),
             "partial_exit_fills": trade.get("partial_exit_fills", []),
         }
         records = self.store.get("simple_closed", [], conn)
@@ -612,6 +646,11 @@ class Engine:
             or fill.side != -self.positions()[fill.symbol]["side"]
         ):
             raise SafeError("unexpected or partial protective stop fill")
+        reason = "protective stop or volatility trailing stop reached"
+        if self.positions()[fill.symbol].get("exit_policy") == "fixed_roe":
+            outcome = self.store.get("live_protection_outcome:" + fill.symbol, {})
+            profit = outcome.get("exchange_id") == fill.exchange_id and outcome.get("kind") == "take_profit"
+            reason = "fixed +5% gross margin-return target reached" if profit else "fixed -5% gross margin-return stop reached"
         with self.store.transaction() as conn:
             expected = self.store.get("expected_positions", {}, conn)
             expected[fill.symbol] = str(
@@ -623,7 +662,7 @@ class Engine:
                 fill.symbol,
                 fill,
                 now_ms,
-                "protective stop or volatility trailing stop reached",
+                reason,
                 conn,
                 exit_reference=exit_reference,
             )
@@ -739,7 +778,7 @@ class Engine:
                 if crisis
                 else exit_reason(learning.position_budget(trade, self.store.get("simple_market_trend"), now_ms, self.s.simple_max_hold_hours), float(q.mark), now_ms, row, self.rules)
             )
-            if not awaiting_initial_scan and (
+            if trade.get("exit_policy") != "fixed_roe" and not awaiting_initial_scan and (
                 row is None
                 or now_ms - row["timestamp_ms"]
                 >= 2
@@ -748,7 +787,7 @@ class Engine:
                 )
             ):
                 reason = reason or "closed-candle monitoring data unavailable"
-            if not reason and self.s.simple_confidence_enabled:
+            if not reason and self.s.simple_confidence_enabled and trade.get("exit_policy") != "fixed_roe":
                 activation = min(
                     float(trade.get("profit_target_fraction") or confidence.SMALL),
                     confidence.target(self.store),
@@ -768,7 +807,7 @@ class Engine:
                 # A gap can cross the floor. A marketable reduction takes priority
                 # over an unreachable profit IOC limit; hosted protection remains.
                 await self.close(symbol, now_ms, reason)
-            elif row is not None:
+            elif row is not None and trade.get("exit_policy") != "fixed_roe":
                 stop = tighten_stop(trade, float(q.mark), float(row["atr"]), self.rules)
                 if stop != trade["stop_price"]:
                     await self.broker.protect(
@@ -969,6 +1008,8 @@ class Engine:
             max(self.rules.minimum_stop_fraction, self.rules.stop_atr * row["atr_fraction"]),
         )
         costs = stop + 2 * self.s.fee_rate + 2 * self.s.slippage_bps / 10000 + spread + 0.002
+        if self.s.simple_exit_policy == "fixed_roe":
+            costs += 2 * float(self.filters[symbol].tick / q.mark)
         visible = q.ask_size if direction > 0 else q.bid_size
         # Bound total unhedged notional using the existing net-beta cap, without assuming offsets.
         outstanding = sum(
@@ -1124,6 +1165,9 @@ class Engine:
             "decision_side": normal_direction,
             "entry_mode": self.s.simple_entry_mode,
             "entry_timeframe": self.entry_timeframe,
+            "exit_policy": self.s.simple_exit_policy,
+            "entry_leverage": self.s.exchange_leverage,
+            "roe_target": 0.05 if self.s.simple_exit_policy == "fixed_roe" else None,
             "max_hold_hours": rotation.hold_hours(self.store, self.s),
             "adaptive_holding": selected_strategy["auto"],
             "momentum_exit_version": 1 if self.s.simple_entry_profile.startswith("momentum") else None,
@@ -1142,6 +1186,9 @@ class Engine:
                 "currency": "BNFCR" if self.s.futures_account_mode == "credits" else "USDT",
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
+                "exit_policy": self.s.simple_exit_policy,
+                "entry_leverage": self.s.exchange_leverage,
+                "roe_target": 0.05 if self.s.simple_exit_policy == "fixed_roe" else None,
                 "entry_timeframe": self.entry_timeframe,
                 "max_hold_hours": rotation.hold_hours(self.store, self.s),
                 "learning_decision": self.store.get(learning.KEY) if selected_strategy["auto"] else None,
@@ -1278,7 +1325,9 @@ class Engine:
         self.record_entry(symbol, fill, intent)
         self.notice(
             trade_id + "-open",
-            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. Strategy: {selected_strategy['active'].upper()}. Why: {reason}. Entry candles {self.entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
+            f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. "
+            + (f"Take-profit {self.positions()[symbol]['take_profit_price']:.6g}; targets +/-5% gross margin return at 2x. " if self.s.simple_exit_policy == "fixed_roe" else "")
+            + f"Strategy: {selected_strategy['active'].upper()}. Why: {reason}. Entry candles {self.entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
         )
 
     def record_entry(self, symbol: str, fill: Fill, intent: dict[str, Any]) -> None:
@@ -1299,6 +1348,9 @@ class Engine:
             "decision_side": intent.get("decision_side", direction),
             "entry_mode": intent.get("entry_mode", self.s.simple_entry_mode),
             "entry_timeframe": intent.get("entry_timeframe", "15m"),
+            "exit_policy": intent.get("exit_policy", "trend"),
+            "entry_leverage": intent.get("entry_leverage", self.s.exchange_leverage),
+            "roe_target": intent.get("roe_target"),
             "max_hold_hours": intent.get("max_hold_hours", self.s.simple_max_hold_hours),
             "adaptive_holding": intent.get("adaptive_holding", False),
             "momentum_exit_version": intent.get("momentum_exit_version"),
@@ -1317,6 +1369,10 @@ class Engine:
                 fill, (intent.get("entry_context") or {}).get("quote_reference")
             ),
         }
+        if intent.get("exit_policy") == "fixed_roe":
+            from .fixed_roe import trigger as roe_trigger
+            positions[symbol]["stop_price"] = float(roe_trigger(fill.price, direction, self.filters[symbol].tick, profit=False))
+            positions[symbol]["take_profit_price"] = float(roe_trigger(fill.price, direction, self.filters[symbol].tick, profit=True))
         observe(positions[symbol], float(fill.price), intent["opened_ms"])
         if self.s.simple_entry_mode == "failed_breakout":
             positions[symbol]["rejection_level"] = intent["rejection_level"]

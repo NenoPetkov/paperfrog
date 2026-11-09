@@ -39,6 +39,7 @@ from .minute import HISTORY_BARS, MOMENTUM_HISTORY_BARS
 from .minute import direction as minute_direction
 from .minute import frame as minute_frame
 from .momentum import EARLY_VERSION, timing_veto
+from .selection import full_universe, select_best
 from .strategy import BAR_MS, choose, execution_rules, indicators, require_execution, strategy_name
 
 
@@ -224,7 +225,8 @@ class SimpleService:
                 "strategy_scope": "per_trade" if rotation.selection(self.store)["auto"] else "manual",
                 "historical_learning": self.store.get(learning.KEY, {}),
                 "learning_research": self.store.get("simple_learning_research", {}),
-                "holding_limit_hours": rotation.hold_hours(self.store, self.s),
+                "holding_limit_hours": None if self.s.simple_exit_policy == "fixed_roe" else rotation.hold_hours(self.store, self.s),
+                "gross_margin_targets": {"profit": 0.05, "loss": -0.05, "leverage": 2} if self.s.simple_exit_policy == "fixed_roe" else None,
                 "confidence": {
                     **confidence.state(self.store),
                     "enabled": self.s.simple_confidence_enabled,
@@ -234,10 +236,12 @@ class SimpleService:
                 },
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
+                "exit_policy": self.s.simple_exit_policy,
+                "candidate_ranking": self.store.get("simple_candidate_ranking"),
                 "funding_carry": self.store.get("carry_status", {"enabled": self.s.simple_carry_enabled}),
                 "momentum_timing": self.store.get("simple_momentum_timing"),
                 "entry_timeframe": self.entry_timeframe,
-                "ai_review_minutes": self.s.simple_ai_review_minutes,
+                "ai_review_minutes": self.s.simple_ai_review_minutes if self.s.simple_ai_enabled else None,
                 "risk_context_timeframe": "15m",
                 "loaded_settings": self.s.simple_parameters(),
                 "breakout_minutes": 5 * self.entry_bar_ms // MINUTE_MS
@@ -648,11 +652,17 @@ class SimpleService:
                 trend_blocks[symbol] = reason
             else:
                 eligible[symbol] = row
+        ranking = None
+        best = None
+        if full_universe(self.s):
+            best, ranking = await select_best(self.s, self.store, self.exchange, rows, boundary, self.now_ms)
         async with self.mutex:
             strategy = rotation.selection(self.store)
             if self.entry_timeframe != timeframe or strategy["epoch"] != strategy_epoch:
                 return False
-            selected = choose(eligible, self.s, self.rules)
+            selected = best if best is not None else choose(eligible, self.s, self.rules)
+            if ranking is not None:
+                self.store.put("simple_candidate_ranking", ranking)
             self.rows, self.minute_frames, self.selected = rows, frames, selected
             # Missing observations immediately revoke dispatch permission for that symbol.
             for symbol in pool:

@@ -5,7 +5,7 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 root=/var/www/paperfrog
 expected=${1:?Expected commit is required}
 policy=${2:-preserve}
-[[ $policy == preserve || $policy == strict-auto || $policy == momentum || $policy == combined ]] || exit 2
+[[ $policy == preserve || $policy == strict-auto || $policy == momentum || $policy == combined || $policy == fixed-roe ]] || exit 2
 if [[ $policy == momentum || $policy == combined ]]; then
   profile=${3:?Momentum profile is required}
   hold=${4:?Holding hours are required}
@@ -56,6 +56,7 @@ git worktree add --detach "$candidate" "$expected"
   uv run --no-sync ruff check src tests scripts
   uv run --no-sync mypy --strict
   uv run --no-sync mypy --strict src/paperfrog/simple/carry.py src/paperfrog/simple/live_broker.py src/paperfrog/simple/momentum.py src/paperfrog/simple/minute.py
+  uv run --no-sync mypy --strict src/paperfrog/simple/fixed_roe.py src/paperfrog/simple/selection.py
   bash -n depoy.sh scripts/deploy_remote.sh
 )
 "$candidate/.venv/bin/python" "$candidate/scripts/server_ops.py" --root "$root" compare "$context"
@@ -80,6 +81,8 @@ uv sync --frozen --python 3.12.14
 .venv/bin/python scripts/server_ops.py compare "$context"
 if [[ $policy == strict-auto ]]; then
   .venv/bin/python scripts/server_ops.py strategy-strict
+elif [[ $policy == fixed-roe ]]; then
+  .venv/bin/python scripts/server_ops.py activate-fixed-roe "$context" --confirm 'SET LIVE FIXED ROE'
 elif [[ $policy == momentum || $policy == combined ]]; then
   carry_args=()
   if [[ $policy == combined ]]; then carry_args=(--with-carry); fi
@@ -94,7 +97,7 @@ systemctl start paperfrog.service
 started=1
 .venv/bin/python scripts/server_ops.py wait --timeout 240
 systemctl start paperfrog-daily-review.timer
-if [[ $policy == momentum || $policy == combined ]]; then
+if [[ $policy == momentum || $policy == combined || $policy == fixed-roe ]]; then
   if systemctl cat paperfrog-momentum-paper.service >/dev/null 2>&1; then
     systemctl disable paperfrog-momentum-paper.service
   fi

@@ -104,7 +104,7 @@ class LiveBroker:
         if any(row.get("clientOrderId") not in known for row in await self.exchange.open_orders()):
             raise SafeError("unknown exchange orders; reconciliation required")
         stops = self.store.get("live_stops", {})
-        keys = {row["key"] for row in stops.values()}
+        keys = {row["key"] for row in (*stops.values(), *self.store.get("live_takes", {}).values())}
         if any(row.get("clientAlgoId") not in keys for row in await self.exchange.open_stops()):
             raise SafeError("unknown exchange protective orders; reconciliation required")
         allowed_symbols = set(self.store.get("expected_positions", {})) | set(
@@ -133,6 +133,8 @@ class LiveBroker:
                 return await self.exchange.submit(order)
             if order.symbol == "BTCUSDT":
                 raise SafeError("BTC is reference-only; new BTC positions are forbidden")
+            if order.symbol in self.store.get("live_stops", {}) or order.symbol in self.store.get("live_takes", {}):
+                raise EntryVeto("previous hosted protection must be cleared before a new entry")
             self.require_authorization()
             await self.refresh()
             permission = self.store.get("simple_strategy_order:" + order.client_id, {})
@@ -254,9 +256,9 @@ class LiveBroker:
         self.exchange.entry_authorized = False
         await self.exchange.cancel_entries()
 
-    async def query_stop(self, key: str) -> dict[str, Any]:
+    async def query_stop(self, key: str, *, mapping: str = "live_stops") -> dict[str, Any]:
         stop: dict[str, Any] = next(
-            (v for v in self.store.get("live_stops", {}).values() if v["key"] == key), {}
+            (v for v in self.store.get(mapping, {}).values() if v["key"] == key), {}
         )
         params = {"algoId": stop["algo_id"]} if stop.get("algo_id") else {"clientAlgoId": key}
         for attempt in range(3):
@@ -274,13 +276,13 @@ class LiveBroker:
                 await asyncio.sleep(0.2 * (attempt + 1))
         raise SafeError("hosted protection unavailable")
 
-    def validate_stop(self, result: dict[str, Any], symbol: str, stop: dict[str, Any]) -> None:
+    def validate_stop(self, result: dict[str, Any], symbol: str, stop: dict[str, Any], *, order_type: str = "STOP_MARKET") -> None:
         if not (
             result.get("clientAlgoId") == stop["key"]
             and result.get("symbol") == symbol
             and result.get("side") == ("SELL" if stop["side"] > 0 else "BUY")
             and result.get("positionSide") == "BOTH"
-            and result.get("orderType") == "STOP_MARKET"
+            and result.get("orderType") == order_type
             and result.get("closePosition") is True
             and result.get("workingType") == "MARK_PRICE"
             and Decimal(str(result.get("triggerPrice", "0"))) == Decimal(stop["trigger"])
@@ -322,13 +324,55 @@ class LiveBroker:
             return None
         return await self.protection_fill(symbol)
 
+    async def take_profit(self, symbol: str, side: int, trigger: Decimal, key: str) -> None:
+        takes = self.store.get("live_takes", {})
+        existing = takes.get(symbol)
+        if existing:
+            if existing["key"] != key or existing["side"] != side or Decimal(existing["trigger"]) != trigger:
+                raise SafeError("take-profit identity changed")
+            result = await self.query_stop(key, mapping="live_takes")
+        else:
+            takes[symbol] = {"key": key, "side": side, "trigger": str(trigger), "state": "INTENDED"}
+            self.store.put("live_takes", takes)
+            result = await self.exchange.create_stop(symbol, side, trigger, key, order_type="TAKE_PROFIT_MARKET")
+            self.validate_stop(result, symbol, takes[symbol], order_type="TAKE_PROFIT_MARKET")
+            if result.get("algoId"):
+                takes[symbol]["algo_id"] = str(result["algoId"])
+                self.store.put("live_takes", takes)
+            result = await self.query_stop(key, mapping="live_takes")
+        self.validate_stop(result, symbol, takes[symbol], order_type="TAKE_PROFIT_MARKET")
+        if result.get("algoStatus") != "NEW":
+            raise SafeError("hosted take-profit is not active; reconcile execution")
+        takes[symbol]["state"] = "CONFIRMED"
+        self.store.put("live_takes", takes)
+
     async def protection_fill(self, symbol: str) -> Fill | None:
         """Read an original hosted stop, including an entry awaiting recovery."""
-        stop = self.store.get("live_stops", {}).get(symbol)
+        errors: list[SafeError] = []
+        filled: list[Fill] = []
+        for mapping in ("live_stops", "live_takes"):
+            try:
+                fill = await self.conditional_fill(symbol, mapping)
+                if fill is not None:
+                    filled.append(fill)
+                    self.store.put("live_protection_outcome:" + symbol, {"exchange_id": fill.exchange_id,
+                                   "kind": "take_profit" if mapping == "live_takes" else "stop"})
+            except SafeError as exc:
+                errors.append(exc)
+        if len(filled) > 1:
+            raise SafeError("multiple protective fills; reconcile before trading")
+        if filled:
+            return filled[0]
+        if errors:
+            raise errors[0]
+        return None
+
+    async def conditional_fill(self, symbol: str, mapping: str) -> Fill | None:
+        stop = self.store.get(mapping, {}).get(symbol)
         if stop is None:
             return None
-        result = await self.query_stop(stop["key"])
-        self.validate_stop(result, symbol, stop)
+        result = await self.query_stop(stop["key"], mapping=mapping)
+        self.validate_stop(result, symbol, stop, order_type="TAKE_PROFIT_MARKET" if mapping == "live_takes" else "STOP_MARKET")
         actual_id = result.get("actualOrderId")
         if actual_id and str(actual_id) != "0":
             order = await self.exchange.request(
@@ -401,3 +445,6 @@ class LiveBroker:
         stops = self.store.get("live_stops", {})
         stops.pop(symbol, None)
         self.store.put("live_stops", stops)
+        takes = self.store.get("live_takes", {})
+        takes.pop(symbol, None)
+        self.store.put("live_takes", takes)

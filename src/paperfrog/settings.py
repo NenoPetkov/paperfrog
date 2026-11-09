@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active", "momentum", "momentum_selective", "momentum_breakout", "momentum_pullback"] = "standard"
     simple_max_hold_hours: int = Field(4, ge=1, le=24)
+    simple_exit_policy: Literal["trend", "fixed_roe"] = "trend"
     simple_sizing_mode: Literal["risk", "margin", "equity_range"] = "risk"
     simple_position_margin_cap: float = Field(0.8, gt=0, le=0.8)
     simple_total_margin_cap: float = Field(1.0, gt=0, le=1.0)
@@ -113,6 +114,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.simple_exit_policy == "fixed_roe" and not (
+            self.simple_entry_profile == "momentum" and self.simple_selected_count == 1
+            and self.simple_scan_limit == 100
+        ):
+            raise ValueError("fixed margin-return exits require base momentum and one best candidate across the 100-coin pool")
         if self.simple_carry_enabled and not (
             self.trading_mode == "live" and self.simple_entry_profile.startswith("momentum")
         ):
@@ -178,6 +184,8 @@ class Settings(BaseSettings):
                     "simple_entry_profile",
                     "simple_entry_timeframe",
                     "simple_max_hold_hours",
+                    "simple_exit_policy",
+                    "simple_scan_limit",
                     "simple_sizing_mode",
                     "simple_position_margin_cap",
                     "simple_total_margin_cap",

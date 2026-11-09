@@ -1,5 +1,12 @@
 # paperfrog
 
+## Fixed margin-return policy
+
+The [fixed-ROE and full-pool guide](docs/FIXED_ROE_100_COIN_SELECTION.md) documents
+new entries with exchange-hosted +/-5% gross margin-return exits at 2x, one best
+eligible candidate assessed across up to 100 liquid markets, and disabled OpenAI
+reviews. Existing positions and account risk safeguards retain their original state.
+
 ## LIVE momentum and funding hedge
 
 The [combined runtime and operations guide](docs/LIVE_MOMENTUM_CARRY.md) describes

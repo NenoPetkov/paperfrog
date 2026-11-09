@@ -186,7 +186,15 @@ def require_order(
 
     if order.reduce_only or s.simple_entry_profile not in PROFILES:
         return
-    if order.symbol not in SYMBOLS:
+    if s.simple_exit_policy == "fixed_roe":
+        from .selection import pool_hash
+        ranked = store.get("simple_candidate_ranking", {})
+        if (order.symbol not in store.get("simple_pool", [])
+                or ranked.get("selected") != [order.symbol] or ranked.get("config_hash") != s.config_hash
+                or ranked.get("pool_hash") != pool_hash(store.get("simple_pool", []))
+                or not 0 <= now_ms-int(ranked.get("asof_ms", 0)) < s.simple_entry_bar_ms):
+            raise EntryVeto("full-universe selection permission missing, changed or expired")
+    elif order.symbol not in SYMBOLS:
         raise EntryVeto("momentum symbol is outside the researched universe")
     permission = store.get("simple_minute_order:" + order.client_id, {})
     row = permission.get("row", {})
