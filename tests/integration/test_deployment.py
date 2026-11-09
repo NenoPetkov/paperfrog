@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import importlib.util
 import io
 import json
@@ -93,6 +94,20 @@ def test_deployment_rejects_changed_risk_or_mode(tmp_path):
         ops.compare(settings.model_copy(update={"risk_per_trade": 0.004}), previous)
     with pytest.raises(ops.DeploymentError, match="configuration changed"):
         ops.compare(settings.model_copy(update={"trading_mode": "live"}), previous)
+
+
+def test_previous_config_schema_allows_only_disabled_carry_default(tmp_path):
+    settings = Settings(_env_file=None)
+    values = settings.public()
+    values.pop("simple_carry_enabled")
+    context = {**ops.context(settings), "config_hash": hashlib.sha256(
+        json.dumps(values, sort_keys=True).encode()).hexdigest()}
+    previous = tmp_path / "previous.json"
+    previous.write_text(json.dumps(context))
+    ops.compare(settings, previous)
+    for update in ({"simple_carry_enabled": True}, {"risk_per_trade": .001}, {"trading_mode": "live"}):
+        with pytest.raises(ops.DeploymentError):
+            ops.compare(settings.model_copy(update=update), previous)
 
 
 def test_startup_wait_accepts_preserved_cooldown_without_reset(monkeypatch, capsys):

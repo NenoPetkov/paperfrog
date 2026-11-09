@@ -260,8 +260,9 @@ def test_hourly_research_context_cannot_see_future_prices(monkeypatch):
     assert partial.timestamp_ms.max() == 71 * study.HOUR
 
 
+@pytest.mark.parametrize("with_carry", [False, True])
 def test_live_activation_preserves_account_and_locks_and_refuses_open_position(
-    settings, tmp_path, monkeypatch
+    settings, tmp_path, monkeypatch, with_carry
 ):
     from paperfrog.storage.database import Store
 
@@ -301,14 +302,15 @@ def test_live_activation_preserves_account_and_locks_and_refuses_open_position(
         ledger.put("simple_positions", {"SOLUSDT": {"stop_price": 99}})
         original = env.read_bytes()
         with pytest.raises(ops.DeploymentError, match="flat"):
-            ops.activate_momentum(tmp_path, s, context, "momentum_breakout", 4)
+            ops.activate_momentum(tmp_path, s, context, "momentum_breakout", 4, with_carry)
         assert env.read_bytes() == original
         ledger.put("simple_positions", {})
-        ops.activate_momentum(tmp_path, s, context, "momentum_breakout", 4)
+        ops.activate_momentum(tmp_path, s, context, "momentum_breakout", 4, with_carry)
         new = Settings()
         assert new.trading_mode == "live" and new.simple_entry_profile == "momentum_breakout"
         assert new.exchange_leverage == 2 and new.simple_position_margin_cap == 0.1
         assert new.simple_sizing_mode == "margin"
+        assert new.simple_carry_enabled is with_carry
         assert new.max_strategy_entries_per_day <= s.max_strategy_entries_per_day
         assert (
             new.binance_api_key == s.binance_api_key

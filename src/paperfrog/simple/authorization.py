@@ -41,6 +41,7 @@ def strategy_hash(s: Settings) -> str:
         "minute.py",
         "market_trend.py",
         "momentum.py",
+        "carry.py",
     ):
         digest.update(Path(__file__).with_name(name).read_bytes())
     root = Path(__file__).parent.parent

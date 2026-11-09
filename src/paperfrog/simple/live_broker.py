@@ -61,6 +61,17 @@ class LiveBroker:
             raise SafeError("exchange account valuation unavailable") from None
         # Use Binance's USD total once. BNFCR and collateral asset rows must not be summed.
         self._equity, self.available = equity, available
+        if self.s.simple_carry_enabled:
+            from .carry import number
+
+            valuation = self.store.get("carry_valuation", {})
+            self._equity += number(valuation.get("spot_pnl", 0))
+            # Reserve collateral against the carry book even after Binance has
+            # already deducted its initial margin. Momentum cannot spend it.
+            reserved = sum((number(c.get("future_quantity", 0))
+                            * number(c.get("future_entry", 0)) * Decimal("1.5")
+                            for c in self.store.get("carry_cycles", {}).values()), Decimal(0))
+            self.available = max(Decimal(0), available - reserved)
         self.account_at_ms = self.now_ms()
 
     async def refresh_quote(self, symbol: str) -> Quote:
@@ -71,6 +82,12 @@ class LiveBroker:
     def equity(self) -> Decimal:
         if not 0 <= self.now_ms() - self.account_at_ms <= self.s.account_stale_seconds * 1000:
             raise SafeError("exchange account valuation stale")
+        if self.s.simple_carry_enabled and self.store.get("carry_cycles"):
+            valuation = self.store.get("carry_valuation", {})
+            if not 0 <= self.now_ms() - valuation.get("timestamp_ms", 0) <= self.s.market_stale_seconds * 1000:
+                raise SafeError("carry spot valuation stale; new entries blocked")
+        if self._equity <= 0:
+            raise SafeError("combined strategy equity unavailable")
         return self._equity
 
     async def preflight(self) -> None:
@@ -100,6 +117,20 @@ class LiveBroker:
 
     async def submit(self, order: Order) -> Fill:
         if not order.reduce_only:
+            if self.s.simple_carry_enabled and order.symbol in {"BTCUSDT", "ETHUSDT"}:
+                from .carry import require_order
+
+                self.require_authorization()
+                require_order(self.s, self.store, order, self.now_ms())
+                await self.refresh()
+                carry_quote = await self.refresh_quote(order.symbol)
+                require_order(self.s, self.store, order, self.now_ms())
+                if (order.limit_price > carry_quote.bid or order.limit_price < carry_quote.bid * Decimal("0.998")
+                        or order.quantity > carry_quote.bid_size * Decimal(str(self.s.max_participation))
+                        or order.quantity * carry_quote.ask * Decimal("1.5") > self.available):
+                    raise EntryVeto("carry execution quote or collateral changed")
+                self.exchange.entry_authorized = True
+                return await self.exchange.submit(order)
             if order.symbol == "BTCUSDT":
                 raise SafeError("BTC is reference-only; new BTC positions are forbidden")
             self.require_authorization()

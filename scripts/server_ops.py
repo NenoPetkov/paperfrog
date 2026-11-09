@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -55,6 +56,16 @@ def context(s: Settings) -> dict[str, str]:
 
 def compare(s: Settings, path: Path) -> None:
     previous = json.loads(path.read_text())
+    if s.trading_mode != previous.get("mode"):
+        raise DeploymentError("Mode, account or configuration changed; deployment cannot authorize that change.")
+    # A release adding an opt-in field must recognize the previous schema's
+    # hash, but only with that new feature disabled and every old value equal.
+    legacy_values = s.public()
+    legacy_values.pop("simple_carry_enabled", None)
+    legacy = {**context(s), "config_hash": hashlib.sha256(
+        json.dumps(legacy_values, sort_keys=True).encode()).hexdigest()}
+    if not s.simple_carry_enabled and previous == legacy:
+        return
     if s.trading_mode != previous.get("mode") or context(s) != previous:
         raise DeploymentError(
             "Mode, account or configuration changed; deployment cannot authorize that change."
@@ -92,7 +103,7 @@ def strict_auto(root: Path, s: Settings) -> None:
         store.engine.dispose()
 
 
-def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hold: int) -> None:
+def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hold: int, carry: bool = False) -> None:
     """Explicit operator-requested LIVE migration; no account, leverage or lock reset."""
     from paperfrog.simple.momentum import PROFILES
     from paperfrog.simple.strategy import require_execution
@@ -112,11 +123,13 @@ def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hol
     try:
         if (store.get("reconciled") is not True or store.get("simple_positions")
                 or store.get("simple_pending") or store.get("simple_closing")
+                or any(c.get("phase") != "CLOSED" for c in store.get("carry_cycles", {}).values())
                 or store.unresolved_orders()
                 or any(Decimal(str(q)) != 0 for q in store.get("expected_positions", {}).values())):
             raise DeploymentError("Momentum migration requires a flat reconciled account with no pending orders; existing positions are not altered.")
         updates = {
             "simple_entry_profile": profile, "simple_entry_mode": "trend",
+            "simple_carry_enabled": carry,
             "simple_entry_timeframe": "5m", "simple_ai_review_minutes": 15,
             "simple_max_hold_hours": hold, "simple_selected_count": 10,
             "simple_btc_reference_enabled": False, "simple_market_trend_enabled": False,
@@ -126,7 +139,7 @@ def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hol
             # restores the existing quote-liquidity cap; never round risk up.
             "simple_sizing_mode": "margin",
             "simple_position_margin_cap": min(s.simple_position_margin_cap, 0.1),
-            "max_concurrent_strategy_trades": min(s.max_concurrent_strategy_trades, 2),
+            "max_concurrent_strategy_trades": min(s.max_concurrent_strategy_trades, 4 if carry else 2),
             "max_strategy_entries_per_day": min(s.max_strategy_entries_per_day, 12),
             "max_entries_per_symbol_per_day": min(s.max_entries_per_symbol_per_day, 2),
             "max_spread": min(s.max_spread, 0.0003),
@@ -268,6 +281,8 @@ def read_status(s: Settings) -> dict[str, Any]:
         "risk_locked": bool(runtime.get("risk_lock")),
         "open_positions": status.get("open_positions", []),
         "entry_timeframe": status.get("entry_timeframe"),
+        "entry_profile": status.get("entry_profile"),
+        "funding_carry": status.get("funding_carry", {"enabled": False}),
         "scan_pool_count": status.get("scan_pool_count"),
         "settings_match": status.get("loaded_settings") == s.simple_parameters(),
         "live_armed": verify_simple_arm(s) if s.trading_mode == "live" else False,
@@ -316,6 +331,7 @@ def main() -> None:
     momentum.add_argument("--profile", required=True)
     momentum.add_argument("--hold-hours", type=int, required=True)
     momentum.add_argument("--confirm", required=True)
+    momentum.add_argument("--with-carry", action="store_true")
     commands.add_parser("context").add_argument("--require-arm", action="store_true")
     commands.add_parser("compare").add_argument("path", type=Path)
     commands.add_parser("rearm").add_argument("path", type=Path)
@@ -343,7 +359,7 @@ def main() -> None:
     elif args.command == "activate-momentum":
         if args.confirm != "ACTIVATE LIVE MOMENTUM":
             raise DeploymentError("Explicit local momentum activation confirmation required.")
-        activate_momentum(root, s, args.context, args.profile, args.hold_hours)
+        activate_momentum(root, s, args.context, args.profile, args.hold_hours, args.with_carry)
     elif args.command == "context":
         if args.require_arm and s.trading_mode == "live":
             verify_simple_arm(s)

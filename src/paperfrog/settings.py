@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     futures_account_mode: Literal["isolated", "credits"] = "isolated"
     simple_live_research_waiver: bool = False
     simple_confidence_enabled: bool = False
+    simple_carry_enabled: bool = False
     simple_ai_enabled: bool = False
     simple_ai_review_minutes: int = Field(15, ge=1, le=15)
     simple_ai_output_limit: int = Field(4000, ge=512, le=8192)
@@ -112,6 +113,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.simple_carry_enabled and not (
+            self.trading_mode == "live" and self.simple_entry_profile.startswith("momentum")
+        ):
+            raise ValueError("funding carry requires explicitly authorized LIVE momentum coexistence")
         if self.simple_entry_profile.startswith("momentum") and not (
             self.strategy_profile == "simple"
             and self.simple_entry_mode == "trend"
@@ -188,6 +193,7 @@ class Settings(BaseSettings):
                     "high_water_drawdown",
                     "profit_guard_scale",
                     "simple_confidence_enabled",
+                    "simple_carry_enabled",
                     "simple_ai_enabled",
                     "simple_ai_review_minutes",
                     "simple_ai_output_limit",

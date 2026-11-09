@@ -28,6 +28,8 @@ from .analysis import refresh_reports
 from .authorization import directory, verify_simple_arm
 from .bitcoin import BTC, MINUTE_BARS, MINUTE_MS, closed_reference, fast_reference, pair_features
 from .blockers import explain
+from .carry import Carry
+from .carry import positions as carry_positions
 from .data import candles, funding, normalize, quote_snapshot, scan
 from .engine import Engine
 from .live_broker import LiveBroker
@@ -54,6 +56,7 @@ class SimpleService:
         )
         self.exchange = BinanceAdapter(s)
         self.engine: Engine | None = None
+        self.carry: Carry | None = None
         self.rows: dict[str, dict[str, Any]] = {}
         self.held_rows: dict[str, dict[str, Any]] = {}
         self.context_rows: dict[str, dict[str, Any]] = {}
@@ -137,6 +140,10 @@ class SimpleService:
             self.store.transition(State.PAUSED, "operator requested closing all positions")
             for symbol in list(self.engine.positions()):
                 await self.engine.close(symbol, self.now_ms(), "operator requested flatten")
+            if self.carry is not None:
+                await self.carry.tick(entries=False, flatten=True)
+                if any(c["phase"] != "CLOSED" for c in self.carry.cycles().values()):
+                    return False
             return not await self.engine.broker.positions()
 
     async def strategy_control(self, choice: str | None) -> str:
@@ -164,10 +171,21 @@ class SimpleService:
         positions = (
             self.engine.positions() if self.engine else self.store.get("simple_positions", {})
         )
+        carry_text = ""
+        if self.s.simple_carry_enabled:
+            result = self.store.get("carry_status", {})
+            carry_text = f"\nFunding carry LIVE: {result.get('state', 'starting')}"
+            if result.get("reason"):
+                carry_text += f" — {result['reason']}"
+            if command == "/positions":
+                for symbol, cycle in self.store.get("carry_cycles", {}).items():
+                    if cycle.get("phase") != "CLOSED":
+                        carry_text += (f"\n{symbol}: spot {cycle.get('spot_quantity', '0')}; "
+                                       f"short futures {cycle.get('future_quantity', '0')}; {cycle['phase']}")
         if command == "/status":
-            return status_text(self.store.get("state", State.BOOTING), positions)
+            return status_text(self.store.get("state", State.BOOTING), positions) + carry_text
         if command == "/positions":
-            return positions_text(positions)
+            return positions_text(positions) + carry_text
         return await self.diagnostics(command)
 
     async def diagnostics(self, command: str) -> str:
@@ -215,6 +233,7 @@ class SimpleService:
                 },
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
+                "funding_carry": self.store.get("carry_status", {"enabled": self.s.simple_carry_enabled}),
                 "entry_timeframe": self.entry_timeframe,
                 "ai_review_minutes": self.s.simple_ai_review_minutes,
                 "risk_context_timeframe": "15m",
@@ -225,7 +244,7 @@ class SimpleService:
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
                 "selected": self.selected,
-                "open_positions": list(self.engine.positions()) if self.engine else [],
+                "open_positions": list(dict.fromkeys([*(self.engine.positions() if self.engine else {}), *carry_positions(self.store)])),
                 "equity": self.store.get("anchors", {}).get("equity"),
                 "loss_lock": self.store.get("risk_lock"),
                 "daily_entry_cap": self.s.max_strategy_entries_per_day,
@@ -763,12 +782,15 @@ class SimpleService:
                 if engine is None:
                     raise SafeError("simple engine unavailable")
                 if isinstance(engine.broker, LiveBroker):
+                    if self.carry is not None:
+                        async with self.mutex:
+                            await self.carry.tick()
                     await engine.broker.refresh()
                     await engine.broker.refresh_funding(self.now_ms())
                     if self.store.get("state") == State.ERROR_SAFE:
                         async with self.mutex:
                             await engine.recover_execution()
-                symbols = list(dict.fromkeys([*engine.positions(), *self.selected]))
+                symbols = list(dict.fromkeys([*engine.positions(), *self.selected, *carry_positions(self.store)]))
                 semaphore = asyncio.Semaphore(3)
 
                 async def one(symbol: str, semaphore: asyncio.Semaphore = semaphore) -> Quote:
@@ -820,6 +842,8 @@ class SimpleService:
                         self.store.transition(State.PAUSED, "local emergency close requested")
                         for symbol in list(engine.positions()):
                             await engine.close(symbol, now, "local emergency flatten requested")
+                        if self.carry is not None:
+                            await self.carry.tick(entries=False, flatten=True)
                         if not await engine.broker.positions():
                             self.store.put("local_flatten_request", None)
                             self.store.audit("simple_flatten_verified", {"operation": operation})
@@ -987,6 +1011,10 @@ class SimpleService:
                 self.engine = Engine(
                     self.s, self.store, self.exchange.filters, self.rules, broker=live_broker
                 )
+                if self.s.simple_carry_enabled and live_broker is not None:
+                    self.carry = Carry(self.s, self.store, live_broker)
+                    await self.carry.tick(entries=False)
+                    await live_broker.refresh()
                 rotation.initialize(self.store, self.engine.strategy, self.now_ms())
                 if self.s.simple_entry_profile.startswith("momentum"):
                     state = rotation.selection(self.store)

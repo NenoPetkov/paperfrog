@@ -1,5 +1,14 @@
 # paperfrog
 
+## LIVE momentum and funding hedge
+
+The [combined runtime and operations guide](docs/LIVE_MOMENTUM_CARRY.md) describes
+five-minute momentum plus fixed BTC/ETH spot/perpetual hedges sharing LIVE
+authorization, financial locks and risk budgets. Carry is a local opt-in; PAPER
+remains the installation default. Account-specific spot-market permissions can
+block hedge entries independently of momentum. The execution implementation is
+separate from the offline research engine below.
+
 ## Independent strategy redesign
 
 The [internet research and two-year redesign review](docs/STRATEGY_REDESIGN_2026-11-08.md)

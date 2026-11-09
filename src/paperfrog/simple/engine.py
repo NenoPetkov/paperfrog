@@ -193,8 +193,14 @@ class Engine:
                     await self.broker.cancel_protection(symbol)
         positions = await self.broker.positions()
         journals = self.positions()
-        if set(positions) != set(journals):
+        from .carry import positions as carry_positions
+        carried = carry_positions(self.store)
+        if carried and not self.s.simple_carry_enabled:
+            raise SafeError("held carry positions require the carry monitor to remain enabled")
+        if set(journals).intersection(carried) or set(positions) != set(journals) | set(carried):
             raise SafeError("simple position journal mismatch; manual review required")
+        if any(positions.get(symbol) != quantity for symbol, quantity in carried.items()):
+            raise SafeError("carry position quantity mismatch")
         for symbol, trade in journals.items():
             if positions[symbol] != Decimal(trade["quantity"]) * trade["side"]:
                 raise SafeError("simple position quantity mismatch")
@@ -392,6 +398,11 @@ class Engine:
                 symbol: Decimal(trade["quantity"]) * trade["side"]
                 for symbol, trade in self.positions().items()
             }
+            from .carry import positions as carry_positions
+            carried = carry_positions(self.store)
+            if set(journaled).intersection(carried):
+                raise SafeError("carry and momentum symbol ownership overlap")
+            journaled.update(carried)
             if (
                 actual != journaled
                 or self.store.get("simple_pending")
