@@ -1,5 +1,6 @@
 """Fixed margin-return brackets, original-order recovery and safe local activation."""
 
+import time
 from decimal import Decimal
 
 import pytest
@@ -14,6 +15,14 @@ from paperfrog.simple.strategy import RULES, exit_reason, tighten_stop
 
 D = Decimal
 BAR = 300000
+
+
+@pytest.fixture(autouse=True)
+def stable_closed_bar_clock(monkeypatch):
+    # These tests exercise bracket lifecycle, not candle-boundary expiry.
+    # A real clock crossing a five-minute boundary must still veto dispatch.
+    fixed_ms = int(time.time() * 1000) // BAR * BAR + 60000
+    monkeypatch.setattr(time, "time", lambda: fixed_ms / 1000)
 
 
 def position(side=1):
