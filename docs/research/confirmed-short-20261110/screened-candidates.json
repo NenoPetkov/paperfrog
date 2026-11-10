@@ -1,0 +1,322 @@
+[
+  {
+    "filter": {
+      "name": "both-none-strong",
+      "confirmation": "none",
+      "side": "both",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -9.213354319214362,
+    "development_drawdown_pct": 12.177303046564392,
+    "development_trades": 205,
+    "validation_return_pct": 0.9505582729284701,
+    "validation_trades": 97
+  },
+  {
+    "filter": {
+      "name": "baseline",
+      "confirmation": "none",
+      "side": "both",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -10.098189848047944,
+    "development_drawdown_pct": 16.973984163409472,
+    "development_trades": 214,
+    "validation_return_pct": -2.4949277954045335,
+    "validation_trades": 85
+  },
+  {
+    "filter": {
+      "name": "both-hour",
+      "confirmation": "hour",
+      "side": "both",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -4.813601849465698,
+    "development_drawdown_pct": 14.278011236508181,
+    "development_trades": 222,
+    "validation_return_pct": 0.5990257368810203,
+    "validation_trades": 83
+  },
+  {
+    "filter": {
+      "name": "both-hour-strong",
+      "confirmation": "hour",
+      "side": "both",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -6.388828601823649,
+    "development_drawdown_pct": 10.221300125993027,
+    "development_trades": 193,
+    "validation_return_pct": -3.342505026892717,
+    "validation_trades": 80
+  },
+  {
+    "filter": {
+      "name": "both-day-strong",
+      "confirmation": "day",
+      "side": "both",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -0.4395302218608399,
+    "development_drawdown_pct": 7.449915153888831,
+    "development_trades": 192,
+    "validation_return_pct": -4.250531490791709,
+    "validation_trades": 78
+  },
+  {
+    "filter": {
+      "name": "both-day",
+      "confirmation": "day",
+      "side": "both",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -4.2688568210463735,
+    "development_drawdown_pct": 11.263178183975153,
+    "development_trades": 200,
+    "validation_return_pct": -4.105150494881982,
+    "validation_trades": 82
+  },
+  {
+    "filter": {
+      "name": "both-hour_day-strong",
+      "confirmation": "hour_day",
+      "side": "both",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 6.313611974325073,
+    "development_drawdown_pct": 3.82081542074576,
+    "development_trades": 158,
+    "validation_return_pct": -5.904392847629403,
+    "validation_trades": 87
+  },
+  {
+    "filter": {
+      "name": "both-hour_day",
+      "confirmation": "hour_day",
+      "side": "both",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -13.911772914385622,
+    "development_drawdown_pct": 20.6726513281802,
+    "development_trades": 219,
+    "validation_return_pct": -2.708287385603858,
+    "validation_trades": 91
+  },
+  {
+    "filter": {
+      "name": "both-day-trend",
+      "confirmation": "day",
+      "side": "both",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.75
+    },
+    "development_return_pct": -10.878378222518803,
+    "development_drawdown_pct": 14.492351871385411,
+    "development_trades": 206,
+    "validation_return_pct": -4.33152269417747,
+    "validation_trades": 75
+  },
+  {
+    "filter": {
+      "name": "both-day-young",
+      "confirmation": "day",
+      "side": "both",
+      "minimum_score": 0,
+      "maximum_age": 6,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -6.8716777514385985,
+    "development_drawdown_pct": 13.579845135378644,
+    "development_trades": 214,
+    "validation_return_pct": -2.4981405301232606,
+    "validation_trades": 93
+  },
+  {
+    "filter": {
+      "name": "short-none-strong",
+      "confirmation": "none",
+      "side": "short",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -6.539072720160998,
+    "development_drawdown_pct": 15.161304011444798,
+    "development_trades": 203,
+    "validation_return_pct": 1.2579552081740886,
+    "validation_trades": 82
+  },
+  {
+    "filter": {
+      "name": "short-none",
+      "confirmation": "none",
+      "side": "short",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 4.092220148343051,
+    "development_drawdown_pct": 6.818118484561175,
+    "development_trades": 220,
+    "validation_return_pct": -1.8454564488050496,
+    "validation_trades": 93
+  },
+  {
+    "filter": {
+      "name": "short-hour",
+      "confirmation": "hour",
+      "side": "short",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -2.5797443423161703,
+    "development_drawdown_pct": 7.848779070595602,
+    "development_trades": 200,
+    "validation_return_pct": 0.09149100398371246,
+    "validation_trades": 91
+  },
+  {
+    "filter": {
+      "name": "short-hour-strong",
+      "confirmation": "hour",
+      "side": "short",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 10.16439614431015,
+    "development_drawdown_pct": 6.999476203261534,
+    "development_trades": 181,
+    "validation_return_pct": -2.4818739118054545,
+    "validation_trades": 81
+  },
+  {
+    "filter": {
+      "name": "short-day-strong",
+      "confirmation": "day",
+      "side": "short",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": -1.75621627958924,
+    "development_drawdown_pct": 8.155348915817228,
+    "development_trades": 180,
+    "validation_return_pct": -9.932656312682663,
+    "validation_trades": 87
+  },
+  {
+    "filter": {
+      "name": "short-day",
+      "confirmation": "day",
+      "side": "short",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 1.9740838776677094,
+    "development_drawdown_pct": 15.702714914230686,
+    "development_trades": 232,
+    "validation_return_pct": -5.128048232192228,
+    "validation_trades": 97
+  },
+  {
+    "filter": {
+      "name": "short-hour_day-strong",
+      "confirmation": "hour_day",
+      "side": "short",
+      "minimum_score": 1.5,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.6,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 13.049520923127123,
+    "development_drawdown_pct": 4.27105905921289,
+    "development_trades": 123,
+    "validation_return_pct": -2.8913560120432003,
+    "validation_trades": 61
+  },
+  {
+    "filter": {
+      "name": "short-hour_day",
+      "confirmation": "hour_day",
+      "side": "short",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 8.578291882620626,
+    "development_drawdown_pct": 9.12748827336971,
+    "development_trades": 214,
+    "validation_return_pct": -0.2591856905943546,
+    "validation_trades": 91
+  },
+  {
+    "filter": {
+      "name": "short-day-trend",
+      "confirmation": "day",
+      "side": "short",
+      "minimum_score": 0,
+      "maximum_age": 12,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.75
+    },
+    "development_return_pct": 3.004184666935661,
+    "development_drawdown_pct": 10.129899168522705,
+    "development_trades": 196,
+    "validation_return_pct": 2.5386551001588042,
+    "validation_trades": 85
+  },
+  {
+    "filter": {
+      "name": "short-day-young",
+      "confirmation": "day",
+      "side": "short",
+      "minimum_score": 0,
+      "maximum_age": 6,
+      "minimum_efficiency": 0.3,
+      "minimum_trend_atr": 0.3
+    },
+    "development_return_pct": 2.397437179929396,
+    "development_drawdown_pct": 12.915340560083221,
+    "development_trades": 233,
+    "validation_return_pct": -2.8830445236348146,
+    "validation_trades": 108
+  }
+]

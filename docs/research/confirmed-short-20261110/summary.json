@@ -1,0 +1,180 @@
+{
+  "policy": "confirmed_short",
+  "entry_filter": {
+    "name": "short-hour_day-strong",
+    "confirmation": "hour_day",
+    "side": "short",
+    "minimum_score": 1.5,
+    "maximum_age": 12,
+    "minimum_efficiency": 0.6,
+    "minimum_trend_atr": 0.3
+  },
+  "selected_scope": "Requested month only; operator explicitly accepts failed September check",
+  "operator_instruction": "Use the requested month only; accept the failed September check",
+  "installation_default": "baseline; PAPER default unchanged",
+  "source_parent_commit": "7b9f5d093d584e789c6a20f620142f3b63cb9bc7",
+  "baseline_month": {
+    "initial_equity": 10000.0,
+    "final_equity": 9086.40100767176,
+    "return_pct": -9.135989923282395,
+    "closed_trades": 300,
+    "win_rate_pct": 48.66666666666667,
+    "max_drawdown_pct_5m": 18.7584988014993,
+    "profit_factor": 0.8649205009485282,
+    "fees": 572.2822946788781,
+    "funding_net": 26.783826407571535,
+    "accounting_residual": 5.657696533489798e-11,
+    "exit_reasons": {
+      "stop": 121,
+      "take": 124,
+      "risk_lock": 55
+    },
+    "median_hold_minutes": 272.4999833333333
+  },
+  "selected_month": {
+    "start_ms": 1791590400000,
+    "end_ms": 1794182400000,
+    "initial_equity": 10000.0,
+    "final_equity": 10978.338870647323,
+    "return_pct": 9.78338870647324,
+    "closed_trades": 184,
+    "win_rate_pct": 54.347826086956516,
+    "max_drawdown_pct_5m": 7.585651675141825,
+    "profit_factor": 1.2426100276324203,
+    "fees": 396.48186004862407,
+    "funding_net": -6.627528698160885,
+    "accounting_residual": 2.4140689447449404e-12,
+    "exit_reasons": {
+      "take": 97,
+      "stop": 61,
+      "risk_lock": 26
+    },
+    "median_hold_minutes": 282.4999916666667
+  },
+  "selected_month_double_friction": {
+    "start_ms": 1791590400000,
+    "end_ms": 1794182400000,
+    "initial_equity": 10000.0,
+    "final_equity": 10697.351144241407,
+    "return_pct": 6.973511442414071,
+    "closed_trades": 187,
+    "win_rate_pct": 52.94117647058824,
+    "max_drawdown_pct_5m": 8.166192905455482,
+    "profit_factor": 1.1712096005054613,
+    "fees": 394.76874275632395,
+    "funding_net": -9.134110447166629,
+    "accounting_residual": -1.459987686303066e-11,
+    "exit_reasons": {
+      "take": 95,
+      "stop": 61,
+      "risk_lock": 31
+    },
+    "median_hold_minutes": 269.9999833333333
+  },
+  "selected_final_ten_days": {
+    "start_ms": 1793318400000,
+    "end_ms": 1794182400000,
+    "initial_equity": 10000.0,
+    "final_equity": 9710.86439879568,
+    "return_pct": -2.8913560120432003,
+    "closed_trades": 61,
+    "win_rate_pct": 42.62295081967213,
+    "max_drawdown_pct_5m": 7.495967792987168,
+    "profit_factor": 0.7921110842490086,
+    "fees": 120.00309394074387,
+    "funding_net": -4.2258061278502925,
+    "accounting_residual": -4.432010314303625e-12,
+    "exit_reasons": {
+      "stop": 23,
+      "take": 24,
+      "risk_lock": 14
+    },
+    "median_hold_minutes": 259.9999833333333
+  },
+  "september": {
+    "stress": {
+      "start_ms": 1788220800000,
+      "end_ms": 1790812800000,
+      "initial_equity": 10000.0,
+      "final_equity": 7381.926910230656,
+      "return_pct": -26.180730897693437,
+      "closed_trades": 225,
+      "win_rate_pct": 37.333333333333336,
+      "max_drawdown_pct_5m": 26.299439873253995,
+      "profit_factor": 0.5475538670306535,
+      "fees": 397.2562370221305,
+      "funding_net": -2.991406541397295,
+      "accounting_residual": 1.092903545441004e-12,
+      "exit_reasons": {
+        "stop": 104,
+        "take": 72,
+        "risk_lock": 49
+      },
+      "median_hold_minutes": 255.0
+    },
+    "confirmed": {
+      "start_ms": 1788220800000,
+      "end_ms": 1790812800000,
+      "initial_equity": 10000.0,
+      "final_equity": 7620.654309415652,
+      "return_pct": -23.79345690584348,
+      "closed_trades": 226,
+      "win_rate_pct": 38.05309734513274,
+      "max_drawdown_pct_5m": 24.839024596070168,
+      "profit_factor": 0.5881492626351856,
+      "fees": 407.1238946955699,
+      "funding_net": -2.922157938202353,
+      "accounting_residual": 4.929390229335695e-14,
+      "exit_reasons": {
+        "stop": 103,
+        "take": 74,
+        "risk_lock": 49
+      },
+      "median_hold_minutes": 260.0
+    },
+    "baseline": {
+      "start_ms": 1788220800000,
+      "end_ms": 1790812800000,
+      "initial_equity": 10000.0,
+      "final_equity": 7890.28997519316,
+      "return_pct": -21.0971002480684,
+      "closed_trades": 346,
+      "win_rate_pct": 44.797687861271676,
+      "max_drawdown_pct_5m": 21.817881016258735,
+      "profit_factor": 0.7255819412140321,
+      "fees": 617.4166348642128,
+      "funding_net": -53.8998496891992,
+      "accounting_residual": 3.389288849575678e-11,
+      "exit_reasons": {
+        "take": 121,
+        "stop": 144,
+        "risk_lock": 81
+      },
+      "median_hold_minutes": 199.99998333333335
+    }
+  },
+  "permission_parity": {
+    "signals_checked": 39664,
+    "confirmed_candidates": 621,
+    "all_production_permissions_match_research": true
+  },
+  "unmodeled": [
+    "historical executable orderbook depth",
+    "exact spreads, fills and latency",
+    "within-candle account risk events",
+    "historical metadata/filter revisions and delisted membership"
+  ],
+  "profitability": "Unproven; retrospective settings search is not a future return forecast",
+  "source_sha256": {
+    "src/paperfrog/settings.py": "18f019796034afcc4b6b0064dca338051f151b2ca763fee37cde7bca8d09e0cf",
+    "src/paperfrog/simple/momentum.py": "88fb10143bcc96f98c2a899b8c60d2e4401c17d3078980e700e8d3d106472cc0",
+    "src/paperfrog/simple/strategy.py": "994fe1da036869faf0f3c03d6593bb2a8a6877af6599ac8fd8c776808cdd12df",
+    "src/paperfrog/simple/engine.py": "a0b0c46d902011ba10cdc340a7c48d04927d53e3d6a989b7a3414eebaa5a1b4a",
+    "src/paperfrog/simple/service.py": "68b2e968b8ceb3257198d3899aab699b128c878ef7fd8e9b817a875a305445c4",
+    "scripts/server_ops.py": "bcca1fcb0d63ea3575f8feb685da0dc5151bf37b55af6d1b4237b57ad06c2add",
+    "scripts/deploy_remote.sh": "51eb86ffe446825b1d9226765822c405222d9654d42505d9c863d595659852fc",
+    "scripts/fetch_fixed_roe_month.py": "710a15da56355bb7745f9334bcdacf46feba6abe69ac04d7ea3ef368a402f7c9",
+    "scripts/replay_fixed_roe_month.py": "6fea9cf7729cba22c9e2b2d5203e239161d18de1a62734860601d179d2407434",
+    "scripts/search_momentum_month.py": "8862d8b38f8e76ebfcf459ec700e9e62f3fb24310ce3a6478f43bdc5a8750ab2"
+  }
+}

@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     simple_entry_timeframe: Literal["1m", "5m", "8m", "15m"] = "15m"
     simple_entry_mode: SimpleEntryMode = "trend"
     simple_entry_profile: Literal["standard", "active", "momentum", "momentum_selective", "momentum_breakout", "momentum_pullback"] = "standard"
+    simple_momentum_entry_policy: Literal["baseline", "confirmed_short"] = "baseline"
     simple_max_hold_hours: int = Field(4, ge=1, le=24)
     simple_exit_policy: Literal["trend", "fixed_roe"] = "trend"
     simple_sizing_mode: Literal["risk", "margin", "equity_range"] = "risk"
@@ -114,6 +115,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_modes(self) -> Self:
+        if self.simple_momentum_entry_policy != "baseline" and self.simple_entry_profile != "momentum":
+            raise ValueError("confirmed short entry policy requires the base momentum profile")
         if self.simple_exit_policy == "fixed_roe" and not (
             self.simple_entry_profile == "momentum" and self.simple_selected_count == 1
             and self.simple_scan_limit == 100

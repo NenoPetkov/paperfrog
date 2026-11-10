@@ -61,6 +61,7 @@ class Rules:
     allowed_side: Literal["both", "long", "short"] = "both"
     warmup_bars: int = WARMUP
     atr_timeframe_bars: Literal[1, 96] = 1
+    momentum_entry_policy: Literal["baseline", "confirmed_short"] = "baseline"
 
     def __post_init__(self) -> None:
         if not (
@@ -71,6 +72,8 @@ class Rules:
             and 1 <= self.maximum_hold_bars <= 2688
             and self.atr_timeframe_bars in {1, 96}
             and self.atr_bars * self.atr_timeframe_bars <= self.warmup_bars
+            and self.momentum_entry_policy in {"baseline", "confirmed_short"}
+            and (self.momentum_entry_policy == "baseline" or self.version == "abc-momentum-v2")
         ):
             raise SafeError("invalid research rule windows")
         values = (
@@ -132,6 +135,7 @@ def execution_rules(s: Settings) -> Rules:
     if s.simple_exit_policy == "fixed_roe":
         from .fixed_roe import PRICE_FRACTION
         rules = replace(rules, minimum_stop_fraction=float(PRICE_FRACTION), maximum_stop_fraction=float(PRICE_FRACTION))
+    rules = replace(rules, momentum_entry_policy=s.simple_momentum_entry_policy)
     return replace(rules, maximum_hold_bars=s.simple_max_hold_hours * 4)
 
 

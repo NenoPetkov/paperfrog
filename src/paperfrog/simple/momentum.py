@@ -19,6 +19,34 @@ EARLY_VERSION = EARLY_MOMENTUM_RULES.version
 MAXIMUM_TREND_AGE_BARS = 12
 
 
+def confirmation_veto(row: dict[str, Any], rules: Rules) -> str | None:
+    """Opt-in tighter entry policy; existing positions retain their exit contract."""
+    if rules.momentum_entry_policy == "baseline":
+        return None
+    try:
+        fields = ("timestamp_ms", "day_context_ms", "day_return_4h", "day_slope_4h",
+                  "return_1h", "path_efficiency_1h", "return_15m", "minute_atr", "close",
+                  "trend_atr", "path_efficiency_15m", "momentum_trend_age_bars")
+        if not all(math.isfinite(float(row[k])) for k in fields):
+            return "confirmed-short trend evidence unavailable"
+        if float(row["day_context_ms"]) != int(row["timestamp_ms"]) // BAR_MS * BAR_MS:
+            return "confirmed-short four-hour context stale or future dated"
+        if row["trend_atr"] >= 0:
+            return "confirmed-short policy does not authorize new longs"
+        if not (row["return_1h"] < 0 and 0.3 <= row["path_efficiency_1h"] <= 1
+                and row["day_return_4h"] < 0 and row["day_slope_4h"] < 0):
+            return "confirmed-short one-hour and four-hour trends must both be falling"
+        if row["path_efficiency_15m"] < 0.6:
+            return "confirmed-short fifteen-minute move is too noisy"
+        score = abs(float(row["return_15m"])) / (float(row["minute_atr"]) / float(row["close"]))
+        score *= float(row["path_efficiency_15m"]) / (1 + float(row["momentum_trend_age_bars"]) / MAXIMUM_TREND_AGE_BARS)
+        if not math.isfinite(score) or score < 1.5:
+            return "confirmed-short momentum strength below 1.5"
+        return None
+    except (KeyError, ValueError, TypeError, OverflowError, ZeroDivisionError):
+        return "confirmed-short trend evidence unavailable"
+
+
 def timing_veto(row: dict[str, Any], rules: Rules) -> str | None:
     """Reject old or exhausted five-minute moves, using only completed bars."""
     if rules.version != EARLY_VERSION:
@@ -70,7 +98,7 @@ def timing_veto(row: dict[str, Any], rules: Rules) -> str | None:
             or abs(row["close"] - row["open"]) > 1.5 * atr
         ):
             return "momentum entry is overextended from its fast average or current candle"
-        return None
+        return confirmation_veto(row, rules)
     except (KeyError, ValueError, TypeError, OverflowError):
         return "early momentum timing evidence unavailable"
 

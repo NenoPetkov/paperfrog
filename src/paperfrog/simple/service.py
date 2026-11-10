@@ -249,6 +249,7 @@ class SimpleService:
                 else self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
+                "momentum_entry_policy": self.s.simple_momentum_entry_policy,
                 "selected": self.selected,
                 "open_positions": list(dict.fromkeys([*(self.engine.positions() if self.engine else {}), *carry_positions(self.store)])),
                 "equity": self.store.get("anchors", {}).get("equity"),

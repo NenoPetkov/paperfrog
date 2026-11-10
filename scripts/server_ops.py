@@ -66,6 +66,8 @@ def compare(s: Settings, path: Path) -> None:
         variants.append({k:v for k,v in s.public().items() if k != "simple_exit_policy"})
     if not s.simple_carry_enabled:
         variants += [{k:v for k,v in values.items() if k != "simple_carry_enabled"} for values in list(variants)]
+    if s.simple_momentum_entry_policy == "baseline":
+        variants += [{k:v for k,v in values.items() if k != "simple_momentum_entry_policy"} for values in list(variants)]
     for values in variants:
         legacy = {**context(s), "config_hash": hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()}
         if previous == legacy:
@@ -186,7 +188,7 @@ def activate_momentum(root: Path, s: Settings, previous: Path, profile: str, hol
         store.engine.dispose()
 
 
-def activate_fixed_roe(root: Path, s: Settings, previous: Path) -> None:
+def activate_fixed_roe(root: Path, s: Settings, previous: Path, *, confirmed_short: bool = False) -> None:
     """Operator-requested new-entry policy; never widen existing stops or clear locks."""
     from paperfrog.simple.strategy import require_execution
     from paperfrog.storage.database import Store
@@ -196,6 +198,8 @@ def activate_fixed_roe(root: Path, s: Settings, previous: Path) -> None:
     require_execution(s)
     if s.trading_mode != "live" or s.simple_entry_profile != "momentum":
         raise DeploymentError("Fixed margin-return activation requires the existing authorized LIVE momentum account.")
+    if confirmed_short and s.simple_exit_policy != "fixed_roe":
+        raise DeploymentError("Entry-filter activation requires the existing fixed-return policy.")
     store = Store(directory(s) / "paperfrog.sqlite")
     try:
         if (store.get("reconciled") is not True or store.get("simple_pending") or store.get("simple_closing")
@@ -207,8 +211,15 @@ def activate_fixed_roe(root: Path, s: Settings, previous: Path) -> None:
                     and trade.get("entry_mode") == "trend" and trade.get("entry_timeframe") == "5m"
                     and trade.get("stop_price", 0) > 0):
                 raise DeploymentError("Existing positions lack original exit evidence; migration refused.")
+            if confirmed_short and not (
+                trade.get("exit_policy") == "fixed_roe" and trade.get("entry_leverage") == 2
+                and trade.get("roe_target") == 0.05 and trade.get("take_profit_price", 0) > 0
+            ):
+                raise DeploymentError("Existing positions lack fixed-return bracket evidence; entry-filter migration refused.")
         updates = {"simple_exit_policy": "fixed_roe", "simple_scan_limit": 100,
                    "simple_selected_count": 1, "simple_ai_enabled": False, "simple_confidence_enabled": False}
+        if confirmed_short:
+            updates["simple_momentum_entry_policy"] = "confirmed_short"
         target = Settings(_env_file=root / ".env", **{**s.public(), **updates})
         if credential_binding(target) != credential_binding(s):
             raise DeploymentError("Account binding changed; fixed-return activation refused.")
@@ -238,7 +249,7 @@ def activate_fixed_roe(root: Path, s: Settings, previous: Path) -> None:
             write(original)
             raise
         previous.write_text(json.dumps(context(loaded)))
-        store.audit("local_fixed_roe_activation", {"parameters": updates, "gross_margin_target": 0.05,
+        store.audit("local_momentum_entry_filter_activation" if confirmed_short else "local_fixed_roe_activation", {"parameters": updates, "gross_margin_target": 0.05,
                     "leverage": s.exchange_leverage, "existing_positions": "original exits retained",
                     "authorization": "explicit operator margin-return request", "profitability": "unproven"})
     finally:
@@ -409,6 +420,9 @@ def main() -> None:
     fixed = commands.add_parser("activate-fixed-roe")
     fixed.add_argument("context", type=Path)
     fixed.add_argument("--confirm", required=True)
+    entry_filter = commands.add_parser("activate-momentum-filter")
+    entry_filter.add_argument("context", type=Path)
+    entry_filter.add_argument("--confirm", required=True)
     commands.add_parser("context").add_argument("--require-arm", action="store_true")
     commands.add_parser("compare").add_argument("path", type=Path)
     commands.add_parser("rearm").add_argument("path", type=Path)
@@ -441,6 +455,10 @@ def main() -> None:
         if args.confirm != "SET LIVE FIXED ROE":
             raise DeploymentError("Explicit local fixed-return activation confirmation required.")
         activate_fixed_roe(root, s, args.context)
+    elif args.command == "activate-momentum-filter":
+        if args.confirm != "SET LIVE MOMENTUM FILTER":
+            raise DeploymentError("Explicit local momentum-filter activation confirmation required.")
+        activate_fixed_roe(root, s, args.context, confirmed_short=True)
     elif args.command == "context":
         if args.require_arm and s.trading_mode == "live":
             verify_simple_arm(s)

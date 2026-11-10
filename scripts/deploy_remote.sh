@@ -5,7 +5,7 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 root=/var/www/paperfrog
 expected=${1:?Expected commit is required}
 policy=${2:-preserve}
-[[ $policy == preserve || $policy == strict-auto || $policy == momentum || $policy == combined || $policy == fixed-roe ]] || exit 2
+[[ $policy == preserve || $policy == strict-auto || $policy == momentum || $policy == combined || $policy == fixed-roe || $policy == momentum-filter ]] || exit 2
 if [[ $policy == momentum || $policy == combined ]]; then
   profile=${3:?Momentum profile is required}
   hold=${4:?Holding hours are required}
@@ -83,6 +83,8 @@ if [[ $policy == strict-auto ]]; then
   .venv/bin/python scripts/server_ops.py strategy-strict
 elif [[ $policy == fixed-roe ]]; then
   .venv/bin/python scripts/server_ops.py activate-fixed-roe "$context" --confirm 'SET LIVE FIXED ROE'
+elif [[ $policy == momentum-filter ]]; then
+  .venv/bin/python scripts/server_ops.py activate-momentum-filter "$context" --confirm 'SET LIVE MOMENTUM FILTER'
 elif [[ $policy == momentum || $policy == combined ]]; then
   carry_args=()
   if [[ $policy == combined ]]; then carry_args=(--with-carry); fi
@@ -97,7 +99,7 @@ systemctl start paperfrog.service
 started=1
 .venv/bin/python scripts/server_ops.py wait --timeout 240
 systemctl start paperfrog-daily-review.timer
-if [[ $policy == momentum || $policy == combined || $policy == fixed-roe ]]; then
+if [[ $policy == momentum || $policy == combined || $policy == fixed-roe || $policy == momentum-filter ]]; then
   if systemctl cat paperfrog-momentum-paper.service >/dev/null 2>&1; then
     systemctl disable paperfrog-momentum-paper.service
   fi

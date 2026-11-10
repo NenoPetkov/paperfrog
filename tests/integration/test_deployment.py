@@ -268,8 +268,9 @@ def test_previous_schema_with_live_carry_accepts_only_default_trend_policy(tmp_p
         ops.compare(s.model_copy(update={"risk_per_trade": 0.001}), path)
 
 
+@pytest.mark.parametrize("confirmed_short", [False, True])
 def test_fixed_roe_activation_changes_only_reviewed_settings_and_preserves_locks(
-    tmp_path, settings, monkeypatch
+    tmp_path, settings, monkeypatch, confirmed_short
 ):
     from test_simple_live import live_settings
 
@@ -283,7 +284,8 @@ def test_fixed_roe_activation_changes_only_reviewed_settings_and_preserves_locks
         state_dir=tmp_path / "state",
         simple_entry_profile="momentum",
         simple_entry_timeframe="5m",
-        simple_selected_count=10,
+        simple_selected_count=1 if confirmed_short else 10,
+        simple_exit_policy="fixed_roe" if confirmed_short else "trend",
         simple_sizing_mode="margin",
         simple_position_margin_cap=0.1,
     )
@@ -314,16 +316,20 @@ def test_fixed_roe_activation_changes_only_reviewed_settings_and_preserves_locks
             }
         },
     }
+    if confirmed_short:
+        saved["simple_positions"]["SOLUSDT"].update(
+            exit_policy="fixed_roe", entry_leverage=2, roe_target=0.05, take_profit_price=105
+        )
     try:
         for k, v in saved.items():
             store.put(k, v)
         store.put("simple_pending", {"SOLUSDT": {"id": "pending"}})
         original = env.read_bytes()
         with pytest.raises(ops.DeploymentError, match="pending execution"):
-            ops.activate_fixed_roe(tmp_path, s, previous)
+            ops.activate_fixed_roe(tmp_path, s, previous, confirmed_short=confirmed_short)
         assert env.read_bytes() == original
         store.put("simple_pending", {})
-        ops.activate_fixed_roe(tmp_path, s, previous)
+        ops.activate_fixed_roe(tmp_path, s, previous, confirmed_short=confirmed_short)
         loaded = Settings()
         assert loaded.simple_exit_policy == "fixed_roe" and loaded.simple_scan_limit == 100
         assert loaded.simple_selected_count == 1 and not loaded.simple_ai_enabled
@@ -335,6 +341,9 @@ def test_fixed_roe_activation_changes_only_reviewed_settings_and_preserves_locks
             "simple_ai_enabled",
             "simple_confidence_enabled",
         }
+        if confirmed_short:
+            allowed.add("simple_momentum_entry_policy")
+            assert loaded.simple_momentum_entry_policy == "confirmed_short"
         assert {k: v for k, v in loaded.public().items() if k not in allowed} == {
             k: v for k, v in s.public().items() if k not in allowed
         }

@@ -90,6 +90,7 @@ class Engine:
                 "allowed_side",
                 "warmup_bars",
                 "atr_timeframe_bars",
+                "momentum_entry_policy",
             )
         }
         entry_timing_upgrade = (
@@ -119,7 +120,23 @@ class Engine:
         if fixed_entry_upgrade:
             assert broker is not None
             broker.require_authorization()
-        if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules and not (entry_timing_upgrade or fixed_entry_upgrade):
+        entry_policy_upgrade = (
+            broker is not None and s.simple_exit_policy == "fixed_roe"
+            and stored_rules.get("version") == public_rules["version"] == "abc-momentum-v2"
+            and stored_rules.get("momentum_entry_policy", "baseline") == "baseline"
+            and public_rules["momentum_entry_policy"] == "confirmed_short"
+            and {**defaults, **stored_rules, "momentum_entry_policy": "confirmed_short"} == public_rules
+            and all(t.get("exit_policy") == "fixed_roe" and t.get("entry_leverage") == 2
+                    and t.get("roe_target") == 0.05 and t.get("stop_price", 0) > 0
+                    and t.get("take_profit_price", 0) > 0
+                    for t in store.get("simple_positions", {}).values())
+        )
+        if entry_policy_upgrade:
+            assert broker is not None
+            broker.require_authorization()
+            store.audit("simple_entry_policy_upgrade", {"from": "baseline", "to": "confirmed_short",
+                        "existing_positions": "original brackets and exits retained"})
+        if store.get("simple_positions") and {**defaults, **stored_rules} != public_rules and not (entry_timing_upgrade or fixed_entry_upgrade or entry_policy_upgrade):
             raise SafeError("close existing PAPER positions before changing strategy rules")
         self.s, self.store, self.filters = s, store, filters
         self.risk = RiskEngine(
