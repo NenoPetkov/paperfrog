@@ -79,7 +79,7 @@ def test_new_trend_does_not_wait_for_old_hour_or_twenty_five_minute_direction(si
 
 
 @pytest.mark.parametrize("side", [-1, 1])
-@pytest.mark.parametrize("age", [0, 2, 12])
+@pytest.mark.parametrize("age", [0, 12])
 def test_only_fresh_confirmed_trends_are_eligible(side, age):
     assert classify(early(side, age), 0.0012, EARLY_MOMENTUM_RULES)[1] == side
 

@@ -32,6 +32,7 @@ from .market_trend import entry_gate as market_entry_gate
 from .minute import MINUTE_MS
 from .minute import direction as minute_direction
 from .minute import veto as minute_veto
+from .momentum import policy_rules
 from .strategy import (
     BAR_MS,
     RULES,
@@ -848,7 +849,7 @@ class Engine:
         if row.get("entry_timeframe", "15m") != self.entry_timeframe:
             return 0, "entry candle timeframe does not match selected policy"
         if self.s.simple_entry_profile.startswith("momentum"):
-            from .momentum import classify, policy_rules, timing_veto
+            from .momentum import classify, timing_veto
 
             state = rotation.selection(self.store)
             if state["auto"] or (state["active"] != "current" and not rotation.streak_enabled(self.store)):
@@ -1015,7 +1016,7 @@ class Engine:
         allocation_scale = activity.SIZE_SCALE if activity_probe else 1.0
         assert q is not None
         if self.entry_timeframe in {"1m", "5m", "8m"} or rotation.streak_enabled(self.store):
-            reason_veto = (minute_veto(row, normal_direction, now_ms, float(q.mark), self.rules)
+            reason_veto = (minute_veto(row, normal_direction, now_ms, float(q.mark), policy_rules(self.rules, self.store))
                            if selected_strategy["active"] != "opposite" else None)
             if reason_veto:
                 raise SafeError(reason_veto)
@@ -1206,8 +1207,7 @@ class Engine:
                 "strategy_choice": selected_strategy["active"],
                 "strategy_epoch": selected_strategy["epoch"],
                 "config_hash": self.s.config_hash,
-                "rules": (replace(self.rules, momentum_entry_policy="baseline").public()
-                          if streak else self.rules.public()),
+                "rules": policy_rules(self.rules, self.store).public(),
                 "mode": self.s.trading_mode,
                 "currency": "BNFCR" if self.s.futures_account_mode == "credits" else "USDT",
                 "entry_mode": self.s.simple_entry_mode,
@@ -1304,8 +1304,7 @@ class Engine:
                 opposite_evidence={
                     "row": {**indicators(row), "entry_timeframe": row.get("entry_timeframe", "15m")},
                     "one_way_cost": one_way_cost,
-                    "rules": (replace(self.rules, momentum_entry_policy="baseline").public()
-                          if streak else self.rules.public()),
+                    "rules": policy_rules(self.rules, self.store).public(),
                 },
             )
         self.store.put("simple_strategy_order:" + order.client_id, permission)

@@ -20,8 +20,14 @@ MAXIMUM_TREND_AGE_BARS = 12
 
 
 def policy_rules(rules: Rules, store: Store) -> Rules:
-    from .rotation import streak_enabled
-    return replace(rules, momentum_entry_policy="baseline") if streak_enabled(store) else rules
+    from .rotation import parameters, streak_enabled
+    if not streak_enabled(store):
+        return rules
+    scale = float(parameters(store)["entry_threshold_scale"])
+    # Only signal strength changes. Sizing, price protection and cost gates retain their limits.
+    return replace(rules, momentum_entry_policy="baseline",
+                   minimum_trend_atr=rules.minimum_trend_atr * scale,
+                   minimum_flow=rules.minimum_flow * scale)
 
 
 def confirmation_veto(row: dict[str, Any], rules: Rules) -> str | None:

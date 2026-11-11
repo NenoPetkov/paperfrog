@@ -33,7 +33,8 @@ def parameters(store: Store) -> dict[str, Any]:
         "enabled": streak_enabled(store), "strategy": state["active"],
         "wins": wins, "losses": losses,
         "timeframe": "5m" if wins >= 3 else "15m",
-        "profit_roe": 0.03 if wins >= 2 else 0.04 if wins == 1 else 0.05,
+        "profit_roe": 0.05,
+        "entry_threshold_scale": 0.525 if wins >= 2 else 0.7 if wins == 1 else 1.0,
         "stop_roe": 0.03 if losses >= 2 else 0.04 if losses == 1 else 0.05,
         "revision": state.get("streak_revision", 0),
     }
@@ -226,6 +227,7 @@ def describe(store: Store, timezone: str) -> str:
         p = parameters(store)
         return (f"Strategy: {state['active'].upper()} · STREAK\n"
                 f"Wins: {p['wins']} · Losses: {p['losses']} · Candles: {p['timeframe']}\n"
+                f"Trend/flow thresholds: {p['entry_threshold_scale']:.1%} of baseline.\n"
                 f"New entries: TP +{p['profit_roe']:.0%} / SL -{p['stop_roe']:.0%} gross ROE.\n"
                 "3 net losses → switch CURRENT ↔ OPPOSITE; 3 wins → 5m.\n"
                 "Existing brackets and account risk limits remain active.")

@@ -648,7 +648,7 @@ class SimpleService:
                 actual, _, _ = opposite_entry(row, self.s.fee_rate + self.s.slippage_bps / 10000, self.rules)
                 side = -actual
             else:
-                side, _ = minute_direction(row, self.rules)
+                side, _ = minute_direction(row, policy_rules(self.rules, self.store))
             if not side:
                 continue
             reason = market_entry_gate(self.s, self.store, row, side, self.now_ms(), selected_strategy["active"])

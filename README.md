@@ -8,15 +8,24 @@ stopped. It is durable, idempotent and starts CURRENT with zero streaks and 15m
 candles. It does not replay old trades; positions opened before activation retain
 their original epoch, side and hosted brackets and do not advance the new streak.
 
-| Consecutive net results | New-entry take profit | New-entry stop | Candles / direction |
-| --- | --- | --- | --- |
-| Start / breakeven | +5% | −5% | 15m, current selected direction |
-| 1 win | +4% | −5% | 15m |
-| 2 wins | +3% | −5% | 15m |
-| 3+ wins | +3% | −5% | 5m |
-| 1 loss | +5% | −4% | 15m |
-| 2 losses | +5% | −3% | 15m |
-| 3 losses | +5% | −5% | 15m, switch CURRENT ↔ OPPOSITE; reset streaks |
+| Consecutive net results | Trend/flow thresholds vs baseline | New-entry take profit | New-entry stop | Candles / direction |
+| --- | --- | --- | --- | --- |
+| Start / breakeven | 100% | +5% | −5% | 15m, current selected direction |
+| 1 win | 70% (30% easier) | +5% | −5% | 15m |
+| 2 wins | 52.5% (another 25% reduction) | +5% | −5% | 15m |
+| 3+ wins | 52.5% | +5% | −5% | 5m |
+| 1 loss | 100% | +5% | −4% | 15m |
+| 2 losses | 100% | +5% | −3% | 15m |
+| 3 losses | 100% | +5% | −5% | 15m, switch CURRENT ↔ OPPOSITE; reset streaks |
+
+Confidence makes **entry signals easier**, not profit targets closer or farther.
+The minimum trend strength changes from 0.3 ATR to 0.21 and then 0.1575;
+the minimum signed trading flow changes from 0.05 to 0.035 and then 0.02625.
+The second reduction compounds: 0.70 × 0.75 = 0.525, or 47.5% below baseline.
+Selection, final order dispatch and recorded entry rules use the same thresholds.
+A loss or breakeven restores baseline signal thresholds. Take profit remains +5%
+for new positions; positions already opened with +3%/+4% keep those brackets.
+Spread, liquidity, cost, volatility, exhaustion and position-size limits are unchanged.
 
 Targets are gross return on margin at 2x, before costs and exchange tick rounding.
 Wins/losses use the completed position's net ledger result (entry/exit fees and

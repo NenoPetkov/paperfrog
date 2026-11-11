@@ -273,6 +273,7 @@ def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Q
         from .rotation import require_order as require_strategy_order
         require_strategy_order(store, order, now_ms, quote)
         return
-    reason = veto(row, decision_side(store, order), now_ms, float(quote.mark), execution_rules(s))
+    from .momentum import policy_rules
+    reason = veto(row, decision_side(store, order), now_ms, float(quote.mark), policy_rules(execution_rules(s), store))
     if reason:
         raise EntryVeto(reason)

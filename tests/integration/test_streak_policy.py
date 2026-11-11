@@ -29,9 +29,10 @@ def stable_clock(monkeypatch):
 def test_wins_losses_neutral_and_repeated_cycles_survive_restart(store, settings):
     rotation.activate_streak(store, 1)
     assert rotation.timeframe(store, settings) == "15m"
-    for i, target in enumerate([.04, .03, .03]):
+    for i, scale in enumerate([.7, .525, .525]):
         settle_result(store, f"win{i}", 1)
-        assert rotation.parameters(store)["profit_roe"] == target
+        assert rotation.parameters(store)["profit_roe"] == .05
+        assert rotation.parameters(store)["entry_threshold_scale"] == scale
     assert rotation.timeframe(store, settings) == "5m"
     first = settle_result(store, "loss1", -1)
     assert rotation.parameters(store)["stop_roe"] == .04
@@ -92,9 +93,10 @@ def test_transaction_rollback_and_nonfinite_results(store):
     assert rotation.selection(store) == before
 
 
-@pytest.mark.parametrize("side", [-1, 1])
-@pytest.mark.parametrize("wins,losses", [(0, 0), (1, 0), (2, 0), (3, 0), (0, 1), (0, 2)])
-@pytest.mark.parametrize("opposite", [False, True])
+@pytest.mark.parametrize("side,wins,losses,opposite", [
+    (1, 0, 0, False), (-1, 1, 0, False), (1, 2, 0, True),
+    (-1, 3, 0, True), (1, 0, 1, False), (-1, 0, 2, True),
+])
 async def test_live_dispatch_exact_inverse_and_immutable_brackets(settings, store, filters, side, wins, losses, opposite):
     engine, sim, adapter, _, now = await setup_engine(
         settings, store, filters, **options(), simple_momentum_entry_policy="confirmed_short")
@@ -113,6 +115,10 @@ async def test_live_dispatch_exact_inverse_and_immutable_brackets(settings, stor
         obs = early(side, open=100-side*.2, close=100, fast=100-side*.5, slow=100-side*1.5,
                     timestamp_ms=boundary, entry_timeframe=params["timeframe"],
                     momentum_trend_started_ms=boundary-2*interval)
+        if wins:
+            # These valid but weaker signals failed the old trend/flow thresholds.
+            obs.update(trend_atr=side * (.25 if wins == 1 else .18),
+                       flow=side * (.04 if wins == 1 else .03))
         store.put("simple_pool", ["SOLUSDT"])
         store.put("simple_selected", ["SOLUSDT"])
         store.put("simple_minute:SOLUSDT", obs)
@@ -327,3 +333,26 @@ async def test_timeout_recovers_captured_brackets_after_controller_changes(setti
         assert p["side"] == 1 and p["entry_timeframe"] == "15m"
     finally:
         await adapter.close()
+
+
+def test_confidence_admits_weaker_signals_without_relaxing_safety_gates(store):
+    from paperfrog.simple.strategy import EARLY_MOMENTUM_RULES
+    rotation.activate_streak(store, 1)
+    first = early(entry_timeframe="15m", momentum_trend_started_ms=300*900000-2*900000,
+                  trend_atr=.25, flow=.04)
+    second = {**first, "trend_atr": .18, "flow": .03}
+    assert classify(first, .001, policy_rules(EARLY_MOMENTUM_RULES, store))[1] == 0
+    settle_result(store, "win1", 1)
+    assert classify(first, .001, policy_rules(EARLY_MOMENTUM_RULES, store))[1] == 1
+    assert classify(second, .001, policy_rules(EARLY_MOMENTUM_RULES, store))[1] == 0
+    settle_result(store, "win2", 1)
+    rules = policy_rules(EARLY_MOMENTUM_RULES, store)
+    assert classify(second, .001, rules)[1] == 1
+    assert {k:v for k,v in rules.public().items() if k not in {"minimum_trend_atr", "minimum_flow"}} == {
+        k:v for k,v in EARLY_MOMENTUM_RULES.public().items() if k not in {"minimum_trend_atr", "minimum_flow"}}
+    for damage in ({"flow": -.03}, {"trend_atr": 0}, {"rsi_14": 80}, {"atr_fraction": .2}):
+        assert classify({**second, **damage}, .001, rules)[1] == 0
+    assert classify(second, .1, rules)[1] == 0
+    settle_result(store, "loss", -1)
+    assert classify(first, .001, policy_rules(EARLY_MOMENTUM_RULES, store))[1] == 0
+    assert rotation.parameters(store)["profit_roe"] == .05

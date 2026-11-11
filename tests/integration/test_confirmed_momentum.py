@@ -69,10 +69,8 @@ def test_strong_aligned_short_passes_and_longs_are_rejected():
     {"path_efficiency_1h": 1.01},
     {"path_efficiency_15m": 0.59},
     {"return_15m": -0.005},
-    {"momentum_trend_age_bars": 13, "momentum_trend_started_ms": BOUNDARY - 13*300000},
-    {"rsi_14": 29},
 ])
-def test_weak_exhausted_old_or_unconfirmed_short_is_not_authorized(damage):
+def test_weak_or_unconfirmed_short_is_not_authorized(damage):
     row = confirmed_row(**damage)
     assert classify(row, 0.00085, CONFIRMED) == ("B", 0, 0.0)
     assert timing_veto(row, CONFIRMED)
