@@ -22,6 +22,42 @@ POLICY_VERSION = 7
 RESULT_PREFIX = "simple_strategy_result:"
 
 
+def streak_enabled(store: Store) -> bool:
+    return selection(store).get("streak_policy") == 1
+
+
+def parameters(store: Store) -> dict[str, Any]:
+    state = selection(store)
+    wins, losses = state.get("win_streak", 0), state.get("loss_streak", 0)
+    return {
+        "enabled": streak_enabled(store), "strategy": state["active"],
+        "wins": wins, "losses": losses,
+        "timeframe": "5m" if wins >= 3 else "15m",
+        "profit_roe": 0.03 if wins >= 2 else 0.04 if wins == 1 else 0.05,
+        "stop_roe": 0.03 if losses >= 2 else 0.04 if losses == 1 else 0.05,
+        "revision": state.get("streak_revision", 0),
+    }
+
+
+def activate_streak(store: Store, now_ms: int) -> None:
+    """Local operator activation; old positions retain exits and their original epoch."""
+    initialize(store, "current", now_ms)
+    with store.transaction() as conn:
+        state = selection(store, conn)
+        if state.get("streak_policy") == 1:
+            return
+        switch(store, state, "current", now_ms, "consecutive-result policy activated", conn)
+        state.update(streak_policy=1, auto=False, win_streak=0, streak_revision=0)
+        for key in ("timeframe", "hold_hours", "entry_policy", "activity_mode"):
+            state.pop(key, None)
+        store.put(KEY, state, conn)
+        # Retire the competing historical router's active decisions, not its audit history.
+        store.put("simple_learning", {}, conn)
+        store.put("simple_selected", [], conn)
+        store.put("simple_candidate_ranking", {}, conn)
+        store.audit("simple_streak_activated", {"epoch": state["epoch"]}, conn)
+
+
 def execution_side(side: int, state: dict[str, Any]) -> int:
     """Invert only a qualifying normal decision; no signal stays no signal."""
     return -side if state["active"] == "opposite" else side
@@ -68,6 +104,13 @@ def switch(
 def initialize(store: Store, base_strategy: str, now_ms: int) -> None:
     with store.transaction() as conn:
         previous = store.get(KEY, None, conn)
+        if previous is not None and previous.get("streak_policy") is not None:
+            if (previous.get("streak_policy") != 1 or previous.get("auto") is not False
+                    or any(type(previous.get(k)) is not int or previous[k] < 0
+                           for k in ("win_streak", "loss_streak", "streak_revision"))
+                    or previous["loss_streak"] >= 3
+                    or (previous["win_streak"] and previous["loss_streak"])):
+                raise SafeError("invalid saved consecutive-result policy; local review required")
         if (
             previous is not None
             and previous.get("policy_version") == POLICY_VERSION
@@ -132,16 +175,25 @@ def closed(
     if not math.isfinite(pnl):
         raise SafeError("finite net result required for strategy rotation")
     state["outcomes"] = [*state["outcomes"], {"id": trade["id"], "pnl": pnl}][-8:]
-    state["loss_streak"] = state.get("loss_streak", 0) + 1 if pnl < 0 else 0
+    state["loss_streak"] = state.get("loss_streak", 0) + 1 if pnl < -1e-8 else 0
+    if state.get("streak_policy") == 1:
+        state["win_streak"] = state.get("win_streak", 0) + 1 if pnl > 1e-8 else 0
+        state["streak_revision"] = state.get("streak_revision", 0) + 1
+        if state["loss_streak"] >= 3:
+            target = "opposite" if state["active"] == "current" else "current"
+            switch(store, state, target, now_ms, "3 consecutive net losses", conn)
+            state["win_streak"] = 0
     store.put(
         RESULT_PREFIX + trade["id"],
-        {"strategy": trade.get("strategy_choice", state["active"]), "epoch": state["epoch"], "pnl": pnl},
+        {"strategy": trade.get("strategy_choice", state["active"]), "epoch": trade.get("strategy_epoch", 0), "pnl": pnl},
         conn,
     )
     store.put(KEY, state, conn)
 
 
 def configure(store: Store, choice: str, now_ms: int) -> None:
+    if streak_enabled(store):
+        raise SafeError("consecutive-result policy is locally managed; use /strategy to view it")
     if choice not in CHOICES | {"auto", "auto-active"}:
         raise SafeError("use /strategy current, /strategy opposite, /strategy auto or /strategy auto-active")
     initialize(store, "current", now_ms)
@@ -170,6 +222,13 @@ def configure(store: Store, choice: str, now_ms: int) -> None:
 def describe(store: Store, timezone: str) -> str:
     state = selection(store)
     outcomes = state["outcomes"]
+    if streak_enabled(store):
+        p = parameters(store)
+        return (f"Strategy: {state['active'].upper()} · STREAK\n"
+                f"Wins: {p['wins']} · Losses: {p['losses']} · Candles: {p['timeframe']}\n"
+                f"New entries: TP +{p['profit_roe']:.0%} / SL -{p['stop_roe']:.0%} gross ROE.\n"
+                "3 net losses → switch CURRENT ↔ OPPOSITE; 3 wins → 5m.\n"
+                "Existing brackets and account risk limits remain active.")
     lines = [
         f"Strategy: {'per trade current/opposite' if state['auto'] else state['active']} · {'AUTO' if state['auto'] else 'MANUAL'}",
         f"Current stint: {sum(x['pnl'] < 0 for x in outcomes)}/{len(outcomes)} losses (estimated fees and recorded funding).",
@@ -207,6 +266,9 @@ def require_order(
         permission.get("order") != order.model_dump(mode="json")
         or (not state["auto"] and permission.get("active") != state["active"])
         or permission.get("epoch") != state["epoch"]
+        or (state.get("streak_policy") == 1 and (
+            permission.get("streak_revision") != state.get("streak_revision")
+            or permission.get("streak_policy") != 1))
     ):
         raise EntryVeto("strategy selection changed or order permission missing")
     chosen = permission.get("active")
@@ -221,7 +283,7 @@ def require_order(
     original = permission.get("decision_side")
     if original not in {-1, 1} or execution_side(original, {"active": chosen}) != order.side:
         raise EntryVeto("strategy order direction does not match the normal decision")
-    if chosen == "opposite":
+    if chosen == "opposite" and state.get("streak_policy") != 1:
         try:
             evidence = permission["opposite_evidence"]
             row = evidence["row"]
@@ -248,6 +310,8 @@ def require_order(
 
 def timeframe(store: Store, s: Any) -> str:
     state = selection(store)
+    if streak_enabled(store):
+        return str(parameters(store)["timeframe"])
     value = state.get("timeframe", s.simple_entry_timeframe) if state["auto"] else s.simple_entry_timeframe
     if value not in {"1m", "5m", "8m", "15m"}:
         raise SafeError("invalid saved entry timeframe")

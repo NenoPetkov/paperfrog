@@ -38,7 +38,7 @@ from .market_trend import entry_gate as market_entry_gate
 from .minute import HISTORY_BARS, MOMENTUM_HISTORY_BARS
 from .minute import direction as minute_direction
 from .minute import frame as minute_frame
-from .momentum import EARLY_VERSION, timing_veto
+from .momentum import EARLY_VERSION, policy_rules, timing_veto
 from .selection import full_universe, select_best
 from .strategy import BAR_MS, choose, execution_rules, indicators, require_execution, strategy_name
 
@@ -185,7 +185,8 @@ class SimpleService:
                         carry_text += (f"\n{symbol}: spot {cycle.get('spot_quantity', '0')}; "
                                        f"short futures {cycle.get('future_quantity', '0')}; {cycle['phase']}")
         if command == "/status":
-            return status_text(self.store.get("state", State.BOOTING), positions) + carry_text
+            policy = "\n" + rotation.describe(self.store, self.s.display_timezone) if rotation.streak_enabled(self.store) else ""
+            return status_text(self.store.get("state", State.BOOTING), positions) + policy + carry_text
         if command == "/positions":
             return positions_text(positions) + carry_text
         return await self.diagnostics(command)
@@ -217,16 +218,17 @@ class SimpleService:
                 "strategy": ("adaptive-ai-v1+" if self.s.simple_ai_enabled else "")
                 + strategy_name(self.s.simple_entry_mode, self.rules)
                 + (
-                    rotation.VERSION
+                    ("+streak-inverse-v1" if rotation.streak_enabled(self.store) else rotation.VERSION)
                     if rotation.selection(self.store)["active"] == "opposite"
                     else ""
                 ),
                 "strategy_rotation": rotation.selection(self.store),
-                "strategy_scope": "per_trade" if rotation.selection(self.store)["auto"] else "manual",
+                "strategy_scope": "consecutive_results" if rotation.streak_enabled(self.store) else "per_trade" if rotation.selection(self.store)["auto"] else "manual",
                 "historical_learning": self.store.get(learning.KEY, {}),
                 "learning_research": self.store.get("simple_learning_research", {}),
                 "holding_limit_hours": None if self.s.simple_exit_policy == "fixed_roe" else rotation.hold_hours(self.store, self.s),
-                "gross_margin_targets": {"profit": 0.05, "loss": -0.05, "leverage": 2} if self.s.simple_exit_policy == "fixed_roe" else None,
+                "gross_margin_targets": {"profit": rotation.parameters(self.store)["profit_roe"] if rotation.streak_enabled(self.store) else 0.05, "loss": -rotation.parameters(self.store)["stop_roe"] if rotation.streak_enabled(self.store) else -0.05, "leverage": 2} if self.s.simple_exit_policy == "fixed_roe" else None,
+                "streak_policy": rotation.parameters(self.store),
                 "confidence": {
                     **confidence.state(self.store),
                     "enabled": self.s.simple_confidence_enabled,
@@ -249,7 +251,7 @@ class SimpleService:
                 else self.rules.breakout_bars * BAR_MS // 60000,
                 "state": self.store.get("state"),
                 "scan_pool_count": len(self.store.get("simple_pool", [])),
-                "momentum_entry_policy": self.s.simple_momentum_entry_policy,
+                "momentum_entry_policy": "bidirectional_streak" if rotation.streak_enabled(self.store) else self.s.simple_momentum_entry_policy,
                 "selected": self.selected,
                 "open_positions": list(dict.fromkeys([*(self.engine.positions() if self.engine else {}), *carry_positions(self.store)])),
                 "equity": self.store.get("anchors", {}).get("equity"),
@@ -330,7 +332,7 @@ class SimpleService:
                                 ),
                                 self.rules,
                             )
-                            if rotation.selection(self.store)["auto"] or self.advisor is not None or self.entry_timeframe in {
+                            if rotation.streak_enabled(self.store) or rotation.selection(self.store)["auto"] or self.advisor is not None or self.entry_timeframe in {
                                 "1m",
                                 "5m",
                                 "8m",
@@ -414,13 +416,13 @@ class SimpleService:
                         )
                         self.store.put("simple_btc_pairs", pairs)
                     self.context_rows = rows
-                    if self.entry_timeframe == "15m":
+                    if self.entry_timeframe == "15m" and not rotation.streak_enabled(self.store):
                         self.rows = rows
                     self.crisis = "BTCUSDT" not in rows or any(
                         blocked for _, _, blocked, _ in observations
                     )
                     automatic = rotation.selection(self.store)["auto"]
-                    context_selected = choose(
+                    context_selected = [] if rotation.streak_enabled(self.store) else choose(
                         {
                             symbol: rows[symbol]
                             for symbol in snapshot["symbols"]
@@ -441,14 +443,14 @@ class SimpleService:
                         self.s,
                         self.rules,
                     )
-                    if self.entry_timeframe == "15m":
+                    if self.entry_timeframe == "15m" and not rotation.streak_enabled(self.store):
                         self.selected = context_selected
                         self.store.put("simple_selected", self.selected)
                     self.store.put("simple_pool", snapshot["symbols"])
                     self.store.put("simple_scan_at_ms", int(time.time() * 1000))
                     self.store.audit(
                         "simple_selection"
-                        if self.entry_timeframe == "15m"
+                        if self.entry_timeframe == "15m" and not rotation.streak_enabled(self.store)
                         else "simple_risk_context",
                         {
                             "asof_ms": boundary,
@@ -462,7 +464,7 @@ class SimpleService:
                             "execution_mode": self.s.trading_mode,
                         },
                     )
-                    if self.entry_timeframe == "15m":
+                    if self.entry_timeframe == "15m" and not rotation.streak_enabled(self.store):
                         self.scan_complete = True
                 last_boundary = boundary
                 if self.advisor is not None and self.entry_timeframe == "15m":
@@ -482,8 +484,8 @@ class SimpleService:
     async def entry_frame(
         self, symbol: str, timeframe: str, boundary: int, context: dict[str, Any]
     ) -> Any:
-        interval_ms = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS}[timeframe]
-        early_momentum = timeframe == "5m" and self.rules.version == EARLY_VERSION
+        interval_ms = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS, "15m": BAR_MS}[timeframe]
+        early_momentum = timeframe in {"5m", "15m"} and self.rules.version == EARLY_VERSION
         bars = MOMENTUM_HISTORY_BARS if early_momentum else HISTORY_BARS
         async with asyncio.timeout(12):
             raw = await self.exchange.request(
@@ -543,7 +545,7 @@ class SimpleService:
 
         async def one(symbol: str, trade: dict[str, Any]) -> None:
             timeframe = trade["entry_timeframe"]
-            interval = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS}[timeframe]
+            interval = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "8m": 8 * MINUTE_MS, "15m": BAR_MS}[timeframe]
             boundary = self.now_ms() // interval * interval
             if self.held_rows.get(symbol, {}).get("timestamp_ms") == boundary:
                 return
@@ -592,6 +594,7 @@ class SimpleService:
         interval_ms = self.entry_bar_ms
         timeframe = self.entry_timeframe
         strategy_epoch = rotation.selection(self.store)["epoch"]
+        streak_revision = rotation.parameters(self.store)["revision"]
         if not self.context_rows:
             return False
         pool = list(
@@ -640,7 +643,7 @@ class SimpleService:
         trend_blocks = {}
         for symbol, row in rows.items():
             selected_strategy = self.engine.entry_selection(row, self.now_ms()) if self.engine else rotation.selection(self.store)
-            if selected_strategy["active"] == "opposite":
+            if selected_strategy["active"] == "opposite" and not rotation.streak_enabled(self.store):
                 from .strategy import opposite_entry
                 actual, _, _ = opposite_entry(row, self.s.fee_rate + self.s.slippage_bps / 10000, self.rules)
                 side = -actual
@@ -659,10 +662,13 @@ class SimpleService:
             best, ranking = await select_best(self.s, self.store, self.exchange, rows, boundary, self.now_ms)
         async with self.mutex:
             strategy = rotation.selection(self.store)
-            if self.entry_timeframe != timeframe or strategy["epoch"] != strategy_epoch:
+            if (self.entry_timeframe != timeframe or strategy["epoch"] != strategy_epoch
+                    or rotation.parameters(self.store)["revision"] != streak_revision):
                 return False
             selected = best if best is not None else choose(eligible, self.s, self.rules)
             if ranking is not None:
+                ranking.update(completed_ms=self.now_ms(), entry_timeframe=timeframe,
+                               streak_revision=streak_revision)
                 self.store.put("simple_candidate_ranking", ranking)
             self.rows, self.minute_frames, self.selected = rows, frames, selected
             # Missing observations immediately revoke dispatch permission for that symbol.
@@ -673,9 +679,9 @@ class SimpleService:
             if self.rules.version == EARLY_VERSION:
                 self.store.put("simple_momentum_timing", {
                     "version": EARLY_VERSION, "asof_ms": boundary, "maximum_trend_age_minutes": 60,
-                    "confirmation_minutes": [5, 15],
+                    "confirmation_minutes": [5, 15] if timeframe == "5m" else [15],
                     "blocked": {symbol: reason for symbol, row in rows.items()
-                                if (reason := timing_veto(row, self.rules))},
+                                if (reason := timing_veto(row, policy_rules(self.rules, self.store)))},
                     "selected": selected,
                 })
             self.store.audit(
@@ -718,19 +724,22 @@ class SimpleService:
 
     async def minute_research(self) -> None:
         last_boundary = -1
+        last_revision = -1
         while not self.stop.is_set():
             interval_ms = self.entry_bar_ms
-            if self.entry_timeframe == "15m":
+            if self.entry_timeframe == "15m" and not rotation.streak_enabled(self.store):
                 last_boundary = -1
                 await asyncio.sleep(1)
                 continue
             boundary = self.now_ms() // interval_ms * interval_ms
-            if boundary == last_boundary or not self.context_rows:
+            revision = rotation.parameters(self.store)["revision"]
+            if (boundary == last_boundary and revision == last_revision) or not self.context_rows:
                 await asyncio.sleep(1)
                 continue
             try:
                 if await self.refresh_minutes(boundary):
                     last_boundary = boundary
+                    last_revision = revision
                 else:
                     await asyncio.sleep(1)
             except (SafeError, ValueError, OSError, KeyError) as exc:
@@ -1039,7 +1048,7 @@ class SimpleService:
                     await self.carry.tick(entries=False)
                     await live_broker.refresh()
                 rotation.initialize(self.store, self.engine.strategy, self.now_ms())
-                if self.s.simple_entry_profile.startswith("momentum"):
+                if self.s.simple_entry_profile.startswith("momentum") and not rotation.streak_enabled(self.store):
                     state = rotation.selection(self.store)
                     if state["auto"] or state["active"] != "current":
                         rotation.configure(self.store, "current", self.now_ms())
@@ -1102,7 +1111,8 @@ class SimpleService:
                     )
                 tasks.append(asyncio.create_task(self.minute_research(), name="short-interval entries"))
                 tasks.append(asyncio.create_task(self.held_research(), name="original-timeframe monitoring"))
-                tasks.append(asyncio.create_task(self.learning_research(), name="historical strategy research"))
+                if not rotation.streak_enabled(self.store):
+                    tasks.append(asyncio.create_task(self.learning_research(), name="historical strategy research"))
                 if self.advisor is not None and self.entry_timeframe != "15m":
                     tasks.append(asyncio.create_task(self.minute_ai_reviews(), name="AI entry policy"))
                 if self.telegram:

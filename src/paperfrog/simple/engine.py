@@ -312,8 +312,8 @@ class Engine:
             fill.price * (1 - Decimal(str(intent["stop_fraction"])) * fill.side)
         )
         if intent.get("exit_policy") == "fixed_roe":
-            from .fixed_roe import trigger as roe_trigger
-            trigger = roe_trigger(fill.price, fill.side, self.filters[symbol].tick, profit=False)
+            from .fixed_roe import position_trigger as roe_trigger
+            trigger = roe_trigger(fill.price, fill.side, self.filters[symbol].tick, intent, profit=False)
         if (
             stop.get("key") != client_id(intent["id"], "stop-0")
             or stop.get("side") != fill.side
@@ -321,10 +321,10 @@ class Engine:
         ):
             raise SafeError("original entry protection missing or changed; account remains paused")
         if intent.get("exit_policy") == "fixed_roe" and symbol in self.store.get("live_takes", {}):
-            from .fixed_roe import trigger as roe_trigger
+            from .fixed_roe import position_trigger as roe_trigger
             take = self.store.get("live_takes")[symbol]
             if (take.get("key") != client_id(intent["id"], "take-0") or take.get("side") != fill.side
-                    or Decimal(take.get("trigger", "0")) != roe_trigger(fill.price, fill.side, self.filters[symbol].tick, profit=True)):
+                    or Decimal(take.get("trigger", "0")) != roe_trigger(fill.price, fill.side, self.filters[symbol].tick, intent, profit=True)):
                 raise SafeError("original take-profit protection changed; account remains paused")
         stop_fill = await self.broker.protection_fill(symbol)
         actual = (await self.broker.positions()).get(symbol, Decimal(0))
@@ -333,9 +333,9 @@ class Engine:
                 raise SafeError("protected entry quantity mismatch; account remains paused")
             await self.broker.protect(symbol, fill.side, trigger, stop["key"])
             if intent.get("exit_policy") == "fixed_roe":
-                from .fixed_roe import trigger as roe_trigger
+                from .fixed_roe import position_trigger as roe_trigger
                 take = self.store.get("live_takes", {}).get(symbol, {})
-                target = roe_trigger(fill.price, fill.side, self.filters[symbol].tick, profit=True)
+                target = roe_trigger(fill.price, fill.side, self.filters[symbol].tick, intent, profit=True)
                 if (take.get("key") != client_id(intent["id"], "take-0")
                         or take.get("side") != fill.side or Decimal(take.get("trigger", "0")) != target):
                     raise SafeError("original take-profit protection missing or changed; account remains paused")
@@ -848,15 +848,17 @@ class Engine:
         if row.get("entry_timeframe", "15m") != self.entry_timeframe:
             return 0, "entry candle timeframe does not match selected policy"
         if self.s.simple_entry_profile.startswith("momentum"):
-            from .momentum import classify, timing_veto
+            from .momentum import classify, policy_rules, timing_veto
 
             state = rotation.selection(self.store)
-            if state["auto"] or state["active"] != "current":
+            if state["auto"] or (state["active"] != "current" and not rotation.streak_enabled(self.store)):
                 return 0, "momentum profile requires fixed current strategy"
+            rules = policy_rules(self.rules, self.store)
             pattern, side, _ = classify(
-                row, self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2, self.rules
+                row, self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2, rules
             )
-            detail = timing_veto(row, self.rules) if not side else None
+            detail = timing_veto(row, rules) if not side else None
+            side = rotation.execution_side(side, state)
             return side, (f"Momentum pattern {pattern}: {'LONG' if side > 0 else 'SHORT' if side < 0 else 'WAIT'}"
                           + (f"; {detail}" if detail else ""))
         learned_veto = learning.veto(self.store, self.s, now_ms)
@@ -884,7 +886,7 @@ class Engine:
                     return 0, "opposite confirmation lacks matching AI permission; " + ai_reason
         else:
             minute_side, minute_reason = (0, "")
-            if self.entry_timeframe in {"1m", "5m", "8m"}:
+            if self.entry_timeframe in {"1m", "5m", "8m"} or rotation.streak_enabled(self.store):
                 if row.get("entry_timeframe") != self.entry_timeframe:
                     return 0, "entry candle timeframe does not match configuration"
                 minute_side, minute_reason = minute_direction(row, self.rules)
@@ -937,7 +939,7 @@ class Engine:
         q = self.broker.quotes.get(symbol)
         if not BAR_MS <= maximum_signal_age_ms <= 2 * BAR_MS:
             raise SafeError("invalid experimental signal delay")
-        if self.entry_timeframe in {"1m", "5m", "8m"}:
+        if self.entry_timeframe in {"1m", "5m", "8m"} or rotation.streak_enabled(self.store):
             maximum_signal_age_ms = self.entry_bar_ms
         if (
             row["timestamp_ms"] > now_ms
@@ -964,10 +966,11 @@ class Engine:
         if not direction:
             return
         strategy_label = self.strategy + (
-            rotation.VERSION if selected_strategy["active"] == "opposite" else ""
+            "+streak-inverse-v1" if rotation.streak_enabled(self.store) and selected_strategy["active"] == "opposite"
+            else rotation.VERSION if selected_strategy["active"] == "opposite" else ""
         )
         signal_key = f"{strategy_label}:{symbol}:{int(row['timestamp_ms'])}"
-        if self.entry_timeframe in {"1m", "5m", "8m"}:
+        if self.entry_timeframe in {"1m", "5m", "8m"} or rotation.streak_enabled(self.store):
             signal_key += ":" + self.entry_timeframe
         trade_id = hashlib.sha256(signal_key.encode()).hexdigest()[:24]
         if self.store.get("simple_signal:" + trade_id):
@@ -1011,7 +1014,7 @@ class Engine:
         activity_probe = learning.is_probe(self.store)
         allocation_scale = activity.SIZE_SCALE if activity_probe else 1.0
         assert q is not None
-        if self.entry_timeframe in {"1m", "5m", "8m"}:
+        if self.entry_timeframe in {"1m", "5m", "8m"} or rotation.streak_enabled(self.store):
             reason_veto = (minute_veto(row, normal_direction, now_ms, float(q.mark), self.rules)
                            if selected_strategy["active"] != "opposite" else None)
             if reason_veto:
@@ -1170,6 +1173,9 @@ class Engine:
             float(f.step * allocation_price),
             activity_probe,
         )
+        streak = rotation.parameters(self.store) if rotation.streak_enabled(self.store) else None
+        profit_roe = streak["profit_roe"] if streak else 0.05
+        stop_roe = streak["stop_roe"] if streak else 0.05
         intent: dict[str, Any] = {
             "id": trade_id,
             "confidence_version": confidence.VERSION if self.s.simple_confidence_enabled else None,
@@ -1184,7 +1190,9 @@ class Engine:
             "entry_timeframe": self.entry_timeframe,
             "exit_policy": self.s.simple_exit_policy,
             "entry_leverage": self.s.exchange_leverage,
-            "roe_target": 0.05 if self.s.simple_exit_policy == "fixed_roe" else None,
+            "roe_target": profit_roe if self.s.simple_exit_policy == "fixed_roe" else None,
+            "stop_roe": stop_roe,
+            "streak_policy": streak,
             "max_hold_hours": rotation.hold_hours(self.store, self.s),
             "adaptive_holding": selected_strategy["auto"],
             "momentum_exit_version": 1 if self.s.simple_entry_profile.startswith("momentum") else None,
@@ -1198,14 +1206,17 @@ class Engine:
                 "strategy_choice": selected_strategy["active"],
                 "strategy_epoch": selected_strategy["epoch"],
                 "config_hash": self.s.config_hash,
-                "rules": self.rules.public(),
+                "rules": (replace(self.rules, momentum_entry_policy="baseline").public()
+                          if streak else self.rules.public()),
                 "mode": self.s.trading_mode,
                 "currency": "BNFCR" if self.s.futures_account_mode == "credits" else "USDT",
                 "entry_mode": self.s.simple_entry_mode,
                 "entry_profile": self.s.simple_entry_profile,
                 "exit_policy": self.s.simple_exit_policy,
                 "entry_leverage": self.s.exchange_leverage,
-                "roe_target": 0.05 if self.s.simple_exit_policy == "fixed_roe" else None,
+                "roe_target": profit_roe if self.s.simple_exit_policy == "fixed_roe" else None,
+                "stop_roe": stop_roe,
+                "streak_policy": streak,
                 "entry_timeframe": self.entry_timeframe,
                 "max_hold_hours": rotation.hold_hours(self.store, self.s),
                 "learning_decision": self.store.get(learning.KEY) if selected_strategy["auto"] else None,
@@ -1279,7 +1290,9 @@ class Engine:
         if selected_strategy["auto"]:
             permission.update(auto_route=selected_strategy["auto_route"],
                               route_row={**indicators(row), "entry_timeframe": row.get("entry_timeframe", "15m")})
-        if selected_strategy["active"] == "opposite":
+        if streak:
+            permission.update(streak_policy=1, streak_revision=streak["revision"])
+        if selected_strategy["active"] == "opposite" and not streak:
             one_way_cost = self.s.fee_rate + self.s.slippage_bps / 10000 + spread / 2
             confirmed_side, _, level = opposite_entry(row, one_way_cost, self.rules)
             if confirmed_side != direction or level is None:
@@ -1291,7 +1304,8 @@ class Engine:
                 opposite_evidence={
                     "row": {**indicators(row), "entry_timeframe": row.get("entry_timeframe", "15m")},
                     "one_way_cost": one_way_cost,
-                    "rules": self.rules.public(),
+                    "rules": (replace(self.rules, momentum_entry_policy="baseline").public()
+                          if streak else self.rules.public()),
                 },
             )
         self.store.put("simple_strategy_order:" + order.client_id, permission)
@@ -1299,7 +1313,7 @@ class Engine:
         rotation.require_order(self.store, order, current_ms, q)
         if self.s.simple_entry_mode == "failed_breakout":
             intent["rejection_level"] = float(row["rejection_level"])
-        if self.entry_timeframe in {"1m", "5m", "8m"}:
+        if self.entry_timeframe in {"1m", "5m", "8m"} or rotation.streak_enabled(self.store):
             self.store.put(
                 "simple_minute_order:" + order.client_id,
                 {
@@ -1343,7 +1357,7 @@ class Engine:
         self.notice(
             trade_id + "-open",
             f"OPEN {symbol} {'LONG' if direction > 0 else 'SHORT'} at {fill.price}, size {fill.quantity}, stop {self.positions()[symbol]['stop_price']:.6g}. "
-            + (f"Take-profit {self.positions()[symbol]['take_profit_price']:.6g}; targets +/-5% gross margin return at 2x. " if self.s.simple_exit_policy == "fixed_roe" else "")
+            + (f"Take-profit {self.positions()[symbol]['take_profit_price']:.6g}; TP +{profit_roe:.0%} / SL -{stop_roe:.0%} gross margin return at 2x. " if self.s.simple_exit_policy == "fixed_roe" else "")
             + f"Strategy: {selected_strategy['active'].upper()}. Why: {reason}. Entry candles {self.entry_timeframe}; risk volatility {row['atr_fraction']:.2%} per 15-minute bar. {self.s.trading_mode.upper()} execution.",
         )
 
@@ -1368,6 +1382,8 @@ class Engine:
             "exit_policy": intent.get("exit_policy", "trend"),
             "entry_leverage": intent.get("entry_leverage", self.s.exchange_leverage),
             "roe_target": intent.get("roe_target"),
+            "stop_roe": intent.get("stop_roe", 0.05),
+            "streak_policy": intent.get("streak_policy"),
             "max_hold_hours": intent.get("max_hold_hours", self.s.simple_max_hold_hours),
             "adaptive_holding": intent.get("adaptive_holding", False),
             "momentum_exit_version": intent.get("momentum_exit_version"),
@@ -1387,9 +1403,9 @@ class Engine:
             ),
         }
         if intent.get("exit_policy") == "fixed_roe":
-            from .fixed_roe import trigger as roe_trigger
-            positions[symbol]["stop_price"] = float(roe_trigger(fill.price, direction, self.filters[symbol].tick, profit=False))
-            positions[symbol]["take_profit_price"] = float(roe_trigger(fill.price, direction, self.filters[symbol].tick, profit=True))
+            from .fixed_roe import position_trigger as roe_trigger
+            positions[symbol]["stop_price"] = float(roe_trigger(fill.price, direction, self.filters[symbol].tick, intent, profit=False))
+            positions[symbol]["take_profit_price"] = float(roe_trigger(fill.price, direction, self.filters[symbol].tick, intent, profit=True))
         observe(positions[symbol], float(fill.price), intent["opened_ms"])
         if self.s.simple_entry_mode == "failed_breakout":
             positions[symbol]["rejection_level"] = intent["rejection_level"]

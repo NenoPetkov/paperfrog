@@ -250,8 +250,10 @@ class Coordinator:
                                 f.price * (1 - Decimal(str(stop_fraction)) * f.side)
                             )
                             if single_exchange and self.risk.s.simple_exit_policy == "fixed_roe":
-                                from paperfrog.simple.fixed_roe import trigger as roe_trigger
-                                trigger = roe_trigger(f.price, f.side, self.filters[f.symbol].tick, profit=False)
+                                from paperfrog.simple.fixed_roe import (
+                                    position_trigger as roe_trigger,
+                                )
+                                trigger = roe_trigger(f.price, f.side, self.filters[f.symbol].tick, self.store.get("simple_pending", {}).get(f.symbol, {}), profit=False)
                             await self.broker.protect(
                                 f.symbol,
                                 f.side,
@@ -259,11 +261,13 @@ class Coordinator:
                                 client_id(proposal.trade_id, f"stop-{index}"),
                             )
                             if single_exchange and self.risk.s.simple_exit_policy == "fixed_roe":
-                                from paperfrog.simple.fixed_roe import trigger as roe_trigger
+                                from paperfrog.simple.fixed_roe import (
+                                    position_trigger as roe_trigger,
+                                )
                                 from paperfrog.simple.live_broker import LiveBroker
                                 assert isinstance(self.broker, LiveBroker)
                                 await self.broker.take_profit(f.symbol, f.side,
-                                    roe_trigger(f.price, f.side, self.filters[f.symbol].tick, profit=True),
+                                    roe_trigger(f.price, f.side, self.filters[f.symbol].tick, self.store.get("simple_pending", {}).get(f.symbol, {}), profit=True),
                                     client_id(proposal.trade_id, "take-0"))
                         if f.quantity != order.quantity:
                             raise SafeError("partial pair; unwind confirmed fills")

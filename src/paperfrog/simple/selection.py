@@ -41,7 +41,7 @@ def available(store: Store, symbol: str, now_ms: int, maximum: int) -> str | Non
 
 
 def quality(
-    s: Settings, quote: Quote, score: float, side: int, min_notional: float, now_ms: int
+    s: Settings, quote: Quote, score: float, side: int, min_notional: float, now_ms: int, reward: float = 0.025
 ) -> tuple[float, str | None]:
     spread = float((quote.ask - quote.bid) / quote.mid)
     depth = (
@@ -54,8 +54,8 @@ def quality(
     if depth < min_notional:
         return 0.0, "visible executable depth below exchange minimum"
     costs = 2 * s.fee_rate + 2 * s.slippage_bps / 10000 + spread
-    # Reward is the fixed 2.5% price target, before commissions and funding.
-    result = score * max(0.0, 1 - costs / 0.025)
+    # Reward is the current gross price target, before commissions and funding.
+    result = score * max(0.0, 1 - costs / reward)
     if not math.isfinite(result) or result <= 0:
         return 0.0, "setup does not cover the execution cost assumption"
     return result, None
@@ -71,12 +71,15 @@ async def select_best(
 ) -> tuple[list[str], dict[str, Any]]:
     import asyncio
 
+    from . import rotation
     from .data import quote_snapshot
     from .minute import veto
-    from .momentum import classify, timing_veto
+    from .momentum import classify, policy_rules, timing_veto
     from .strategy import execution_rules
 
-    rules = execution_rules(s)
+    rules = policy_rules(execution_rules(s), store)
+    state = rotation.selection(store)
+    reward = rotation.parameters(store)["profit_roe"] / 2 if rotation.streak_enabled(store) else 0.025
     pool = list(store.get("simple_pool", []))
     rejected: dict[str, str] = {}
     candidates = []
@@ -121,7 +124,7 @@ async def select_best(
             )
             filters = exchange.filters[symbol]
             adjusted, quality_problem = quality(
-                s, quote, score, side, float(filters.min_notional + filters.step * quote.mark), now
+                s, quote, score, rotation.execution_side(side, state), float(filters.min_notional + filters.step * quote.mark), now, reward
             )
             if problem or current_side != side or quality_problem:
                 rejected[symbol] = (
@@ -130,7 +133,8 @@ async def select_best(
                 return None
             return {
                 "symbol": symbol,
-                "side": side,
+                "side": rotation.execution_side(side, state),
+                "decision_side": side,
                 "score": adjusted,
                 "momentum_score": score,
                 "spread_bps": spread * 10000,

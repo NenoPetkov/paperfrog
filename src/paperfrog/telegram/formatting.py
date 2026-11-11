@@ -47,7 +47,7 @@ def positions_text(positions: dict[str, Any]) -> str:
             f"• {symbol} · {direction} · {trade['quantity']} @ {float(trade['entry_price']):.8g}"
         )
         if trade.get("exit_policy") == "fixed_roe":
-            lines.append(f"  Gross margin targets +5% / -5% at 2x; take-profit {trade['take_profit_price']:.8g}, stop {trade['stop_price']:.8g}.")
+            lines.append(f"  Gross margin targets +{trade.get('roe_target', 0.05):.0%} / -{trade.get('stop_roe', 0.05):.0%} at 2x; take-profit {trade['take_profit_price']:.8g}, stop {trade['stop_price']:.8g}.")
     return "\n".join(lines)
 
 

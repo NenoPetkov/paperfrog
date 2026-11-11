@@ -350,7 +350,10 @@ def read_status(s: Settings) -> dict[str, Any]:
             and started_at <= scan_at <= heartbeat_at
             and monitor_errors == 0
         ),
-        "scan_after_start": scan_at >= started_at,
+        "scan_after_start": scan_at >= started_at and (
+            not (status.get("streak_policy") or {}).get("enabled")
+            or (status.get("candidate_ranking") or {}).get("completed_ms", 0) / 1000 >= started_at
+        ),
         "manual_lock": bool(runtime.get("manual_lock")),
         "risk_locked": bool(runtime.get("risk_lock")),
         "open_positions": status.get("open_positions", []),
@@ -358,7 +361,7 @@ def read_status(s: Settings) -> dict[str, Any]:
         "entry_profile": status.get("entry_profile"),
         "exit_policy": status.get("exit_policy"),
         "candidate_ranking": ({**{k:status["candidate_ranking"].get(k) for k in
-                                ("asof_ms", "pool_size", "usable_size", "quote_checked_count", "selected")},
+                                ("asof_ms", "completed_ms", "entry_timeframe", "streak_revision", "pool_size", "usable_size", "quote_checked_count", "selected")},
                               "ranked_count":len(status["candidate_ranking"].get("ranked",[])),
                               "rejected_count":len(status["candidate_ranking"].get("rejected",{}))}
                              if status.get("candidate_ranking") else None),
@@ -366,6 +369,7 @@ def read_status(s: Settings) -> dict[str, Any]:
         "ai_review_minutes": status.get("ai_review_minutes"),
         "gross_margin_targets": status.get("gross_margin_targets"),
         "entry_strategy": status.get("strategy"),
+        "streak_policy": status.get("streak_policy"),
         "momentum_timing": status.get("momentum_timing"),
         "funding_carry": status.get("funding_carry", {"enabled": False}),
         "scan_pool_count": status.get("scan_pool_count"),
@@ -411,6 +415,7 @@ def main() -> None:
     commands.add_parser("status")
     commands.add_parser("databases")
     commands.add_parser("strategy-strict")
+    commands.add_parser("activate-streak").add_argument("context", type=Path)
     momentum = commands.add_parser("activate-momentum")
     momentum.add_argument("context", type=Path)
     momentum.add_argument("--profile", required=True)
@@ -445,7 +450,22 @@ def main() -> None:
         backup(root, args.path)
         return
     s = settings()
-    if args.command == "strategy-strict":
+    if args.command == "activate-streak":
+        from paperfrog.simple import rotation
+        from paperfrog.storage.database import Store
+        assert_idle(root)
+        compare(s, args.context)
+        if s.simple_entry_profile != "momentum" or s.simple_exit_policy != "fixed_roe":
+            raise DeploymentError("Streak activation requires the existing fixed-return momentum deployment.")
+        store = Store(directory(s) / "paperfrog.sqlite")
+        try:
+            if (store.get("reconciled") is not True or store.get("simple_pending")
+                    or store.get("simple_closing") or store.unresolved_orders()):
+                raise DeploymentError("Resolve pending execution before streak activation.")
+            rotation.activate_streak(store, int(time.time() * 1000))
+        finally:
+            store.engine.dispose()
+    elif args.command == "strategy-strict":
         strict_auto(root, s)
     elif args.command == "activate-momentum":
         if args.confirm != "ACTIVATE LIVE MOMENTUM":

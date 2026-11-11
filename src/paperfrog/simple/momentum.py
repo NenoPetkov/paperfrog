@@ -19,6 +19,11 @@ EARLY_VERSION = EARLY_MOMENTUM_RULES.version
 MAXIMUM_TREND_AGE_BARS = 12
 
 
+def policy_rules(rules: Rules, store: Store) -> Rules:
+    from .rotation import streak_enabled
+    return replace(rules, momentum_entry_policy="baseline") if streak_enabled(store) else rules
+
+
 def confirmation_veto(row: dict[str, Any], rules: Rules) -> str | None:
     """Opt-in tighter entry policy; existing positions retain their exit contract."""
     if rules.momentum_entry_policy == "baseline":
@@ -64,18 +69,19 @@ def timing_veto(row: dict[str, Any], rules: Rules) -> str | None:
             "fast",
             "trend_atr",
         )
-        if row.get("entry_timeframe") != "5m" or not all(
+        interval = {"5m": 300_000, "15m": BAR_MS}.get(str(row.get("entry_timeframe")), 0)
+        if not interval or not all(
             math.isfinite(float(row[k])) for k in keys
         ):
             return "early momentum timing evidence unavailable"
         age = float(row["momentum_trend_age_bars"])
         elapsed = float(row["timestamp_ms"]) - float(row["momentum_trend_started_ms"])
         if (
-            float(row["timestamp_ms"]) % 300_000
+            float(row["timestamp_ms"]) % interval
             or float(row["momentum_trend_started_ms"]) < 0
             or age != int(age)
-            or elapsed != age * 300_000
-            or not 0 <= age <= MAXIMUM_TREND_AGE_BARS
+            or elapsed != age * interval
+            or not 0 <= elapsed <= MAXIMUM_TREND_AGE_BARS * 300_000
         ):
             return "momentum move is older than the sixty-minute entry window or its start is unverified"
         atr = float(row["minute_atr"])
@@ -214,13 +220,20 @@ def require_order(
 
     if order.reduce_only or s.simple_entry_profile not in PROFILES:
         return
+    state = rotation.selection(store)
+    interval = {"5m": 300_000, "15m": BAR_MS}.get(rotation.timeframe(store, s), 0)
     if s.simple_exit_policy == "fixed_roe":
         from .selection import pool_hash
         ranked = store.get("simple_candidate_ranking", {})
+        if rotation.streak_enabled(store) and (
+            ranked.get("entry_timeframe") != rotation.timeframe(store, s)
+            or ranked.get("streak_revision") != state["streak_revision"]
+        ):
+            raise EntryVeto("streak changed; a fresh candidate ranking is required")
         if (order.symbol not in store.get("simple_pool", [])
                 or ranked.get("selected") != [order.symbol] or ranked.get("config_hash") != s.config_hash
                 or ranked.get("pool_hash") != pool_hash(store.get("simple_pool", []))
-                or not 0 <= now_ms-int(ranked.get("asof_ms", 0)) < s.simple_entry_bar_ms):
+                or not 0 <= now_ms-int(ranked.get("asof_ms", 0)) < interval):
             raise EntryVeto("full-universe selection permission missing, changed or expired")
     elif order.symbol not in SYMBOLS:
         raise EntryVeto("momentum symbol is outside the researched universe")
@@ -232,20 +245,23 @@ def require_order(
         or permission.get("config_hash") != s.config_hash
         or row != store.get("simple_minute:" + order.symbol)
         or state["auto"]
-        or state["active"] != "current"
+        or (state["active"] != "current" and not rotation.streak_enabled(store))
         or quote is None
         or quote.symbol != order.symbol
         or not 0 <= now_ms - quote.timestamp_ms <= s.market_stale_seconds * 1000
     ):
         raise EntryVeto("momentum permission missing, changed or not bound to this order")
-    rules = execution_rules(s)
-    reason = veto(row, order.side, now_ms, float(quote.mark), rules)
+    rules = policy_rules(execution_rules(s), store)
+    normal_side = rotation.decision_side(store, order)
+    if row.get("entry_timeframe") != rotation.timeframe(store, s):
+        raise EntryVeto("momentum candle timeframe changed before dispatch")
+    reason = veto(row, normal_side, now_ms, float(quote.mark), rules)
     if reason:
         raise EntryVeto(reason)
     spread = float((quote.ask - quote.bid) / quote.mid)
     if (
         spread > s.max_spread
-        or classify(row, s.fee_rate + s.slippage_bps / 10000 + spread / 2, rules)[1] != order.side
+        or classify(row, s.fee_rate + s.slippage_bps / 10000 + spread / 2, rules)[1] != normal_side
     ):
         raise EntryVeto("momentum setup or cost filter no longer permits this order")
     if (

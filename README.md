@@ -1,5 +1,53 @@
 # paperfrog
 
+## Consecutive-result controller (local activation)
+
+`python scripts/server_ops.py activate-streak <previous-context.json>` enables the
+operator-requested policy on the existing fixed-return momentum deployment while
+stopped. It is durable, idempotent and starts CURRENT with zero streaks and 15m
+candles. It does not replay old trades; positions opened before activation retain
+their original epoch, side and hosted brackets and do not advance the new streak.
+
+| Consecutive net results | New-entry take profit | New-entry stop | Candles / direction |
+| --- | --- | --- | --- |
+| Start / breakeven | +5% | −5% | 15m, current selected direction |
+| 1 win | +4% | −5% | 15m |
+| 2 wins | +3% | −5% | 15m |
+| 3+ wins | +3% | −5% | 5m |
+| 1 loss | +5% | −4% | 15m |
+| 2 losses | +5% | −3% | 15m |
+| 3 losses | +5% | −5% | 15m, switch CURRENT ↔ OPPOSITE; reset streaks |
+
+Targets are gross return on margin at 2x, before costs and exchange tick rounding.
+Wins/losses use the completed position's net ledger result (entry/exit fees and
+recorded funding; LIVE fee estimates retain their existing accounting basis).
+A flat result resets both streaks. Partial fills never count as complete trades;
+results are transactional and deduplicated across restarts. Positions from a
+previous direction epoch cannot change the new direction's streak. Each position
+keeps the bracket captured when it opened; later wins/losses do not widen it.
+
+CURRENT uses qualifying bidirectional momentum. OPPOSITE executes its exact
+inverse, including at the final dispatch check; no normal signal still means no
+trade. This locally activated controller supersedes `confirmed_short`, the
+historical automatic router and the confirmed-reversal opposite policy for new
+entries. Those shared research/legacy paths remain available outside this mode.
+Both candle intervals use completed bars and the same sixty-minute maximum trend
+age. The full liquid pool is ranked with quotes for the **executed** side.
+
+Position sizes, leverage, loss budgets, cooldowns and account locks are unchanged.
+The existing three-loss cooldown may delay entry after a strategy switch; the
+controller never clears it. `/strategy` and `/status` show the active streak and
+next-entry settings; Telegram cannot reconfigure or arm this controller. Telegram
+entry notices include direction, candles and brackets; a fully closed position
+gets one net-result notice instead of a duplicate reducing-fill notice.
+
+Deploy only after pytest, Ruff and strict mypy pass: capture the existing authorized
+context, stop the service, verify a state backup, deploy the committed source,
+activate locally, rearm against the unchanged configuration/account context, and
+restart. Verify reconciliation, live authorization and a completed new candle
+scan. Software checks do not demonstrate a profitable trading strategy.
+
+
 ## Fixed margin-return policy
 
 The [fixed-ROE and full-pool guide](docs/FIXED_ROE_100_COIN_SELECTION.md) documents

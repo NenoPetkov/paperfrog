@@ -53,11 +53,11 @@ def frame(
     *, early_momentum: bool = False,
 ) -> pd.DataFrame:
     """Use 120 completed consecutive entry candles and already closed slow context."""
-    if timeframe not in {"1m", "5m", "8m"}:
+    if timeframe not in {"1m", "5m", "8m", "15m"}:
         raise SafeError("unsupported short entry timeframe")
-    minutes = {"1m": 1, "5m": 5, "8m": 8}[timeframe]
-    if early_momentum and timeframe != "5m":
-        raise SafeError("early momentum requires five-minute candles")
+    minutes = {"1m": 1, "5m": 5, "8m": 8, "15m": 15}[timeframe]
+    if early_momentum and timeframe not in {"5m", "15m"}:
+        raise SafeError("early momentum requires five- or fifteen-minute candles")
     interval_ms = minutes * MINUTE_MS
     minute_closes: dict[int, float] = {}
     if timeframe == "8m":
@@ -185,10 +185,10 @@ def timing_indicators(x: pd.DataFrame, minutes: int, minute_closes: dict[int, fl
 
 def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
     timeframe = row.get("entry_timeframe")
-    if timeframe not in {"1m", "5m", "8m"}:
+    if timeframe not in {"1m", "5m", "8m", "15m"}:
         return 0, "complete closed entry slope required"
-    minutes = {"1m": 1, "5m": 5, "8m": 8}[timeframe]
-    windows = (1, 3) if rules.version == "abc-momentum-v2" and timeframe == "5m" else (1, 3, 5)
+    minutes = {"1m": 1, "5m": 5, "8m": 8, "15m": 15}[timeframe]
+    windows = ((1, 3) if timeframe == "5m" else (1,)) if rules.version == "abc-momentum-v2" else (1, 3, 5)
     returns = tuple(f"return_{bars * minutes}m" for bars in windows)
     fields = (
         "close",
@@ -227,9 +227,9 @@ def direction(row: dict[str, Any], rules: Rules) -> tuple[int, str]:
 
 def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules) -> str | None:
     timeframe = row.get("entry_timeframe")
-    if timeframe not in {"1m", "5m", "8m"}:
+    if timeframe not in {"1m", "5m", "8m", "15m"}:
         return "unsupported entry timeframe"
-    interval_ms = {"1m": 1, "5m": 5, "8m": 8}[timeframe] * MINUTE_MS
+    interval_ms = {"1m": 1, "5m": 5, "8m": 8, "15m": 15}[timeframe] * MINUTE_MS
     timestamp_ms = int(row.get("timestamp_ms", 0))
     if timestamp_ms % interval_ms or not 0 <= now_ms - timestamp_ms < interval_ms:
         return "short-interval entry candle missing, future dated or expired"
@@ -246,7 +246,9 @@ def veto(row: dict[str, Any], side: int, now_ms: int, mark: float, rules: Rules)
 
 
 def require_order(s: Settings, store: Store, order: Order, now_ms: int, quote: Quote) -> None:
-    if order.reduce_only or timeframe(store, s) not in {"1m", "5m", "8m"}:
+    if order.reduce_only or (timeframe(store, s) == "15m" and not selection(store).get("streak_policy")):
+        return
+    if timeframe(store, s) not in {"1m", "5m", "8m", "15m"}:
         return
     from .strategy import execution_rules
 

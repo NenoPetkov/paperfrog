@@ -28,6 +28,13 @@ class EventNotifications:
                     {"id": payload["client_id"]},
                 ).scalar()
             reducing = bool(json.loads(intent)["reduce_only"]) if intent else None
+            # A completed close has its own net-result notification; keep partial fills visible.
+            if reducing and any(
+                (trade.get("entry_context") or {}).get("streak_policy")
+                and any(fill.get("client_id") == payload["client_id"] for fill in trade.get("exit_fills", []))
+                for trade in self.store.get("simple_closed", [])
+            ):
+                return None
             action = "Bought" if payload["side"] > 0 else "Sold"
             direction = "LONG" if payload["side"] > 0 else "SHORT"
             detail = (
@@ -41,7 +48,16 @@ class EventNotifications:
             strategy_info = ""
             if reducing is False and permission.get("active") in {"current", "opposite"}:
                 route = permission.get("auto_route") or {}
-                strategy_info = f"\nStrategy: {permission['active'].upper()} ({'AUTO' if route else 'MANUAL'})"
+                mode = "STREAK" if permission.get("streak_policy") else "AUTO" if route else "MANUAL"
+                strategy_info = (f"\n{permission['active'].upper()} · {mode}" if permission.get("streak_policy")
+                                 else f"\nStrategy: {permission['active'].upper()} ({mode})")
+                if permission.get("streak_policy"):
+                    records = [*self.store.get("simple_positions", {}).values(), *self.store.get("simple_closed", [])]
+                    trade = next((t for t in records if t.get("id", t.get("trade_id")) == permission.get("trade_id")), {})
+                    ctx = trade.get("entry_context") or {}
+                    if ctx.get("streak_policy"):
+                        strategy_info += (f" · {ctx['entry_timeframe']}\n"
+                                          f"TP +{ctx['roe_target']:.0%} / SL -{ctx['stop_roe']:.0%} gross ROE")
                 if route:
                     strategy_info += f"\nWhy: {route['reason']}"
             return (
@@ -131,6 +147,9 @@ class EventNotifications:
         if kind == "local_risk_review":
             return "🐸 Risk review recorded. Entries stay paused until resume checks pass."
         if kind == "simple_process_started":
+            from paperfrog.simple.rotation import streak_enabled
+            if streak_enabled(self.store):
+                return None  # RUNNING (or an actionable blocked state) follows reconciliation.
             return "🐸 I'm awake! Checking Binance, positions and fresh data before trading."
         # Skipped candidates and repeated polling failures remain in the local audit.
         # State transitions provide actionable alerts without per-symbol error spam.
